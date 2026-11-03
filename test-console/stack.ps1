@@ -4,7 +4,8 @@ that what is running matches it. ca-gateway stays owned by switch-models.ps1.
 
   stack.ps1                          check only (the same as -Check): changes nothing
   stack.ps1 -Rebuild paywall         build chainaim-paywall:test from services\paywall, recreate ca-paywall, check
-                                     (pay-to: -PayTo, else XRPL_PAY_TO_<NET> in this window, else the running ca-paywall's own)
+                                     (pay-to: -PayTo, else XRPL_PAY_TO_<NET> in this window, else config\local\chain-profile.json
+                                     (chain-config.ps1 -Set -Chain xrpl -Env testnet), else the running ca-paywall's own)
   stack.ps1 -Rebuild presidio        build chainaim-presidio:test (about 1.6 GB, slow the first time), recreate ca-presidio, check
   stack.ps1 -Rebuild stub            pull the stand-in's base image, recreate ca-openrouter-stub, check
   stack.ps1 -Rebuild gateway         build chainaim-gateway:test only; then run switch-models.ps1 to recreate ca-gateway
@@ -39,6 +40,7 @@ param(
   [switch]$Check,
   [ValidateSet("testnet", "mainnet")][string]$XrplNetwork = "testnet",
   [string]$PayTo,
+  [string]$ProfileFile = (Join-Path (Split-Path $PSScriptRoot -Parent) "config\local\chain-profile.json"),
   [string]$ExpectPrice = "0.01",
   [string]$ExpectCaip2,
   [string[]]$PassEnv = @("FACILITATOR_URL_TESTNET", "FACILITATOR_URL_MAINNET", "RLUSD_ISSUER_TESTNET", "RLUSD_ISSUER_MAINNET", "PRICE_SCAN", "PRICE_MASK", "PRICE_CHAT", "PUBLIC_BASE_URL"),
@@ -105,6 +107,12 @@ function Resolve-PayTo {
   $v = $PayTo
   if (-not $v) { $v = [Environment]::GetEnvironmentVariable($name) }
   if (-not $v) {
+    # The per-PC profile written by chain-config.ps1 -Set -Chain xrpl -Env <net> (git-ignored; DESIGN/xrplh-28 section 3.3).
+    Import-Module (Join-Path $PSScriptRoot "lib\settings.psm1") -Force
+    $v = Get-ProfileAccount "xrpl" $XrplNetwork "payTo" $ProfileFile
+    if ($v) { Write-Host "Pay-to address from $ProfileFile ($(Get-MaskedValue $v))" }
+  }
+  if (-not $v) {
     # Keep the pay-to the running paywall already has (no address is written into this script).
     $r = Invoke-DockerQuiet @("inspect", "--format", "{{json .Config.Env}}", $PaywallContainer)
     if ($r.Code -eq 0 -and $r.Out) {
@@ -114,7 +122,7 @@ function Resolve-PayTo {
       foreach ($e in $list) { $ix = ([string]$e).IndexOf("="); if ($ix -gt 0 -and ([string]$e).Substring(0, $ix) -eq $name) { $v = ([string]$e).Substring($ix + 1) } }
     }
   }
-  if (-not $v) { throw "No pay-to address for $XrplNetwork. Pass -PayTo r..., or set $name in this window (no running $PaywallContainer has one)." }
+  if (-not $v) { throw "No pay-to address for $XrplNetwork. Run .\test-console\chain-config.ps1 -Set -Chain xrpl -Env $XrplNetwork (hidden prompt), or pass -PayTo r..., or set $name in this window." }
   if ($v -notmatch '^r[1-9A-HJ-NP-Za-km-z]{24,34}$') { throw "Pay-to address '$v' is not an XRPL classic address (r...)." }
   return $v
 }

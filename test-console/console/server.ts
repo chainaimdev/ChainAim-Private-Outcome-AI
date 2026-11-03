@@ -25,6 +25,8 @@
  *                       allowedRoots, defaultFolder, defaultMode (whole|pick), extensions, maxBytes, exclude, maxFiles,
  *                       hideFolders (folder-name patterns never listed; default ["_*"], which hides the analyst's
  *                       work folder). Re-read on every call.
+ *   --chain-query URL   chain-query for the "Blockchain queries" twisty (default http://127.0.0.1:8750; services/chain-query,
+ *                       started by start-chain-query.cmd; read-only, no keys). GET /chain/<chains|vaults|loan-terms|export> only.
  *   --analyst URL       the analyst for "03 Private chat + analysis" (default http://127.0.0.1:8740; services/analyst,
  *                       started by start-analyst.cmd). Only its known routes are forwarded, as JSON.
  *   Ask across files ("Ask across files" box on the chat tab): POST /crossask {folder, question, model?, answerModel?, phrase?, sql?}
@@ -73,6 +75,7 @@ const { values: flags } = parseArgs({
     spy: { type: "string", default: "http://127.0.0.1:5004" },
     "data-config": { type: "string", default: fileURLToPath(new URL("../../config/data-sources.json", import.meta.url)) },
     analyst: { type: "string", default: "http://127.0.0.1:8740" },
+    "chain-query": { type: "string", default: "http://127.0.0.1:8750" },
     "view-max": { type: "string", default: "20" },
     "view-ttl-min": { type: "string", default: "60" },
     "view-max-bytes": { type: "string", default: "1000000" },
@@ -103,7 +106,7 @@ const PAID_PASS_BACK = /^(payment-required|payment-response|retry-after|x-chaina
 for (const s of VIEW_SOURCES) {
   if (!URL.canParse(s) || new URL(s).protocol !== "https:" || new URL(s).origin !== s.replace(/\/+$/, "")) throw new Error(`--view-script-src entries must be https origins like https://cdn.jsdelivr.net, got ${s}`);
 }
-for (const name of ["gateway", "paywall", "spy", "analyst"] as const) {
+for (const name of ["gateway", "paywall", "spy", "analyst", "chain-query"] as const) {
   if (!URL.canParse(flags[name]!)) throw new Error(`--${name} must be a URL, got ${flags[name]}`);
 }
 const PORT = Number(flags.port);
@@ -137,6 +140,8 @@ const SPY = flags.spy!.replace(/\/+$/, "");
 const PAGE = new URL("./index.html", import.meta.url);
 
 const ANALYST = flags.analyst!.replace(/\/+$/, "");
+const CHAIN_QUERY = flags["chain-query"]!.replace(/\/+$/, "");
+const CHAIN_ROUTES = new Set(["healthz", "chains", "vaults", "loan-terms", "export"]);
 const ANALYST_ROUTES = new Set(["profile", "recipe", "analyze", "status", "evidence", "verify", "relations", "sql"]);
 const ROUTES: Record<string, string> = { scan: "/v1/privacy/scan", mask: "/v1/privacy/mask", chat: "/v1/chat/completions" };
 
@@ -374,6 +379,19 @@ createServer(async (req, res) => {
       }
       res.writeHead(r.status, { "content-type": "application/json", ...dataHeaders });
       res.end(await r.text());
+      return;
+    }
+    // Blockchain queries twisty: forwarded to chain-query (read-only, 127.0.0.1, holds no keys). Known routes only, GET only.
+    if (api === "chain") {
+      if (!hostOk(req)) return dataJson(res, 403, { error: `open the console as http://127.0.0.1:${PORT}` });
+      const route = name ?? "";
+      if (req.method !== "GET" || !CHAIN_ROUTES.has(route)) return dataJson(res, 404, { error: "unknown chain route" });
+      let r: Response;
+      try { r = await fetch(`${CHAIN_QUERY}/${route}${url.search}`, { signal: AbortSignal.timeout(60_000) }); }
+      catch { return dataJson(res, 503, { error: `chain-query is not running at ${CHAIN_QUERY}: start test-console\\start-chain-query.cmd (start-ui.ps1 starts it) and keep its window open` }); }
+      const disposition = r.headers.get("content-disposition");
+      res.writeHead(r.status, { "content-type": r.headers.get("content-type") ?? "application/json", ...(disposition ? { "content-disposition": disposition } : {}), ...dataHeaders });
+      res.end(Buffer.from(await r.arrayBuffer()));
       return;
     }
     // Ask across files: relations and query on this PC (analyst), the model through the gateway (headers first, the result only with phrase llm).

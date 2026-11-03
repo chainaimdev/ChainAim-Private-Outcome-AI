@@ -66,13 +66,13 @@ Final beat: a gold question, "Who checks the borrower?"
 
 ## Scene 3 · 0:35–0:55 · A private question first (DEMO, console + Desk step 2)
 
-**Screen:** Maya's private-AI console. She types "Can our monthly cash flow cover the instalment?" The answer appears,
+**Screen:** Maya's private-AI console. She types "Can our monthly cash flow cover the installment?" The answer appears,
 computed from her own files. Cut to the Desk, step 2 → **Application sent to Harbor**.
 
 **Callout chips:** `Masked before any model sees it` · `Paid per question (x402 on XRPL)`
 
 > It starts with Maya, the CFO of Orion Ceramics. Before she applies, she asks her own books whether her cash flow
-> covers the instalment. The question is masked before any model sees it, and she pays per question, on-chain. Then
+> covers the installment. The question is masked before any model sees it, and she pays per question, on-chain. Then
 > she applies to Harbor, sharing computed facts, never her books.
 
 ## Scene 4 · 0:55–1:25 · Underwriting that says no (DEMO, Desk steps 3–6)
@@ -101,7 +101,7 @@ Step 11 → **All fields match ✓**.
 
 > Now someone forges a bigger loan and attaches the approval. Harbor's software re-hashes the pack, the terms don't
 > match, and it refuses to sign. Nothing is sent. The real loan goes through: Maya signs, Harbor checks and co-signs,
-> and the fingerprint of the analysis is written into the loan itself. Orion pays its first instalment, and
+> and the fingerprint of the analysis is written into the loan itself. Orion pays its first installment, and
 > monitoring checks every ledger field against our engine. Six of six match.
 
 ## Scene 6 · 1:50–2:15 · When a borrower slips (DEMO, Desk steps 12–14)
@@ -123,7 +123,7 @@ Step 17 → the bank view: ACTUS terms + live event schedule, each event linked 
 **Callout chip:** `ACTUS ANN schedule = XLS-66 schedule, to the cent`
 
 > Northbay, the depositor, pays for its own view: what each loan would cost savers if it defaulted now. And any bank
-> or supervisor can read the same loan as an ACTUS contract, the open standard, with every instalment matching the
+> or supervisor can read the same loan as an ACTUS contract, the open standard, with every installment matching the
 > ledger to the cent.
 
 ## Scene 8 · 2:35–2:50 · Why it's different (SLIDE 3)
@@ -163,7 +163,7 @@ Live on XRPL Devnet · XLS-65 / XLS-66.
 ## Before you record
 
 - **Pre-run the slow parts.** Start the Desk with `demo\start-demo.ps1 -FreshVault`, run step 1 (Kestrel's pilot loan)
-  first, and record Scene 6 last so the impair/default timings have passed. Steps 9 and 10 (Orion's instalment and the
+  first, and record Scene 6 last so the impair/default timings have passed. Steps 9 and 10 (Orion's installment and the
   monitoring fee) can be shown as quick cuts inside Scene 5.
 - **Maya's console needs the private-AI stack running** (`http://127.0.0.1:8730`). If it isn't up when you record,
   replace Scene 3's console shot with Desk step 2 alone and drop the "masked" and "pays per question" lines.

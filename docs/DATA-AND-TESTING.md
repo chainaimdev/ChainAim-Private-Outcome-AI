@@ -90,7 +90,7 @@ powershell -ExecutionPolicy Bypass -File services\lending\start-desk.ps1 -Restar
 | 6 | Underwrite **Orion** | `VERDICT APPROVE`, ACTUS live-call block, "Split" links to the facts pack and the borrower outcome |
 | 7 | A forged, bigger loan arrives | "REFUSED: no signature, no loan, nothing sent" |
 | 8 | The real loan: verified, co-signed | `LoanSet … tesSUCCESS`, fingerprint inside `LoanSet.Data` |
-| 9 | Orion pays its first instalment | `LoanPay … tesSUCCESS` |
+| 9 | Orion pays its first installment | `LoanPay … tesSUCCESS` |
 | 10 | Harbor pays for monitoring | wallet up |
 | 11 | Ledger vs ChainAim reconciliation | "All fields match ✓" |
 | 12 | Kestrel pays "on time" after its due date | stopped before sending: `tecEXPIRED` |

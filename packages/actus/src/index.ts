@@ -1,6 +1,6 @@
 /**
  * ACTUS cash flows for fixed-rate loans (the XRPL Lending Protocol's kind: fixed rate, fixed term):
- * terms -> an ACTUS contract (PAM = bullet, ANN = equal instalments), run on ACTUS directly or through ACTUS Mentor
+ * terms -> an ACTUS contract (PAM = bullet, ANN = equal installments), run on ACTUS directly or through ACTUS Mentor
  * (which builds the contract with its ACTUS knowledge), checked, and turned into schedule rows.
  * Also: terms read from a contract document by a model, then checked against the document's own text, so a value the
  * model made up never reaches ACTUS. Pure apart from fetch; no file access here.
@@ -22,7 +22,7 @@ export const maturityOf = (t: Terms): string => t.maturityDate ?? addMonths(t.st
 /** Throws a plain message when terms are incomplete or out of range. */
 export function checkTerms(t: Terms): Terms {
   const bad = (m: string): never => { throw new Error(`terms: ${m}`); };
-  if (t.contractType !== "PAM" && t.contractType !== "ANN") bad("contractType must be PAM (bullet) or ANN (equal instalments)");
+  if (t.contractType !== "PAM" && t.contractType !== "ANN") bad("contractType must be PAM (bullet) or ANN (equal installments)");
   if (!(t.notional > 0)) bad("notional must be above 0");
   if (!(t.annualRate >= 0 && t.annualRate < 1)) bad("annualRate is a decimal: 0.12 means 12%");
   if (!/^\d{4}-\d{2}-\d{2}$/.test(t.startDate ?? "")) bad("startDate must be YYYY-MM-DD");
@@ -127,7 +127,7 @@ export async function mentorRun(mentorUrl: string, key: string | undefined, payl
 // ---- terms from a contract document ---------------------------------------------------------------------
 export const TERMS_SYSTEM = [
   "You read a loan or financing document and return its terms as JSON only, in a ```json block, with these keys:",
-  '{"contractType": "ANN" when the loan is repaid in equal (monthly) instalments of principal and interest, e.g. "36 equal monthly instalments";',
+  '{"contractType": "ANN" when the loan is repaid in equal (monthly) installments of principal and interest, e.g. "36 equal monthly installments";',
   ' "PAM" only when the whole principal is repaid in ONE payment at the end (a bullet),',
   ' "notional": number, "currency": "USD", "annualRate": decimal (12% -> 0.12), "startDate": "YYYY-MM-DD" (drawdown / advance date),',
   ' "maturityDate": "YYYY-MM-DD" if the document states the final date, "termMonths": integer if it states a term in months,',
@@ -175,8 +175,8 @@ export function termsInDocument(t: Terms, doc: string): string[] {
   const termStated = (m: number | undefined) => m !== undefined && (hasNumber(m) || (m <= 12 && new RegExp(`\\b${WORDS[m]}\\b`).test(text)));
   if (t.maturityDate && !hasDate(t.maturityDate) && !(termStated(t.termMonths) && addMonths(t.startDate, t.termMonths!) === t.maturityDate)) failed.push(`maturity date ${t.maturityDate} is not in the document${t.termMonths ? "" : " (and no term in months was given)"}`);
   if (!t.maturityDate && t.termMonths && !(hasNumber(t.termMonths) || (t.termMonths <= 12 && new RegExp(`\\b${WORDS[t.termMonths]}\\b`).test(text)))) failed.push(`term of ${t.termMonths} months is not in the document`);
-  const equal = /equal\b[^.]*\binstal?ments?|annuity/.test(text), single = /single payment|in one payment|bullet|repayable in full|together with all accrued interest on/.test(text);
-  if (t.contractType === "ANN" && !equal) failed.push("ANN (equal instalments) is not what the document describes");
+  const equal = /equal\b[^.]*\binstal{1,2}ments?|annuity/.test(text), single = /single payment|in one payment|bullet|repayable in full|together with all accrued interest on/.test(text);
+  if (t.contractType === "ANN" && !equal) failed.push("ANN (equal installments) is not what the document describes");
   if (t.contractType === "PAM" && !single) failed.push("PAM (one repayment at the end) is not what the document describes");
   return failed;
 }

@@ -1,0 +1,8 @@
+{
+  "notes": "Per-PC chain choices. Copy to config/local/chain-profile.json (git-ignored) or let test-console/chain-config.ps1 write it. Public addresses only: keys and seeds never go here (secrets live in C:\\PRIV-AI-SECRETS\\chainaim.env). Read by stack.ps1 (XRPL pay-to) and services/chain-query (selected chain/env).",
+  "selected": { "chain": "xrpl", "env": "testnet" },
+  "accounts": {
+    "xrpl:testnet": { "payTo": "rEXAMPLE..." },
+    "near:testnet": { "account": "example.testnet" }
+  }
+}

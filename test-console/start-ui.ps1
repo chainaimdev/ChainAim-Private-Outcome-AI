@@ -5,10 +5,12 @@ already running is kept (use -RestartConsole / -RestartAnalyst to replace those 
   .\test-console\start-ui.ps1                       start what is missing, then open http://127.0.0.1:8730
   .\test-console\start-ui.ps1 -RestartConsole       also restart the console (after a code change)
   .\test-console\start-ui.ps1 -RestartAnalyst       also restart the analyst (after a code change)
+  .\test-console\start-ui.ps1 -RestartChainQuery    also restart chain-query (after a code change)
+  .\test-console\start-ui.ps1 -NoChainQuery         do not start chain-query (the Blockchain queries twisty then says so)
   .\test-console\start-ui.ps1 -NoBrowser            do not open the browser
 
   -ModelsFile    the model list the console shows (default config\local-models.cpu-all.json)
-  -ConsolePort   default 8730       -AnalystPort  default 8740      -GatewayPort  default 8720
+  -ConsolePort   default 8730       -AnalystPort  default 8740      -GatewayPort  default 8720      -ChainQueryPort default 8750
   -WaitSec       how long to wait for each service to answer (default 40)
 
 Steps:
@@ -28,6 +30,9 @@ param(
   [int]$WaitSec = 40,
   [switch]$RestartConsole,
   [switch]$RestartAnalyst,
+  [int]$ChainQueryPort = 8750,
+  [switch]$RestartChainQuery,
+  [switch]$NoChainQuery,
   [switch]$NoBrowser
 )
 $ErrorActionPreference = "Stop"
@@ -83,12 +88,20 @@ if (Listening $AnalystPort) { Say "OK" "analyst already running on $AnalystPort"
 else { Say "START" "analyst (its own window; keep it open)"; Start-Process (Join-Path $PSScriptRoot "start-analyst.cmd") -WorkingDirectory $PSScriptRoot }
 if (-not (Wait-Http "http://127.0.0.1:$AnalystPort/healthz" "analyst")) { Stop-Here "Look at the analyst window for the error." }
 
+# 4b. chain-query (read-only chain queries for the Blockchain queries twisty), its own window
+if (-not $NoChainQuery) {
+  if ($RestartChainQuery -and (Listening $ChainQueryPort)) { Say "STOP" "chain-query on $ChainQueryPort (restart asked)"; Stop-Port $ChainQueryPort }
+  if (Listening $ChainQueryPort) { Say "OK" "chain-query already running on $ChainQueryPort" }
+  else { Say "START" "chain-query (its own window; keep it open)"; Start-Process (Join-Path $PSScriptRoot "start-chain-query.cmd") -ArgumentList @("--port", "$ChainQueryPort") -WorkingDirectory $PSScriptRoot }
+  if (-not (Wait-Http "http://127.0.0.1:$ChainQueryPort/healthz" "chain-query")) { Say "WARN" "chain-query did not start; the console still works without the Blockchain queries twisty. Look at its window." }
+}
+
 if (-not (Test-Path (Join-Path $repo $ModelsFile))) { Stop-Here "model list not found: $ModelsFile" }
 if ($RestartConsole -and (Listening $ConsolePort)) { Say "STOP" "console on $ConsolePort (restart asked)"; Stop-Port $ConsolePort }
 if (Listening $ConsolePort) { Say "OK" "console already running on $ConsolePort" }
 else {
   Say "START" "console (its own window; keep it open), models from $ModelsFile"
-  $cmd = "Set-Location '$repo'; node test-console\console\server.ts --models-file '$ModelsFile' --port $ConsolePort"
+  $cmd = "Set-Location '$repo'; node test-console\console\server.ts --models-file '$ModelsFile' --port $ConsolePort --chain-query http://127.0.0.1:$ChainQueryPort"
   Start-Process powershell -ArgumentList @("-NoExit", "-Command", $cmd)
 }
 if (-not (Wait-Http "http://127.0.0.1:$ConsolePort/" "console")) { Stop-Here "Look at the console window for the error." }

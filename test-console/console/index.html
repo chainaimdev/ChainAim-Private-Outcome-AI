@@ -117,7 +117,27 @@ button { margin: 0; border: 1px solid var(--btn); background: var(--btn); color:
 button:hover { opacity: .88; }
 button.ghost { border-color: var(--rule-firm); background: transparent; color: var(--ink-2); font-weight: 500; }
 button.ghost:hover { border-color: var(--ink); color: var(--ink); opacity: 1; }
-button:disabled { opacity: .5; cursor: wait; }
+button:disabled { opacity: .5; cursor: not-allowed; }
+/* UI CONTRACT (DESIGN/xrplh-28 section 10): every long action shows the activity bar and a spinner on its button, with the
+   seconds waited. busy() and chainRun() drive it. Guarded by scripts/test/console-progress.test.ts (run by npm test). */
+#activity { position: fixed; left: 0; right: 0; bottom: 0; z-index: 50; display: none; align-items: center; gap: 12px; padding: 11px 18px;
+  background: var(--sheet); border-top: 1px solid var(--rule-firm); box-shadow: 0 -6px 18px rgb(0 0 0 / .10); font: 500 13px/1.4 var(--sans); color: var(--ink); }
+#activity.on { display: flex; }
+#activity .glyph { width: 1.2em; flex: none; text-align: center; font: 600 18px/1 var(--sans); color: #d97757; animation: act-pulse 1.6s ease-in-out infinite; }
+#activity .what { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+#activity .what .label { background: linear-gradient(90deg, var(--ink) 0%, var(--ink) 40%, var(--muted) 50%, var(--ink) 60%, var(--ink) 100%);
+  background-size: 250% 100%; -webkit-background-clip: text; background-clip: text; color: transparent; animation: act-shimmer 2.2s linear infinite; }
+#activity .hint { color: var(--muted); }
+#activity .secs { font: 500 12px/1 var(--mono); color: var(--muted); font-variant-numeric: tabular-nums; }
+#activity .bar { position: absolute; top: -2px; left: 0; height: 2px; width: 30%; background: var(--ink); animation: act-slide 1.4s ease-in-out infinite; }
+button[aria-busy="true"] { position: relative; padding-left: 38px; cursor: progress; opacity: .85; }
+button[aria-busy="true"]::before { content: ""; position: absolute; left: 14px; top: 50%; width: 12px; height: 12px; margin-top: -7px; border: 2px solid currentColor;
+  border-right-color: transparent; border-radius: 50%; animation: act-spin .8s linear infinite; }
+@keyframes act-spin { to { transform: rotate(360deg); } }
+@keyframes act-slide { from { left: -30%; } to { left: 100%; } }
+@keyframes act-pulse { 0%, 100% { opacity: .55; transform: scale(.9); } 50% { opacity: 1; transform: scale(1.1); } }
+@keyframes act-shimmer { from { background-position: 100% 0; } to { background-position: -150% 0; } }
+@media (prefers-reduced-motion: reduce) { #activity .glyph, #activity .bar, #activity .what .label, button[aria-busy="true"]::before { animation-duration: 4s; } }
 .cost { font: 500 11.5px/1 var(--mono); color: var(--muted); margin-left: auto; }
 
 /* verdict strip: the summary before the detail */
@@ -159,6 +179,22 @@ tr:last-child td { border-bottom: 0; }
 td.num { font-variant-numeric: tabular-nums; }
 td.ph { background: none; border: 0; padding: 9px 13px; white-space: nowrap; }
 table.kv th { width: 11rem; white-space: nowrap; }
+/* Blockchain queries twisty: picklists in a row that wraps, results as cards that never scroll sideways */
+#chainBox > summary { cursor: pointer; }
+#chainBox button:disabled { opacity: .4; cursor: not-allowed; }
+#chainBox .chain-pick { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 13rem), 1fr)); gap: 12px; }
+#chainBox .chain-pick label { display: grid; gap: 6px; min-width: 0; }
+#chainBox .chain-pick select { width: 100%; min-width: 0; }
+#chainInfo, #chainOut { overflow-wrap: anywhere; min-width: 0; }
+#chainOut h3 { font: 500 11px/1 var(--mono); letter-spacing: .13em; text-transform: uppercase; color: var(--muted); margin: 18px 0 10px; }
+.chain-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 24rem), 1fr)); gap: 12px; }
+.chain-card { border: 1px solid var(--rule); background: var(--sheet); border-radius: 6px; padding: 12px 14px; min-width: 0; }
+.chain-card h4 { margin: 0 0 10px; font: 500 13px/1.4 var(--sans); color: var(--ink); overflow-wrap: anywhere; }
+.chain-card dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 5px 14px; margin: 0; font: 400 12px/1.5 var(--mono); }
+.chain-card dt { color: var(--muted); font-size: 10.5px; letter-spacing: .06em; text-transform: uppercase; padding-top: 2px; }
+.chain-card dd { margin: 0; overflow-wrap: anywhere; color: var(--ink); }
+.chain-card dd.empty { color: var(--muted); }
+.chain-card .sub { margin: 10px 0 6px; font: 500 10.5px/1 var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
 .xmodels { display: grid; grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr)); gap: 12px; }
 .xmodels select { display: block; width: 100%; margin-top: 6px; }
 .addr { word-break: break-all; }
@@ -234,8 +270,8 @@ footer.fine { margin-top: 30px; padding-top: 16px; border-top: 1px solid var(--r
             <input type="file" id="file1" accept=".txt,.md,.csv,.tsv,.json,.log,.xml,.html,.yml,.yaml,.pdf,text/*,application/pdf">
           </label>
           <div class="row-actions">
-            <button id="mask">Mask ($0.01)</button>
-            <button class="ghost" id="scan">Scan ($0.01)</button>
+            <button id="mask" data-busy="Masking">Mask ($0.01)</button>
+            <button class="ghost" id="scan" data-busy="Scanning with Presidio">Scan ($0.01)</button>
             <span class="cost">x402 on XRPL TestNet</span>
           </div>
         </div>
@@ -263,7 +299,7 @@ footer.fine { margin-top: 30px; padding-top: 16px; border-top: 1px solid var(--r
           <label class="paybox"><input type="checkbox" id="payMode"> Pay with Crossmark (x402, RLUSD on XRPL TestNet)</label>
           <span class="muted" id="payInfo">Off: Send goes straight to the gateway with the test key, and nothing is paid.</span>
           <div class="row-actions">
-            <button id="send">Send ($0.01)</button>
+            <button id="send" data-busy="Waiting for the model's answer">Send ($0.01)</button>
             <button class="ghost" id="newConv" type="button">New conversation</button>
             <button class="ghost" id="tryMedia">Try an image or PDF (refused)</button>
             <input type="file" id="media" accept="image/*,.pdf,application/pdf" hidden>
@@ -281,8 +317,8 @@ footer.fine { margin-top: 30px; padding-top: 16px; border-top: 1px solid var(--r
           <span class="blabel">1. Folder</span>
           <div id="xFolder"></div>
           <span class="blabel">2. Question</span>
-          <div class="row-actions" id="xTemplates"><button type="button" class="ghost xtpl" data-q="By month, how much cash came into and went out of our bank account, and what was the net cash flow? Could it cover a loan instalment of 20,368 a month?">Cash flow vs instalment</button><button type="button" class="ghost xtpl" data-q="Based on our accounts receivable (unpaid customer invoices) and accounts payable (unpaid supplier bills), how much is owed to us and how much do we owe? Do we need a loan?">Receivables vs payables: need a loan?</button><button type="button" class="ghost xtpl" data-q="What loan terms are available in the XRPL vaults: lender, amount available to lend, structure, term in months, annual rate, grace days, late charges and fees?">XRPL vault loan terms</button></div>
-          <textarea id="xaskQ" spellcheck="false">By month, how much cash came into and went out of our bank account, and what was the net cash flow? Could it cover a loan instalment of 20,368 a month?</textarea>
+          <div class="row-actions" id="xTemplates"><button type="button" class="ghost xtpl" data-q="By month, how much cash came into and went out of our bank account, and what was the net cash flow? Could it cover a loan installment of 20,368 a month?">Cash flow vs installment</button><button type="button" class="ghost xtpl" data-q="Based on our accounts receivable (unpaid customer invoices) and accounts payable (unpaid supplier bills), how much is owed to us and how much do we owe? Do we need a loan?">Receivables vs payables: need a loan?</button></div>
+          <textarea id="xaskQ" spellcheck="false">By month, how much cash came into and went out of our bank account, and what was the net cash flow? Could it cover a loan installment of 20,368 a month?</textarea>
           <div class="xmodels">
             <label class="blabel">Writes the query (sees column names only)<select id="xaskModel"><option value="">loading the models…</option></select></label>
             <label class="blabel">Words the answer (sees the result rows)<select id="xaskAnswerModel"><option value="">no worded answer: table only</option></select></label>
@@ -291,12 +327,28 @@ footer.fine { margin-top: 30px; padding-top: 16px; border-top: 1px solid var(--r
             <textarea id="xaskSql" spellcheck="false" placeholder='SELECT "Payer", count(*) FROM collections GROUP BY 1'></textarea>
           </details>
           <div class="row-actions">
-            <button id="xaskGo" type="button">Ask</button>
-            <button class="ghost" id="xaskRel" type="button">Show how the files relate</button>
+            <button id="xaskGo" data-busy="Asking across files: the analyst reads the files, a model writes the query, the result is computed here" type="button">Ask</button>
+            <button class="ghost" id="xaskRel" data-busy="Reading the files and how they relate" type="button">Show how the files relate</button>
           </div>
           <span class="muted">Needs test-console\start-analyst.cmd running. A local model for the answer keeps the result rows on this PC.</span>
         </div>
         <div id="xaskOut"></div>
+        <details class="block" id="chainBox">
+          <summary><span class="blabel">Blockchain queries</span> <span class="muted" id="chainSummary">(closed: nothing is read until you open it)</span></summary>
+          <p class="muted">Read-only public ledger data from services/chain-query (start-chain-query.cmd): no keys, no model, nothing signed. Chains, environments and contract sources come from config\chains\networks.json; a source still holding placeholders is listed with what is missing.</p>
+          <div class="chain-pick">
+            <label class="blabel">Chain<select id="chainSel"></select></label>
+            <label class="blabel">Environment<select id="chainEnv"></select></label>
+            <label class="blabel">Source<select id="chainSrc"></select></label>
+          </div>
+          <div class="row-actions">
+            <button type="button" id="chainVaults">Vaults</button>
+            <button type="button" class="ghost" id="chainTerms">Loan terms</button>
+            <button type="button" class="ghost" id="chainExport">Export loan terms (CSV)</button>
+          </div>
+          <div id="chainInfo" class="muted"></div>
+          <div id="chainOut"></div>
+        </details>
       </section>
 
       <section class="sheet" id="t3" hidden>
@@ -326,6 +378,7 @@ footer.fine { margin-top: 30px; padding-top: 16px; border-top: 1px solid var(--r
     </div>
   </div>
 </div>
+<div id="activity" role="status" aria-live="polite"><div class="bar"></div><span class="glyph" aria-hidden="true"></span><span class="what"></span><span class="secs"></span></div>
 <script>
 const $ = (id) => document.getElementById(id);
 const el = (tag, props = {}, ...kids) => { const e = Object.assign(document.createElement(tag), props); for (const k of kids) if (k != null) e.append(k); return e; };
@@ -359,11 +412,29 @@ async function call(url, body) {
   return res.json();
 }
 const SERVER = "http://127.0.0.1:8730";
-async function busy(button, fn) {
-  button.disabled = true;
+// Activity bar (UI CONTRACT, see the CSS): label, seconds waited, and a hint once a wait gets long. Counts overlapping jobs.
+const activity = (() => {
+  const box = document.getElementById("activity"); let t0 = 0, timer = 0, spin = 0, frame = 0, jobs = 0, label = "";
+  // A live-activity mark like Claude's: a glyph cycling through these frames, plus a shimmer over the label.
+  const FRAMES = ["\u00b7", "\u2722", "\u2733", "\u2736", "\u273b", "\u273d", "\u273b", "\u2736", "\u2733", "\u2722"];
+  const turn = () => { box.querySelector(".glyph").textContent = FRAMES[frame++ % FRAMES.length]; };
+  const paint = () => {
+    const s = Math.floor((Date.now() - t0) / 1000);
+    box.querySelector(".what").replaceChildren(el("span", { className: "label", textContent: label }), el("span", { className: "hint", textContent:
+      s >= 30 ? "  - reasoning and CPU models think before they answer; this can take a few minutes" : s >= 8 ? "  - still working" : "" }));
+    box.querySelector(".secs").textContent = `${s} s`;
+  };
+  return {
+    start(what) { jobs++; label = what; t0 = Date.now(); box.classList.add("on"); clearInterval(timer); clearInterval(spin); paint(); turn(); timer = setInterval(paint, 1000); spin = setInterval(turn, 120); },
+    stop() { jobs = Math.max(0, jobs - 1); if (!jobs) { clearInterval(timer); clearInterval(spin); box.classList.remove("on"); } },
+  };
+})();
+async function busy(button, fn, what) {
+  button.disabled = true; button.setAttribute("aria-busy", "true");
+  activity.start(what ?? button.dataset.busy ?? `${(button.textContent || "Working").trim()}...`);
   try { await fn(); }
   catch (e) { alert(/failed to fetch|failed to parse url|networkerror/i.test(e.message) ? `Can't reach the test console server. Open ${SERVER} in your browser, and check that the "ChainAim test console" window is still open (start.cmd).` : e.message); }
-  finally { button.disabled = false; }
+  finally { button.disabled = false; button.removeAttribute("aria-busy"); activity.stop(); }
 }
 // Opened straight from disk (or from an editor preview), the buttons have no server to talk to.
 if (location.protocol !== "http:") document.querySelector(".wrap").prepend(el("p", { className: "flag" }, "This page was opened from a file, so its buttons can't reach the server. Open ", el("a", { href: SERVER, textContent: SERVER }), " instead (start.cmd must be running)."));
@@ -1287,6 +1358,85 @@ $("xaskGo").onclick = () => busy($("xaskGo"), async () => {
     ...r.attempts.map((a, i) => block(el("span", { className: "blabel", textContent: `Try ${i + 1}${a.error ? " (failed)" : ""}` }), pre(a.sql || "(no query in the reply)"), a.error ? el("p", { className: "flag", textContent: a.error }) : null))));
   out.append(el("details", { className: "behind" }, el("summary", { textContent: "How the files relate" }), relationsBlock(r.relations)));
 });
+// ---- Blockchain queries twisty (services/chain-query through /chain/*; read-only) -------------------------------------
+let chainData = null;
+const chainEl = (tag, text, cls) => { const e = document.createElement(tag); if (text !== undefined && text !== null) e.textContent = String(text); if (cls) e.className = cls; return e; };
+function chainEnvSpec() { const c = chainData?.chains.find((x) => x.id === $("chainSel").value); return { c, e: c?.environments.find((x) => x.id === $("chainEnv").value) }; }
+function chainFillEnvs(keep) {
+  const { c } = chainEnvSpec(); const sel = $("chainEnv"); sel.replaceChildren();
+  for (const e of c?.environments ?? []) { const o = chainEl("option", `${e.label} (${e.capabilities.join(", ") || "no capabilities"})`); o.value = e.id; sel.append(o); }
+  if (keep && [...sel.options].some((o) => o.value === keep)) sel.value = keep;
+  chainFillSources();
+}
+function chainFillSources() {
+  const { c, e } = chainEnvSpec(); const sel = $("chainSrc"); sel.replaceChildren();
+  const all = chainEl("option", "All sources"); all.value = "all"; sel.append(all);
+  for (const s of e?.sources ?? []) { const o = chainEl("option", `${s.label} [${s.kind}]${s.ready ? "" : " - not configured"}`); o.value = s.id; o.disabled = !s.ready && s.id === "(not set)"; sel.append(o); }
+  const can = (cap) => Boolean(e?.capabilities.includes(cap));
+  $("chainVaults").disabled = !can("vaults"); $("chainTerms").disabled = !can("loans"); $("chainExport").disabled = !can("loans");
+  const todo = (e?.sources ?? []).filter((s) => !s.ready);
+  $("chainInfo").textContent = !e ? "" : `${c.label} ${e.label}: ${can("vaults") || can("loans") ? "" : "vaults and loans are not enabled on this environment. "}${todo.length ? `To fill in config\\chains\\networks.json: ${todo.map((s) => `${s.id} (${s.missing.join(", ")})`).join("; ")}` : ""}`;
+  $("chainSummary").textContent = e ? `${c.label} - ${e.label}` : "";
+}
+async function chainLoad() {
+  const r = await fetch("/chain/chains"); const j = await r.json().catch(() => ({ error: `HTTP ${r.status}` }));
+  if (!r.ok) { $("chainInfo").textContent = j.error ?? `HTTP ${r.status}`; return; }
+  chainData = j; const sel = $("chainSel"); sel.replaceChildren();
+  for (const c of j.chains) { const o = chainEl("option", c.label); o.value = c.id; sel.append(o); }
+  if (j.selected?.chain) sel.value = j.selected.chain;
+  chainFillEnvs(j.selected?.env);
+}
+const CHAIN_LABELS = { vaultId: "Vault ID", owner: "Owner", asset: "Asset", available: "Available", total: "Total", maximum: "Maximum", lender: "Lender",
+  structure: "Structure", termMonths: "Term (months)", annualRate: "Annual rate %", graceDays: "Grace (days)", lateFee: "Late fee" };
+const chainLabel = (k) => CHAIN_LABELS[k] ?? k.replace(/Percent$/, " %").replace(/([a-z])([A-Z])/g, "$1 $2").replace(/^./, (c) => c.toUpperCase());
+/** Long ledger hashes are shortened on screen; the full value is in the tooltip and in the CSV export. */
+function chainValue(v) {
+  const dd = chainEl("dd");
+  if (v === null || v === undefined || v === "") { dd.textContent = "\u2014"; dd.className = "empty"; return dd; }
+  const s = typeof v === "object" ? JSON.stringify(v) : String(v);
+  if (/^[0-9A-F]{40,}$/i.test(s)) { dd.textContent = `${s.slice(0, 8)}\u2026${s.slice(-6)}`; dd.title = s; } else dd.textContent = s;
+  return dd;
+}
+function chainCard(r, kind) {
+  const card = chainEl("div", null, "chain-card");
+  card.append(chainEl("h4", kind === "vaults" ? `Vault ${r.asset ?? ""}`.trim() : r.structure ?? "Loan terms"));
+  const main = kind === "vaults" ? ["vaultId", "owner", "asset", "available", "total", "maximum"] : ["lender", "available", "termMonths", "annualRate", "graceDays", "lateFee"];
+  const dl = chainEl("dl"); for (const k of main) { dl.append(chainEl("dt", chainLabel(k)), chainValue(r[k])); } card.append(dl);
+  const extra = Object.entries(r.extra ?? {}).filter(([k]) => k !== "note");
+  if (extra.length) { card.append(chainEl("div", "More", "sub")); const d2 = chainEl("dl"); for (const [k, v] of extra) d2.append(chainEl("dt", chainLabel(k)), chainValue(v)); card.append(d2); }
+  if (r.extra?.note) card.append(chainEl("p", r.extra.note, "muted"));
+  return card;
+}
+function chainTable(rows, kind) {
+  if (!rows.length) return chainEl("p", "(no rows)", "muted");
+  const wrap = chainEl("div", null, "chain-cards"); for (const r of rows) wrap.append(chainCard(r, kind)); return wrap;
+}
+async function chainRun(kind) {
+  const q = `chain=${enc($("chainSel").value)}&env=${enc($("chainEnv").value)}&source=${enc($("chainSrc").value)}`;
+  const btns = ["chainVaults", "chainTerms", "chainExport"].map((id) => $(id)); const was = btns.map((b) => b.disabled);
+  btns.forEach((b) => { b.disabled = true; });
+  activity.start(`Reading ${$("chainSel").selectedOptions[0]?.textContent ?? "the chain"} ${$("chainEnv").value}: ${kind}`);
+  const t0 = Date.now(); const msg = chainEl("p", "Reading the ledger... 0 s", "muted"); $("chainOut").replaceChildren(msg);
+  const tick = setInterval(() => { msg.textContent = `Reading the ledger... ${Math.round((Date.now() - t0) / 1000)} s (gives up at 70 s)`; }, 1000);
+  const out = [];
+  try {
+    const r = await fetch(`/chain/${kind}?${q}`, { signal: AbortSignal.timeout(70_000) });
+    const j = await r.json().catch(() => ({ error: `HTTP ${r.status}: the answer is not JSON` }));
+    if (!r.ok) out.push(chainEl("p", j.error ?? `HTTP ${r.status}`, "error"));
+    else for (const s of j.results) { out.push(chainEl("h3", `${kind === "vaults" ? "Vaults" : "Loan terms"} - source ${s.source}`)); if (s.error) out.push(chainEl("p", s.error, "error")); else out.push(chainTable(s.rows, kind)); }
+  } catch (e) {
+    out.push(chainEl("p", e?.name === "TimeoutError" ? "No answer in 70 s. Is the chain-query window open? Try http://127.0.0.1:8750/healthz in the browser." : `Request failed: ${e?.message ?? e}`, "error"));
+  } finally {
+    clearInterval(tick); activity.stop(); btns.forEach((b, i) => { b.disabled = was[i]; });
+    out.push(chainEl("p", `${Math.round((Date.now() - t0) / 100) / 10} s`, "muted")); $("chainOut").replaceChildren(...out);
+  }
+}
+$("chainBox").addEventListener("toggle", () => { if ($("chainBox").open && !chainData) chainLoad().catch((e) => { $("chainInfo").textContent = String(e); }); });
+$("chainSel").addEventListener("change", () => chainFillEnvs());
+$("chainEnv").addEventListener("change", chainFillSources);
+$("chainVaults").addEventListener("click", () => chainRun("vaults"));
+$("chainTerms").addEventListener("click", () => chainRun("loan-terms"));
+$("chainExport").addEventListener("click", () => { location.href = `/chain/export?kind=loan-terms&chain=${enc($("chainSel").value)}&env=${enc($("chainEnv").value)}&source=${enc($("chainSrc").value)}`; });
 </script>
 </body>
 </html>

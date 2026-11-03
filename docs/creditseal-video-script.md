@@ -88,7 +88,7 @@ transaction that settled it.
 
 **Callout chip:** `ACTUS ANN schedule = XLS-66 schedule, to the cent`
 
-> And any bank or supervisor can read the same loan as an ACTUS contract, the open standard, with every instalment
+> And any bank or supervisor can read the same loan as an ACTUS contract, the open standard, with every installment
 > matching the ledger to the cent.
 
 ## Scene 7 · 1:52–2:00 · Close (SLIDE 3)

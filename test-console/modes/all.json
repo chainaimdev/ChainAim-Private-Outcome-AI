@@ -1,0 +1,22 @@
+{
+  "description": "ALL SOURCES: local Ollama GPU models (config/local-models.json) plus Bedrock Nemotron 3 Nano, in one gateway, so the console pick lists and --model can use any of them without switching. chainaim/auto and health data stay local; Bedrock is used only when named. BEDROCK_API_KEY from C:\\PRIV-AI-SECRETS\\chainaim.env or a hidden prompt.",
+  "modelSource": "catalog",
+  "localModels": "config/local-models.all-sources.json",
+  "mountConfig": true,
+  "secretEnv": [
+    "BEDROCK_API_KEY"
+  ],
+  "staticEnv": {},
+  "flags": [
+    "--attempt-timeout-ms",
+    "280000",
+    "--max-attempts",
+    "2",
+    "--auto-zones",
+    "local",
+    "--phi-zones",
+    "local"
+  ],
+  "testTimeoutSec": 300,
+  "doneMessage": "Local models and Bedrock Nemotron are on together. Start the console with: .\\test-console\\start-ui.ps1 -RestartConsole -ModelsFile config\\local-models.all-sources.json, then pick bedrock/nemotron-nano-3-30b or a local model in any pick list."
+}

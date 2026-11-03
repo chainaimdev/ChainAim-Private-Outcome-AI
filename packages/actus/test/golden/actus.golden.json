@@ -118,7 +118,7 @@
     },
     "checkTerms.bad-type": {
       "error": {
-        "message": "terms: contractType must be PAM (bullet) or ANN (equal instalments)",
+        "message": "terms: contractType must be PAM (bullet) or ANN (equal installments)",
         "name": "Error"
       }
     },
@@ -485,7 +485,7 @@
       "Principal After",
       "Rate"
     ],
-    "TERMS_SYSTEM": "You read a loan or financing document and return its terms as JSON only, in a ```json block, with these keys:\n{\"contractType\": \"ANN\" when the loan is repaid in equal (monthly) instalments of principal and interest, e.g. \"36 equal monthly instalments\";\n \"PAM\" only when the whole principal is repaid in ONE payment at the end (a bullet),\n \"notional\": number, \"currency\": \"USD\", \"annualRate\": decimal (12% -> 0.12), \"startDate\": \"YYYY-MM-DD\" (drawdown / advance date),\n \"maturityDate\": \"YYYY-MM-DD\" if the document states the final date, \"termMonths\": integer if it states a term in months,\n \"dayCount\": \"30E360\" for 30/360, \"A365\" for actual/365, omitted if not stated}\nCopy numbers and dates exactly from the document. If a value is not in the document, leave the key out. No other text."
+    "TERMS_SYSTEM": "You read a loan or financing document and return its terms as JSON only, in a ```json block, with these keys:\n{\"contractType\": \"ANN\" when the loan is repaid in equal (monthly) installments of principal and interest, e.g. \"36 equal monthly installments\";\n \"PAM\" only when the whole principal is repaid in ONE payment at the end (a bullet),\n \"notional\": number, \"currency\": \"USD\", \"annualRate\": decimal (12% -> 0.12), \"startDate\": \"YYYY-MM-DD\" (drawdown / advance date),\n \"maturityDate\": \"YYYY-MM-DD\" if the document states the final date, \"termMonths\": integer if it states a term in months,\n \"dayCount\": \"30E360\" for 30/360, \"A365\" for actual/365, omitted if not stated}\nCopy numbers and dates exactly from the document. If a value is not in the document, leave the key out. No other text."
   },
   "functions": [
     "addMonths",

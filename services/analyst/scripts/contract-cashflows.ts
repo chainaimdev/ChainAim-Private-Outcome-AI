@@ -95,7 +95,7 @@ async function one(path: string): Promise<{ id: string; rows: (string | number)[
     if (!missing.length) { terms = t; break; }
     if (f["terms-json"] || attempt === extractRetries) { console.log("REFUSED   a term is not in the document; nothing was sent to ACTUS"); return null; }
     // The failed checks go back to the model (they hold only the model's own values and rule names, no document text).
-    messages.push({ role: "user", content: `These terms failed the check against the document: ${missing.join("; ")}. Re-read the document and return corrected JSON terms, in a \`\`\`json block only. Remember: equal instalments of principal and interest = "ANN"; one repayment of principal at the end = "PAM"; leave maturityDate out unless the document states the final date.` });
+    messages.push({ role: "user", content: `These terms failed the check against the document: ${missing.join("; ")}. Re-read the document and return corrected JSON terms, in a \`\`\`json block only. Remember: equal installments of principal and interest = "ANN"; one repayment of principal at the end = "PAM"; leave maturityDate out unless the document states the final date.` });
   }
   if (!terms) return null;
   terms.id = id;

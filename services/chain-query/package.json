@@ -1,0 +1,13 @@
+{
+  "name": "chainaim-chain-query",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Read-only chain queries for the test console (DESIGN/xrplh-28): vaults and loan terms per chain, environment and source, from config/chains/networks.json. Holds no keys, signs nothing, calls no model; listens on 127.0.0.1. No runtime dependencies (Node fetch).",
+  "type": "module",
+  "engines": { "node": ">=22.22" },
+  "scripts": {
+    "start": "node src/main.ts",
+    "validate": "node src/main.ts --validate",
+    "test": "node --test \"test/*.test.ts\""
+  }
+}

@@ -16,6 +16,10 @@
  */
 import { verifyAnswer, type MoneyVerifyResult } from "./verify.ts";
 
+/** What an answer's figures are checked against: the computed result AND the user's own question. A figure the user typed
+ * ("could it cover an installment of 20,368?") is not something the model made up, so quoting it back is not flagged. */
+export function answerEvidence(question: string, table: string): string { return `Question: ${question}\n${table}`; }
+
 export type Msg = { role: "system" | "user" | "assistant"; content: string };
 export type ChatReply = { text: string; model?: string; zone?: string };
 export type CrossAskDeps = {
@@ -152,7 +156,7 @@ export async function crossAsk(input: CrossAskInput, deps: CrossAskDeps): Promis
     catch (e) { out.error = `the result is below, but the worded answer failed: ${(e as Error).message}`; return out; }
     out.served.push(reply);
     out.answer = reply.text.trim();
-    out.unverified = verifyAnswer(out.answer, table).notFound;
+    out.unverified = verifyAnswer(out.answer, answerEvidence(input.question, table)).notFound;
     // A placeholder left in the answer (e.g. "$<PHONE>.07": the gateway masked an amount and the model did not copy the
     // placeholder exactly, so it could not be restored) hides a value: never report that answer as fully checked.
     for (const p of out.answer.match(/<[A-Z][A-Z_]*(?:_\d+)?>|\[CARD REMOVED\]/g) ?? []) if (!out.unverified.includes(p)) out.unverified.push(p);

@@ -45,7 +45,9 @@ param(
   [int]$TestTimeoutSec = 0,
   [switch]$SkipTest,
   [ValidateSet("on", "off")][string]$OllamaVariants = "on",
-  [switch]$List
+  [switch]$List,
+  # NAME=value file outside the repository, read before asking (DESIGN/xrplh-28 section 3.3); chain-config.ps1 -SetSecret writes it.
+  [string]$SecretsFile = "C:\PRIV-AI-SECRETS\chainaim.env"
 )
 $ErrorActionPreference = "Stop"
 $repo = Split-Path $PSScriptRoot -Parent
@@ -121,7 +123,14 @@ if ($mode.modelSource -eq "catalog") {
 # Secrets: from the environment, else a hidden prompt.
 foreach ($name in @($mode.secretEnv)) {
   if (-not $name) { continue }
-  if ((Get-Item -Path "env:$name" -ErrorAction SilentlyContinue).Value) {
+  $fromFile = $null
+  if (-not (Get-Item -Path "env:$name" -ErrorAction SilentlyContinue).Value -and (Test-Path $SecretsFile)) {
+    Import-Module (Join-Path $PSScriptRoot "lib\settings.psm1") -Force
+    $fromFile = (Read-SecretsFile $SecretsFile)[$name]
+    if ($fromFile) { Set-Item -Path "env:$name" -Value $fromFile; Write-Host "Using $name from $SecretsFile." }
+  }
+  if ($fromFile) { }
+  elseif ((Get-Item -Path "env:$name" -ErrorAction SilentlyContinue).Value) {
     Write-Host "Using $name from your environment."
   } else {
     $secure = Read-Host "Paste $name and press Enter (it stays hidden)" -AsSecureString

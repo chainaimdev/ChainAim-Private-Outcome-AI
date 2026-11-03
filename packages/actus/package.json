@@ -2,7 +2,7 @@
   "name": "@chainaim/actus",
   "version": "0.1.0",
   "private": true,
-  "description": "ACTUS cash flows for fixed-rate loans (PAM bullet, ANN equal instalments): terms -> ACTUS contract, run on ACTUS directly or through ACTUS Mentor, checked, and turned into schedule rows; terms read by a model are checked against the document's own text. Pure apart from fetch. No runtime dependencies.",
+  "description": "ACTUS cash flows for fixed-rate loans (PAM bullet, ANN equal installments): terms -> ACTUS contract, run on ACTUS directly or through ACTUS Mentor, checked, and turned into schedule rows; terms read by a model are checked against the document's own text. Pure apart from fetch. No runtime dependencies.",
   "type": "module",
   "engines": { "node": ">=22.22" },
   "exports": { ".": "./src/index.ts" },

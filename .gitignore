@@ -24,6 +24,9 @@ config/generated/
 
 # local data-folder settings for the test console (paths to private data); the example is committed
 config/data-sources.json
+# per-PC settings (model choices, chain profile; DESIGN/xrplh-28); *.example.json files are committed
+config/local/*
+!config/local/*.example.json
 
 # test rig run records (services/paywall/scripts/rig.ts): addresses and transactions, never text or seeds
 rig/out/

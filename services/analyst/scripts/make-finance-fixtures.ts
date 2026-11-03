@@ -95,8 +95,8 @@ function writeContracts(tl: { notional: number; rate: number; months: number; st
 1. **Facility.** The Lender makes available to the Borrower a term loan of USD ${tl.notional.toLocaleString("en-US")} (${"one hundred and twenty thousand"} United States dollars) (the "Loan").
 2. **Drawdown.** The Loan was drawn in full on ${longDate(tl.start)} (the "Drawdown Date").
 3. **Interest.** Interest accrues at a fixed rate of ${(tl.rate * 100).toFixed(2)}% per annum for the life of the Loan, calculated on a 30/360 basis.
-4. **Repayment.** The Borrower shall repay the Loan in ${tl.months} equal consecutive monthly instalments of principal and interest, the first falling one month after the Drawdown Date and the last on the maturity date. Each instalment is USD ${annuity.toLocaleString("en-US", { minimumFractionDigits: 2 })}.
-5. **Prepayment.** Voluntary prepayment is permitted on any instalment date with 30 days' notice, without penalty.
+4. **Repayment.** The Borrower shall repay the Loan in ${tl.months} equal consecutive monthly installments of principal and interest, the first falling one month after the Drawdown Date and the last on the maturity date. Each installment is USD ${annuity.toLocaleString("en-US", { minimumFractionDigits: 2 })}.
+5. **Prepayment.** Voluntary prepayment is permitted on any installment date with 30 days' notice, without penalty.
 6. **Security.** The machines are pledged to the Lender until the Loan is repaid in full.
 `],
     ["invoice_finance_advance_kestrel.md", `# Invoice Finance Advance — Confirmation (demo, fictional parties)
@@ -106,7 +106,7 @@ function writeContracts(tl: { notional: number; rate: number; months: number; st
 
 We confirm an advance of USD 30,000 against receivables due from Northline Apparel (demo), paid to the Client on ${longDate(ifDraw)}.
 The advance bears interest at a fixed rate of 10.00% per annum (actual/365) and is repayable in a single payment of principal together with all accrued interest on ${longDate(ifMat)}, ninety-one days after the advance date.
-No instalments are due before that date.
+No installments are due before that date.
 `],
     ["working_capital_loan_proposal_kestrel.md", `# Term Sheet — Purchase-Order Working-Capital Loan (PROPOSAL, not signed; demo, fictional parties)
 
@@ -118,7 +118,7 @@ No instalments are due before that date.
 - **Interest:** 12% per annum, fixed for the whole term (30/360)
 - **Term:** 3 months from drawdown
 - **Expected drawdown:** ${longDate(wcDraw)}
-- **Repayment:** three equal monthly instalments of principal and interest, the first one month after drawdown
+- **Repayment:** three equal monthly installments of principal and interest, the first one month after drawdown
 - **Settlement:** in RLUSD on the XRP Ledger, under the XRPL Lending Protocol (fixed rate, fixed term)
 - **Conditions:** monthly reporting of receivables ageing and cash position to the Lender
 `],

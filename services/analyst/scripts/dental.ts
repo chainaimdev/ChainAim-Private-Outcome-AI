@@ -16,7 +16,9 @@
  *   card, branch, eft, all), tagged [T#]/[G#]/[F#]; the model rewords them through the gateway (no analyst server); src/facts.ts
  *   checks every figure and payment ID against the fact it cites, the loss wording and that every fact is mentioned. A failed
  *   check shows the computed facts instead. A "cooling_down" refusal (the gateway benches a model after failures, 30 s by default)
- *   is waited out once (--cooldown-wait-sec 35; 0 = do not wait). Extra flags: [--max-tokens N] [--timeout-sec 600] [--show-facts] [--facts-only: print each
+ *   is waited out once (--cooldown-wait-sec 35; 0 = do not wait). While a model works: --progress auto|spinner|lines|off (default auto:
+ *   an animated line with the seconds waited on a terminal, else one line every 15 s, so logs and pipes show it too).
+ *   Extra flags: [--max-tokens N] [--timeout-sec 600] [--show-facts] [--facts-only: print each
  *   question's fact sheet, call no model] [--scan: send each question's model input to the gateway's /v1/privacy/scan and report
  *   what it would mask; call no model. Anything masked reaches the model as a placeholder, so a clean sheet scans as 0].
  *
@@ -61,7 +63,7 @@ const [cmd, ...argv] = process.argv.slice(2);
 if (!cmd || !["sets", "gen", "check", "explain", "query", "status", "up", "probe"].includes(cmd)) usage("first argument must be sets, gen, check, explain, query, status, up or probe");
 const STACK = ["explain", "query", "status", "up", "probe"].includes(cmd);
 const own = new Set(["--set", "--folder", "--data-root", ...(cmd === "sets" ? ["--scenarios", "--seed", "--leak-seed"] : []),
-  ...(cmd === "query" ? ["--id", "--sql", "--format", "--max-rows", "--bank", "--kind", "--model", "--max-tokens", "--timeout-sec", "--cooldown-wait-sec"] : []),
+  ...(cmd === "query" ? ["--id", "--sql", "--format", "--max-rows", "--bank", "--kind", "--model", "--max-tokens", "--timeout-sec", "--cooldown-wait-sec", "--progress"] : []),
   ...(STACK ? ["--containers", "--gateway", "--wait-sec", "--analyst-port"] : [])]);
 const ownBool = new Set([...(cmd === "query" ? ["--list", "--with-ask", "--show-facts", "--facts-only", "--scan"] : []), ...(STACK ? ["--no-docker"] : [])]);
 const opt: Record<string, string> = {}; const rest: string[] = [];
@@ -96,6 +98,20 @@ if (STACK && (!Number.isInteger(WAIT_SEC) || WAIT_SEC < 0)) usage("--wait-sec mu
 if (STACK && (!Number.isInteger(ANALYST_PORT) || ANALYST_PORT < 1024 || ANALYST_PORT > 65535)) usage("--analyst-port must be 1024-65535");
 const KEY_FILE = join(REPO, "test-console", "local-gateway-key.txt");
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const PROGRESS = opt.progress ?? "auto";
+if (!["auto", "spinner", "lines", "off"].includes(PROGRESS)) usage("--progress is auto, spinner, lines or off");
+/** Shows that a slow call is still running: an animated line on a terminal (spinner), else one line every 15 s (lines). */
+async function waiting<T>(label: string, limitSec: number, work: Promise<T>): Promise<T> {
+  if (PROGRESS === "off") return work;
+  const live = PROGRESS === "spinner" || (PROGRESS === "auto" && Boolean(process.stderr.isTTY));
+  const t0 = Date.now(); const frames = ["|", "/", "-", "\\"]; let i = 0; let width = 0;
+  const secs = () => Math.floor((Date.now() - t0) / 1000);
+  const timer = live
+    ? setInterval(() => { const s = `${frames[i++ % frames.length]} ${label}  ${secs()}s elapsed (gives up at ${limitSec}s) `; width = Math.max(width, s.length); process.stderr.write(`\r${s}`); }, 250)
+    : setInterval(() => process.stdout.write(`...       ${label}: ${secs()}s elapsed (gives up at ${limitSec}s)\n`), 15000);
+  try { return await work; }
+  finally { clearInterval(timer); if (live && width) process.stderr.write(`\r${" ".repeat(width)}\r`); }
+}
 
 const SECTIONS = ["totals", "groups", "losses", "extra", "timing", "posting", "payers", "card", "branch", "eft", "all"];
 const CATEGORY_SQL = `CASE WHEN severity = 'watch' THEN 'timing' WHEN direction = 'negative' THEN 'loss' WHEN direction = 'positive' THEN 'extra' ELSE 'posting' END`;
@@ -396,7 +412,8 @@ async function askWithFacts(qs: Entry[], sheets: Map<string, FactSheet>): Promis
     if (opt["show-facts"]) process.stdout.write(`${sheet.text}\n`);
     const t0 = Date.now(); let verdict: string;
     try {
-      const r = await ask([{ role: "system", content: FACT_SYSTEM }, { role: "user", content: `${q.question}\n\n${sheet.text}` }]);
+      const r = await waiting(`waiting for ${model} (a first call also loads it into memory)`, timeoutSec,
+        ask([{ role: "system", content: FACT_SYSTEM }, { role: "user", content: `${q.question}\n\n${sheet.text}` }]));
       const secs = ((Date.now() - t0) / 1000).toFixed(1);
       const mismatch = model !== "chainaim/auto" && r.model !== undefined && r.model !== model;
       const check = verifyFactAnswer(r.text, sheet);

@@ -1,0 +1,7 @@
+{
+  "notes": "Per-PC model choices. Copy to config/local/ai-profile.json (git-ignored: config/local/* in .gitignore, *.example.json committed) and edit. Read by test-console/dental-test.ps1 (defaults.dental: one id or a comma-separated list); a -Model flag or env CHAINAIM_DENTAL_MODEL overrides it. Every id must be served by the running gateway (switch-models.ps1 mode). DESIGN/xrplh-28 section 3.6 extends this file to the console and the other terminal scripts.",
+  "gatewayMode": "all",
+  "defaults": {
+    "dental": "local/deepseek-r1-8b"
+  }
+}

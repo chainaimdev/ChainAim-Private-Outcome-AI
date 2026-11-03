@@ -47,7 +47,7 @@ Northbay's and the bank's green.
 | 6 | CreditSeal on Maya Chen's PC (Orion Ceramics) | Underwrites Orion | Run | (covered by step 3) | **VERDICT APPROVE**, ACTUS schedule vs XRPL schedule |
 | 7 | Harbor Credit | A forged request: a bigger loan than approved | Run | — | **REFUSED: no signature, no loan, nothing sent** |
 | 8 | Harbor Credit | The real loan: verified, then co-signed | Run | — | **Loan created on XRPL with the proof inside** |
-| 9 | Maya Chen, Orion | Orion pays its first instalment | Run | — | **Instalment paid** (`LoanPay … tesSUCCESS`) |
+| 9 | Maya Chen, Orion | Orion pays its first installment | Run | — | **Installment paid** (`LoanPay … tesSUCCESS`) |
 | 10 | Harbor Credit | Harbor pays CreditSeal to monitor its loans | Pay | 3 TUSD monitoring | payment `tesSUCCESS`, gold wallet +3 |
 | 11 | CreditSeal monitoring | Ledger vs ChainAim: does Orion's loan match? | Run | (covered by step 10) | **All fields match ✓** (`attestation = sha256(pack) ✓`) |
 | 12 | Kestrel Foods | Kestrel missed its due date and tries to pay as if on time | Run | — | **Stopped before sending: payment is late (tecEXPIRED)** |
@@ -74,7 +74,7 @@ Desk with other prices, say the prices you set.
 | 6 | 1:55–2:15 | 20 s | Step 3: Harbor pays for underwriting | Step 3 → Pay, gold wallet ticks up |
 | 7 | 2:15–3:00 | 45 s | Steps 4–6: underwriting that says no | Three Runs: DECLINE, LEI + APPROVE, APPROVE + ACTUS |
 | 8 | 3:00–3:35 | 35 s | Steps 7–8: proof inside the loan | REFUSED, then loan created; explorer `Data` |
-| 9 | 3:35–3:55 | 20 s | Steps 9–11: pay, monitor, reconcile | Instalment, Pay +3, All fields match ✓ |
+| 9 | 3:35–3:55 | 20 s | Steps 9–11: pay, monitor, reconcile | Installment, Pay +3, All fields match ✓ |
 | 10 | 3:55–4:25 | 30 s | Steps 12–14: when a borrower slips | tecEXPIRED, impaired, defaulted; ACTUS chips |
 | 11 | 4:25–4:50 | 25 s | Steps 15–17: savers and banks | Pay +2, depositor table, bank view |
 | 12 | 4:50–5:00 | 10 s | Close | End card |
@@ -132,12 +132,12 @@ its legend.
 ## Scene 5 · 1:30–1:55 · Step 2: Maya asks her own books
 
 **Screen:** step 2 → **Continue** → **Application sent to Harbor**. Optional quick cut: click "Maya's private-AI
-console ↗" and show her question "Can our monthly cash flow cover the instalment?" answered from her files.
+console ↗" and show her question "Can our monthly cash flow cover the installment?" answered from her files.
 
 **Chips:** `Books stay on Maya's PC` · `Paid per question (x402)`
 
 > Maya Chen is the CFO of Orion Ceramics. Before applying, she asks her own books, in her private console, whether her
-> monthly cash flow can cover the instalment. The answer is computed from her files on her PC, and she pays per
+> monthly cash flow can cover the installment. The answer is computed from her files on her PC, and she pays per
 > question. Then she applies to Harbor for a working-capital loan, sharing computed facts, not her books.
 
 ## Scene 6 · 1:55–2:15 · Step 3: Harbor pays for underwriting
@@ -167,7 +167,7 @@ underwrite · tx ↗". Harbor's "paid ChainAim" rises too.
 > one late payer: declined. Jupiter Knitting declares its legal entity identifier, and CreditSeal checks it live
 > against the public GLEIF registry: entity active, registration issued, check digits valid. Approved. Orion passes
 > every stress, with two point three eight times coverage: approved. And the repayment schedule is checked live on an
-> ACTUS server. The XRPL schedule and the ACTUS schedule match, instalment by instalment.
+> ACTUS server. The XRPL schedule and the ACTUS schedule match, installment by installment.
 
 ## Scene 8 · 3:00–3:35 · Steps 7–8: proof inside the loan
 
@@ -184,12 +184,12 @@ explorer.
 
 ## Scene 9 · 3:35–3:55 · Steps 9–11: pay, monitor, reconcile
 
-**Screen:** step 9 → **Run** → **Instalment paid**. Step 10 → gold **Pay** → wallet +3.00. Step 11 → **Run** →
+**Screen:** step 9 → **Run** → **Installment paid**. Step 10 → gold **Pay** → wallet +3.00. Step 11 → **Run** →
 **All fields match ✓**, with the line `attestation = sha256(pack) ✓`.
 
 **Chip:** `Ledger vs ChainAim: every field ✓`
 
-> Orion pays its first instalment, on-chain. Harbor pays CreditSeal three dollars to monitor its loans. Monitoring
+> Orion pays its first installment, on-chain. Harbor pays CreditSeal three dollars to monitor its loans. Monitoring
 > compares every field the ledger stores with ChainAim's own numbers, plus the fingerprint in the loan. All fields
 > match.
 

@@ -32,7 +32,7 @@ self-issued test dollar **TUSD** (not RLUSD).
 - **GLEIF identity, live:** Jupiter Knitting declares LEI 3358004DXAMRWRUIYJ05; checked against
   `https://api.gleif.org/api/v1/lei-records/<LEI>` (entity ACTIVE, registration ISSUED, ISO 17442 check digits,
   legal name). *Identity: real public GLEIF record. Financials: synthetic demo books.*
-- **ACTUS cross-check, live:** the loan as an `ANN` contract posted to an ACTUS server (`/eventsBatch`); instalments
+- **ACTUS cross-check, live:** the loan as an `ANN` contract posted to an ACTUS server (`/eventsBatch`); installments
   equal the XLS-66 schedule to the cent. Exact request and response saved per run.
 - Evidence hashes (GLEIF response, ACTUS request/response) inside the underwriting pack; `sha256(pack)` in
   `LoanSet.Data`; the broker re-hashes and checks the terms before counter-signing (a forged request is refused).
@@ -222,7 +222,7 @@ console) for the CFO's private questions. Its original README is kept at `docs/p
 | 1 | **Fills the gap XLS-66 leaves on purpose.** The spec relies on off-chain underwriting and skips collateral and liquidation; first-loss cover absorbs only a slice of a default (10 % × 50 % = 5 % of debt in our config). Savers' real protection is *whether the loan should be made*. | `packages/underwrite` — cash projection, 5 stress scenarios, rules → APPROVE / REFER / DECLINE |
 | 2 | **It says no.** On the demo data it **declines** the stressed borrower (Mercury Textiles: burns ~27k/month, 90 % of collections from one late payer) and **approves** the healthy one (Orion Ceramics: lowest cash 154.6k, 2.38× coverage, passes every stress). | `scripts/underwrite.ts` on both demo borrowers |
 | 3 | **Private by construction.** The books never leave the PC; customer and supplier names never enter the pack (IDs only); the AI, if used, gets numbers only. | `books.ts` keeps IDs only; test "no names in the facts" |
-| 4 | **Every number is computed, not generated.** The XLS-66 amortisation, default and cover formulas are copied from the spec; the AI only explains, and any number in its text that was not computed is flagged. | `packages/xls66/engine.ts` (tests: term-sheet instalment 17,001.11; equipment loan 3,843.95 matches the bank statement), `unverifiedNumbers` |
+| 4 | **Every number is computed, not generated.** The XLS-66 amortisation, default and cover formulas are copied from the spec; the AI only explains, and any number in its text that was not computed is flagged. | `packages/xls66/engine.ts` (tests: term-sheet installment 17,001.11; equipment loan 3,843.95 matches the bank statement), `unverifiedNumbers` |
 | 5 | **Interoperable loan maths.** ANN 30E360 monthly maps *exactly* to XLS-66 `PaymentInterval` 2,628,000 s (rate r/12 per period on both sides), so an ACTUS schedule — an open standard any institution can run — reconciles with the ledger. | `packages/underwrite/loan.ts`, optional `--actus-url` cross-check |
 | 6 | **Provable on-chain.** `LoanSet.Data` (≤256 B) carries `sha256(pack)`, verdict, policy and request id; the broker refuses to counter-sign if the hash, terms or verdict don't match. | `attest.ts`, `lending.ts loan` broker checks, `reconcile` |
 | 7 | **No failed transactions.** Before sending, every command evaluates the spec's failure conditions (V1.1 phase gates, the 60 s redemption buffer, cover minimum, exclusive impair/default boundaries) and names the code and spec clause. | `packages/xls66/gates.ts` (boundary tests at ±1 s) |
@@ -281,7 +281,7 @@ node scripts/lending.ts deposit $E --amount 150000
 # fast re-setup for test cycles (every wait <= 2 minutes): archives the old vault/broker/loans in the state file,
 # then vault (60 s subscription) + broker + cover + deposit, and waits until Investment opens
 node scripts/lending.ts cycle   $E                                  # [--subscription-sec 60] [--no-wait]
-node scripts/lending.ts mint    $E --to borrower --amount 1000      # the borrower needs > 20,367.78 for instalment 1
+node scripts/lending.ts mint    $E --to borrower --amount 1000      # the borrower needs > 20,367.78 for installment 1
 ```
 
 **4. Live (about 3 minutes)**
@@ -290,7 +290,7 @@ node scripts/lending.ts mint    $E --to borrower --amount 1000      # the borrow
 node scripts/underwrite.ts --books ../../data/lending/books/orion            # verdict + attestation
 node scripts/lending.ts fee       $E --request-id <requestId from step 2>
 node scripts/lending.ts loan      $E --pack ../../data/lending/packs/<requestId>.pack.json
-node scripts/lending.ts pay       $E --name loanA                            # early instalment = on time
+node scripts/lending.ts pay       $E --name loanA                            # early installment = on time
 node scripts/lending.ts reconcile $E --name loanA                            # ledger = engine; Data = sha256(pack)
 node scripts/lending.ts drill     $E                                         # 60 s interval, 60 s grace (spec minimum)
 node scripts/lending.ts pay       $E --name loanB --mode on-time             # after 61 s: refused by pre-flight, tecEXPIRED §3.11.4.2 #11
@@ -310,7 +310,7 @@ Every command accepts `--dry-run` (build + pre-flight, print, send nothing) and 
   validation and binary encoding of every draft; borrower-sign → broker-counter-sign producing both signatures with the
   attestation intact; determinism of the pack hash; strict TypeScript against xrpl 5.3.0 types.
 - **Run on Devnet 2026-10-25 (01:00–01:14 UTC-5), every transaction tesSUCCESS:** accounts, issue, vault, broker,
-  deposit, fee, Loan A (broker re-hash ✓), early instalment, `reconcile` (6/6 ✓ to 6 decimals, Data = sha256(pack)),
+  deposit, fee, Loan A (broker re-hash ✓), early installment, `reconcile` (6/6 ✓ to 6 decimals, Data = sha256(pack)),
   drill: impair refused before the due date by pre-flight (nothing sent), impair, default (cover paid, depositors lost 0),
   depositor view. DefaultRipple lets TUSD move through the vault. Run record: `BUILD_LOG.md`.
 - **Still open:** whether `InterestDue` in the cover check (§3.8.5.2 #20) is gross or net of the management fee (the

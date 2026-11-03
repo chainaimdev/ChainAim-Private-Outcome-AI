@@ -1,0 +1,10 @@
+{
+  "name": "@chainaim/chain-contracts",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Shared shapes and pure helpers for chain queries (DESIGN/xrplh-28): the chain registry (config/chains/networks.json) loader and checks, the JSON-path field mapper with explicit unit conversions, and address rules. No runtime dependencies, no network.",
+  "type": "module",
+  "engines": { "node": ">=22.22" },
+  "exports": { ".": "./src/index.ts" },
+  "scripts": { "test": "node --test \"test/*.test.ts\"" }
+}

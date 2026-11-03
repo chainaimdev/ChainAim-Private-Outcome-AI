@@ -1,0 +1,261 @@
+{
+  "version": 1,
+  "notes": "Chain registry for services/chain-query and the console's 'Blockchain queries' twisty (DESIGN/xrplh-28). Committed: endpoints, capabilities and contract sources only; never the user's addresses, keys or seeds (those live in config/local/chain-profile.json and C:\\PRIV-AI-SECRETS\\chainaim.env). Every endpoint below was read from the official docs on 2026-11-03 (see each 'sourceUrl'). Values written as \"<PLACEHOLDER: ...>\" are not known yet; chain-query --validate reports them and the UI greys out a source that has one. 'capabilities' says what the UI may offer; 'amendmentStatus' records what the docs said, and chain-query re-checks the live network at start-up instead of trusting this file.",
+  "xrpl": {
+    "label": "XRP Ledger",
+    "adapter": "xrpl",
+    "addressRule": "xrpl-classic",
+    "units": {
+      "rate": "1/10 basis point (1 = 0.001 %, 100000 = 100 %) per XLS-66 §3.2.2 / §3.8.1, as in CreditSeal packages/xls66/src/units.ts",
+      "time": "seconds; ledger timestamps are Ripple-epoch seconds"
+    },
+    "ledgerEntries": {
+      "vault": [
+        "Owner",
+        "Asset",
+        "AssetsTotal",
+        "AssetsAvailable",
+        "AssetsMaximum",
+        "LossUnrealized",
+        "VaultKind",
+        "SubscriptionDate",
+        "RedemptionDate"
+      ],
+      "loanBroker": [
+        "VaultID",
+        "DebtTotal",
+        "DebtMaximum",
+        "CoverAvailable",
+        "CoverRateMinimum",
+        "ManagementFeeRate"
+      ],
+      "loan": [
+        "LoanBrokerID",
+        "PrincipalOutstanding",
+        "TotalValueOutstanding",
+        "PeriodicPayment",
+        "PaymentInterval",
+        "PaymentRemaining",
+        "GracePeriod",
+        "NextPaymentDueDate",
+        "StartDate",
+        "Flags"
+      ],
+      "notes": "Field names as read by CreditSeal services/lending/src/ledger.ts (vaultView, brokerView, loanView). That code reads entries by ID (ledger_entry index) after creating them; discovering entries by owner (account_objects with a vault/loan_broker type filter) is not verified yet."
+    },
+    "environments": {
+      "testnet": {
+        "label": "Testnet",
+        "rpc": {
+          "ws": "wss://s.altnet.rippletest.net:51233/",
+          "http": "https://s.altnet.rippletest.net:51234/"
+        },
+        "caip2": "xrpl:1",
+        "explorer": "https://testnet.xrpl.org",
+        "faucet": "https://xrpl.org/resources/dev-tools/xrp-faucets",
+        "capabilities": [
+          "payments"
+        ],
+        "amendmentStatus": "Docs: Testnet amendment status is intended to closely mirror Mainnet, where SingleAssetVault and LendingProtocol are Open for Voting (not enabled) in the 2026-09-16 snapshot.",
+        "sources": [
+          {
+            "id": "ledger",
+            "kind": "native"
+          }
+        ],
+        "sourceUrl": [
+          "https://xrpl.org/resources/dev-tools/xrp-faucets",
+          "https://xrpl.org/docs/concepts/networks-and-servers/parallel-networks"
+        ]
+      },
+      "devnet": {
+        "label": "Devnet",
+        "rpc": {
+          "ws": "wss://s.devnet.rippletest.net:51233/",
+          "http": "https://s.devnet.rippletest.net:51234/"
+        },
+        "caip2": "xrpl:2",
+        "explorer": "<PLACEHOLDER: not listed on the pages read; devnet.xrpl.org is unverified>",
+        "capabilities": [
+          "payments",
+          "vaults",
+          "loans"
+        ],
+        "amendmentStatus": "LendingProtocol, LendingProtocolV1_1 and SingleAssetVault are enabled on Devnet: `feature` on s.devnet.rippletest.net (owner run 2026-10-24, DESIGN/xrplh-12 row 175, xrplh-22 row 28) and CreditSeal's lending runs there with tesSUCCESS (xrplh-18). Ripple's older opensource.ripple.com note saying they are disabled on Devnet is out of date. caip2 xrpl:2 = network_id from server_info 2026-11-03.",
+        "sources": [
+          {
+            "id": "ledger",
+            "kind": "native",
+            "notes": "Vault and loan broker created by CreditSeal (data/lending/devnet-run.json, 2026-10-25). Devnet can be reset without warning; replace the IDs or add vaultOwners when that happens.",
+            "vaultOwners": [],
+            "vaultIds": [
+              "B426037C978BF84DD8A602C7329DBEE2BFBD6C6375FF486C4179EF5C7282C108"
+            ],
+            "loanBrokerIds": [
+              "856CDE7B741252007DC68F837479E726A3196F0512011EA08C6125B71AEEE6F4"
+            ]
+          }
+        ],
+        "sourceUrl": [
+          "https://xrpl.org/resources/dev-tools/xrp-faucets",
+          "DESIGN/xrplh-12-LENDING-XLS65-66-FIT-2026-10-24T1845.md"
+        ]
+      },
+      "lending-devnet": {
+        "label": "Lending Devnet (XLS-65/66 preview)",
+        "rpc": {
+          "ws": "wss://lend.devnet.rippletest.net:51233/",
+          "http": "https://lend.devnet.rippletest.net:51234/"
+        },
+        "caip2": "<PLACEHOLDER: Lending-Devnet network ID not published on the pages read>",
+        "explorer": "<PLACEHOLDER: no explorer listed on the faucet page>",
+        "faucet": "https://xrpl.org/resources/dev-tools/xrp-faucets",
+        "capabilities": [],
+        "amendmentStatus": "Listed on the faucet page as a preview of XLS-66d, but not reachable from the owner's PC on 2026-11-03 (fetch failed). Lending is tested on Devnet instead; kept here so it can be re-enabled if it comes back.",
+        "sources": [
+          {
+            "id": "ledger",
+            "kind": "native",
+            "vaultOwners": [],
+            "vaultIds": [],
+            "loanBrokerIds": []
+          }
+        ],
+        "sourceUrl": [
+          "https://xrpl.org/resources/dev-tools/xrp-faucets"
+        ]
+      },
+      "mainnet": {
+        "label": "Mainnet",
+        "rpc": {
+          "ws": "wss://s1.ripple.com:51233/",
+          "http": "https://s1.ripple.com:51234/"
+        },
+        "caip2": "xrpl:0",
+        "explorer": "https://livenet.xrpl.org",
+        "capabilities": [
+          "payments"
+        ],
+        "amendmentStatus": "Known Amendments snapshot 2026-09-16: SingleAssetVault Open for Voting 45.71 %, LendingProtocol Open for Voting 37.14 %, LendingProtocolV1_1 Open for Voting 0.00 %; none enabled.",
+        "sources": [
+          {
+            "id": "ledger",
+            "kind": "native"
+          }
+        ],
+        "sourceUrl": [
+          "https://xrpl.org/resources/known-amendments"
+        ]
+      }
+    }
+  },
+  "near": {
+    "label": "NEAR",
+    "adapter": "near",
+    "addressRule": "near-account",
+    "viewCall": {
+      "method": "query",
+      "params": {
+        "request_type": "call_function",
+        "finality": "final",
+        "account_id": "<contract>",
+        "method_name": "<view>",
+        "args_base64": "<base64 JSON args>"
+      },
+      "result": "result.result is an array of bytes: decode as UTF-8, then parse as JSON",
+      "notes": "One JSON-RPC object per HTTP POST (nearcore rejects batches).",
+      "sourceUrl": "https://docs.near.org/api/rpc/contracts"
+    },
+    "environments": {
+      "testnet": {
+        "label": "Testnet",
+        "rpc": {
+          "http": "https://test.rpc.fastnear.com",
+          "fallbacks": [
+            "https://near-testnet.drpc.org",
+            "https://testnet-rpc.intea.rs"
+          ],
+          "notes": "rpc.testnet.near.org / archival-rpc.testnet.near.org are listed by NEAR as severely rate limited; not used."
+        },
+        "explorer": "https://testnet.nearblocks.io",
+        "explorerApi": "https://api-testnet.nearblocks.io",
+        "faucet": "https://docs.near.org/getting-started/faucet",
+        "capabilities": [
+          "vaults",
+          "loans"
+        ],
+        "sources": [
+          {
+            "id": "chainaim-own",
+            "label": "ChainAim contract",
+            "kind": "own",
+            "contract": "<PLACEHOLDER: your NEAR testnet contract account ID, e.g. name.testnet>",
+            "repo": "<PLACEHOLDER: path of the contract's source repository>",
+            "methods": {
+              "vaults": {
+                "view": "<PLACEHOLDER: view method that lists vaults>",
+                "args": {},
+                "list": "$",
+                "map": {
+                  "vaultId": "<PLACEHOLDER: $.path>",
+                  "asset": "<PLACEHOLDER: $.path>",
+                  "available": "<PLACEHOLDER: $.path>"
+                },
+                "units": {
+                  "available": {
+                    "decimalsFrom": "<PLACEHOLDER: $.path or a fixed number>"
+                  }
+                }
+              },
+              "loanTerms": {
+                "view": "<PLACEHOLDER: view method that lists loan terms>",
+                "args": {},
+                "list": "$",
+                "map": {
+                  "lender": "<PLACEHOLDER: $.path>",
+                  "available": "<PLACEHOLDER: $.path>",
+                  "structure": "<PLACEHOLDER: $.path>",
+                  "termMonths": "<PLACEHOLDER: $.path>",
+                  "annualRate": "<PLACEHOLDER: $.path>",
+                  "graceDays": "<PLACEHOLDER: $.path>",
+                  "lateFee": "<PLACEHOLDER: $.path>"
+                },
+                "units": {
+                  "annualRate": "<PLACEHOLDER: e.g. { \"bpsToPercent\": true }>"
+                }
+              }
+            }
+          },
+          {
+            "id": "<PLACEHOLDER: protocol id>",
+            "label": "<PLACEHOLDER: existing NEAR testnet lending protocol name>",
+            "kind": "protocol",
+            "contract": "<PLACEHOLDER: protocol contract account ID on testnet, from its official docs>",
+            "docs": "<PLACEHOLDER: official docs URL the methods below were read from>",
+            "methods": {
+              "vaults": {
+                "view": "<PLACEHOLDER>",
+                "args": {},
+                "list": "$",
+                "map": {},
+                "units": {}
+              },
+              "loanTerms": {
+                "view": "<PLACEHOLDER>",
+                "args": {},
+                "list": "$",
+                "map": {},
+                "units": {}
+              }
+            }
+          }
+        ],
+        "sourceUrl": [
+          "https://docs.near.org/api/rpc/providers",
+          "https://docs.near.org/protocol/network/networks",
+          "https://docs.near.org/tools/ecosystem-apis/nearblocks"
+        ]
+      }
+    }
+  }
+}
