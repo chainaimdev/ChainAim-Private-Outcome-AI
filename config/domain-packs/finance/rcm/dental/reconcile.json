@@ -1,0 +1,64 @@
+{
+  "version": 1,
+  "notes": "Deposit reconciliation for the finance/rcm/dental pack: Curve deposit detail -> bank credits. Every value is from the owner's samples or the owner-approved generator (tools/dental-synth/gen_dental_set.py group_of, PAYERS, --card-lag-days); 'basis' says which. Lags are bank date minus Curve posting date, in days.",
+  "methodGroups": {
+    "Visa": "card_processor", "Mastercard": "card_processor", "HFD": "card_processor", "Ins VCC": "card_processor",
+    "American Express": "card_processor", "Care Credit": "card_processor",
+    "Cash": "branch_atm_deposit", "Insurance Check": "branch_atm_deposit", "Personal Check": "branch_atm_deposit",
+    "Direct Deposit": "insurance_eft"
+  },
+  "internalMethods": ["Account Credit"],
+  "groups": {
+    "card_processor": { "key": "date", "bank": { "originator": "GB PY", "des": "GLOBAL DEP" }, "lagDays": [0, 3], "partialDeposits": true,
+      "basis": "observed-in-sample: 65 'GB PY DES:GLOBAL DEP' credits in BANK-ST-JUL-OCT-2024-sample.csv (Phase 4c; the generator writes the same form) + generator: one daily credit, --card-lag-days 1" },
+    "branch_atm_deposit": { "key": "date", "bank": { "kind": "atm_deposit" }, "lagDays": [0, 3], "partialDeposits": true,
+      "basis": "observed-in-sample (BKOFAMERICA ATM ... DEPOSIT) + generator: checks and cash of day d deposited on d+1" },
+    "insurance_eft": { "key": "payer_date", "bank": { "kind": "ach", "aliasBy": "originator" }, "lagDays": [-3, 0], "partialDeposits": false,
+      "basis": "observed-in-sample (COMM OF MASS HCCLAIMPMT) + generator: one ACH per payer remittance, posted in Curve the next day; an EFT matches its remittance exactly or is missing, never partial (sweep 2026-11-01: pairing EFT_MISSING with BANK_UNPOSTED was wrong)" }
+  },
+  "methodGroupsBasis": "Phase 4c (2026-11-03): American Express, Care Credit and Personal Check are Payment Types in the owner's samples (Per-Sum-Sample-7, BankDep-Det-Sim-Sample-5). American Express and Care Credit -> card_processor: ASSUMPTION from the owner's statement that the Global Payments exports (GLOBAL-*) detail the money in the bank and that no other card or CareCredit credit appears in the bank sample; Personal Check -> branch deposit like Insurance Check: ASSUMPTION (a paper check).",
+  "knownCredits": [
+    { "originator": "SB", "des": "MTOT DEP", "label": "bank deposit outside Curve (SB MTOT DEP)",
+      "basis": "owner 2026-11-03: 'it is a bank deposit'; 4 credits in BANK-ST-JUL-OCT-2024-sample.csv; no Curve method pays into it, so it is listed, never paired or reported as unposted" },
+    { "originator": "Cherry", "des": "Funding", "label": "Cherry patient-financing funding",
+      "basis": "3 credits 'Cherry DES:Funding' in BANK-ST-JUL-OCT-2024-sample.csv; owner 2026-11-03: the GLOBAL-* exports detail the money in the bank; per-row pairing with GLOBAL-Cherry is the Phase 4c financing trace (not deposit matching)" },
+    { "originator": "HATCH HCFD", "des": "ACH Paymen", "label": "HATCH HCFD ACH payment (source not yet identified)",
+      "basis": "2 credits in BANK-ST-JUL-OCT-2024-sample.csv; what it pays is UNVERIFIED (HFD is via Global Payments per the owner, so it is not assumed to be HFD); listed, not paired" }
+  ],
+  "actions": {
+    "UNDEPOSITED_CHECK": "find the check in the office and deposit it",
+    "CASH_SHORT": "recount the day's cash and check who closed the drawer",
+    "CARD_BATCH_SHORT": "ask Global Payments for the batch detail (fees, chargebacks, voids)",
+    "DEPOSIT_SHORT": "compare the deposit slip with the day's posted payments",
+    "DEPOSIT_MISSING": "find the day's deposit; it never arrived",
+    "EFT_MISSING": "call the payer with the remittance date and amount",
+    "POSTED_TWICE": "reverse the duplicate posting in Curve",
+    "BANK_UNPOSTED": "post the payer's remittance to the patients in Curve",
+    "DEPOSIT_OVER": "find which Curve payments the extra money belongs to and post them",
+    "HFD_LAG": "watch the funding; chase HFD if it is still missing after 30 days",
+    "REF_MISMATCH": "correct the check number in Curve",
+    "ID_NOT_IN_LEDGER": "find why the payment is in the deposit detail but not the ledger",
+    "ID_NOT_IN_DEPOSIT": "find why the payment is in the ledger but not the deposit detail",
+    "LEDGER_AMOUNT_MISMATCH": "correct the amount in Curve so the ledger and deposit detail agree",
+    "UNMAPPED_METHOD": "add the payment method to the reconciliation config"
+  },
+  "actionsBasis": "Phase 4c: one office action per cause code, written by code into the fact sheet a model rewords (owner-approved design 2026-11-03); wording is a default the owner may edit. Avoid the words bank, account, routing, sort: next to a number the gateway masks it as a bank account (test/facts.test.ts checks this).",
+  "payerAliases": "domain-packs/finance/rcm/payer-aliases.csv",
+  "amountToleranceCents": 0,
+  "diagnose": {
+    "checkMethod": "Insurance Check", "cashMethod": "Cash", "lateFundingMethods": ["HFD"], "lateFundingMaxDays": 30,
+    "watchCodes": ["HFD_LAG"],
+    "basis": "method names from the owner's samples (BankDep-Det Payment Type); HFD = Healthcare Finance Direct via Global Payments (owner); late-funding window is a flag-like assumption"
+  },
+  "evidence": {
+    "directions": {
+      "UNDEPOSITED_CHECK": "negative", "POSTED_TWICE": "negative", "CASH_SHORT": "negative", "CARD_BATCH_SHORT": "negative",
+      "DEPOSIT_SHORT": "negative", "EFT_MISSING": "negative", "DEPOSIT_MISSING": "negative", "HFD_LAG": "negative",
+      "DEPOSIT_OVER": "positive", "BANK_UNPOSTED": "positive",
+      "REF_MISMATCH": "neutral", "ID_NOT_IN_LEDGER": "neutral", "ID_NOT_IN_DEPOSIT": "neutral", "LEDGER_AMOUNT_MISMATCH": "neutral", "UNMAPPED_METHOD": "neutral"
+    },
+    "trailRows": 10,
+    "omitDetailCodes": ["BANK_UNPOSTED"],
+    "basis": "owner-approved 2026-11-01 21:02 (Phase 4b-3, decision A): sign = bank minus Curve; negative = money missing from the bank, positive = extra money in the bank, neutral = no bank difference (HFD_LAG is a watch item: below Curve inside the lag window). BANK_UNPOSTED detail is a raw bank description, which can hold a person's name, so it is never put in evidence (decision B)."
+  }
+}

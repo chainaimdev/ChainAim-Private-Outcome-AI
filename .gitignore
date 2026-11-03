@@ -1,0 +1,48 @@
+# secrets and sensitive runtime data: never commit
+.env
+.env.*
+!.env.example
+secrets/
+data/
+# local model weights (large, downloaded)
+models
+models/
+*.gguf
+# build/deps
+node_modules/
+packages/route-engine/node_modules/
+
+# local test console: its gateway key stays on this PC
+test-console/local-gateway-key.txt
+# generated from config/local-models.json by scripts/local-models.ts on every switch
+config/generated/
+
+# Vercel build output and local project link (services/web)
+.vercel/
+.claude/settings.local.json
+.claude/
+
+# local data-folder settings for the test console (paths to private data); the example is committed
+config/data-sources.json
+
+# test rig run records (services/paywall/scripts/rig.ts): addresses and transactions, never text or seeds
+rig/out/
+
+# CreditSeal: never commit secrets, local data or third-party reference material
+*.env
+!.env.example
+**/lending-devnet.env
+DESIGN/REF/
+*.pptx
+*.msi
+**/_to_delete/
+data/lending/
+
+# CreditSeal sealed exchange (services/lending/src/keys.ts): private key files, wherever they are written
+**/keys/
+*.key.json
+*.pk8
+
+# generated demo-video output (55 MB WAVs, frame dumps): regenerate, never commit
+brag-output/
+brag-output-*/

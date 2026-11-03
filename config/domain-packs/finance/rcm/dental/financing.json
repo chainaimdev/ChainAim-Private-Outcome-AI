@@ -1,0 +1,234 @@
+{
+  "version": 1,
+  "notes": "Patient-financing export rules for the finance/rcm/dental pack (Phase 4a.2, DESIGN/xrplh-25 §13; Phase 4c, xrplh-26: items verified from the owner's anonymized real-format rows where the rows prove them). Layouts (header signatures) are in code; every rule here is an item { value, verified, basis }. An unverified item makes each loaded file fail its 'rules verified' check, so the report shows it as UNVERIFIED. Unknown Type values and ambiguous or unparseable dates fail checks; nothing is guessed.",
+  "providers": {
+    "carecredit": {
+      "dateFormats": {
+        "value": [
+          "%m/%d/%Y %I:%M %p ET"
+        ],
+        "verified": true,
+        "basis": "owner sample GLOBAL-CareCredit-sample-fin-csv.csv (Phase 4c, 2026-11-03): 3/3 rows are \"MM/DD/YYYY h:mm AM|PM ET\" (e.g. 02/24/2025 2:24 PM ET); the date part is used"
+      },
+      "dateYearRange": {
+        "value": [
+          2000,
+          2100
+        ],
+        "verified": true,
+        "basis": "owner sample GLOBAL-CareCredit-sample-fin-csv.csv (Phase 4c, 2026-11-03): 3/3 rows in 2025; range kept as a guard against a short year read as a 4-digit one"
+      },
+      "amountFormat": {
+        "value": {
+          "currencySymbols": [
+            "$"
+          ],
+          "parenthesesNegative": true,
+          "trailingMinusNegative": true
+        },
+        "verified": false,
+        "basis": "owner sample GLOBAL-CareCredit-sample-fin-csv.csv (Phase 4c, 2026-11-03): \"$\" and thousands commas seen on 3/3 rows; no negative amount seen yet, so the negative forms stay an assumption"
+      },
+      "columns": {
+        "value": {
+          "date": "Date",
+          "funding_date": null,
+          "ref": null,
+          "patient_ref": null,
+          "gross": "Amount",
+          "fee": null,
+          "bank": "Amount"
+        },
+        "verified": false,
+        "basis": "owner sample GLOBAL-CareCredit-sample-fin-csv.csv (Phase 4c, 2026-11-03): Date and Amount present; whether the bank receives Amount (or Amount less a promo-code fee) is not shown: no CareCredit funding in the bank sample"
+      },
+      "kind": {
+        "value": {
+          "column": "Type",
+          "map": {
+            "Purchase": "sale"
+          },
+          "default": null
+        },
+        "verified": true,
+        "basis": "owner sample GLOBAL-CareCredit-sample-fin-csv.csv (Phase 4c, 2026-11-03): Type is \"Purchase\" on 3/3 rows -> sale; any other Type is unmapped and fails the check until the owner names it"
+      },
+      "expectSign": {
+        "value": {
+          "sale": "positive",
+          "refund": "negative"
+        },
+        "verified": false,
+        "basis": "owner sample GLOBAL-CareCredit-sample-fin-csv.csv (Phase 4c, 2026-11-03): Purchase is positive on 3/3 rows; no refund row seen yet"
+      },
+      "identities": {
+        "value": {
+          "toleranceCents": 0,
+          "rules": []
+        },
+        "verified": false,
+        "basis": "assumption, header-only sample (Phase 4a.2): no data rows seen yet; verify with the owner's anonymized real-format rows; no arithmetic relation known for this layout"
+      }
+    },
+    "cherry": {
+      "dateFormats": {
+        "value": [
+          "%m/%d/%Y"
+        ],
+        "verified": true,
+        "basis": "owner sample GLOBAL-Cherry-sample-fin-csv.csv (Phase 4c, 2026-11-03): 3/3 rows are M/D/YYYY (e.g. 2/21/2025)"
+      },
+      "dateYearRange": {
+        "value": [
+          2000,
+          2100
+        ],
+        "verified": true,
+        "basis": "owner sample GLOBAL-Cherry-sample-fin-csv.csv (Phase 4c, 2026-11-03): 3/3 rows in 2025; range kept as a guard"
+      },
+      "amountFormat": {
+        "value": {
+          "currencySymbols": [
+            "$"
+          ],
+          "parenthesesNegative": true,
+          "trailingMinusNegative": true
+        },
+        "verified": true,
+        "basis": "owner sample GLOBAL-Cherry-sample-fin-csv.csv (Phase 4c, 2026-11-03): \"$\", thousands commas and a trailing space on 3/3 rows; parentheses kept for negatives (seen in the HFD export of the same practice)"
+      },
+      "columns": {
+        "value": {
+          "date": "Date",
+          "funding_date": null,
+          "ref": "Reference",
+          "patient_ref": null,
+          "gross": "Gross Sales",
+          "fee": "Fees",
+          "bank": "Net Sale"
+        },
+        "verified": false,
+        "basis": "owner sample GLOBAL-Cherry-sample-fin-csv.csv (Phase 4c, 2026-11-03): gross/fee/net consistent with the identity; bank = Net Sale still an assumption (the bank sample is 2024, the Cherry rows 2025: no funding to trace)"
+      },
+      "kind": {
+        "value": {
+          "column": null,
+          "map": {},
+          "default": "sale"
+        },
+        "verified": false,
+        "basis": "assumption, header-only sample (Phase 4a.2): no data rows seen yet; verify with the owner's anonymized real-format rows; the layout has no Type column, every row is taken as a sale"
+      },
+      "expectSign": {
+        "value": {},
+        "verified": false,
+        "basis": "owner sample GLOBAL-Cherry-sample-fin-csv.csv (Phase 4c, 2026-11-03): all rows are sales with zero Refunds; no refund row seen yet"
+      },
+      "identities": {
+        "value": {
+          "toleranceCents": 0,
+          "rules": [
+            {
+              "name": "Net Sale = Gross Sales - Refunds - Fees",
+              "enabled": true,
+              "left": "Net Sale",
+              "plus": [
+                "Gross Sales"
+              ],
+              "minus": [
+                "Refunds",
+                "Fees"
+              ],
+              "emptyAsZero": false
+            }
+          ]
+        },
+        "verified": true,
+        "basis": "owner sample GLOBAL-Cherry-sample-fin-csv.csv (Phase 4c, 2026-11-03): Net Sale = Gross Sales - Refunds - Fees holds exactly on 3/3 rows"
+      }
+    },
+    "hfd": {
+      "dateFormats": {
+        "value": [
+          "%m/%d/%Y"
+        ],
+        "verified": true,
+        "basis": "owner sample GLOBAL-HFD-sample-fin-csv.csv (Phase 4c, 2026-11-03): 6/6 rows M/D/YYYY in Activation Date and Funding Release Date"
+      },
+      "dateYearRange": {
+        "value": [
+          2000,
+          2100
+        ],
+        "verified": true,
+        "basis": "owner sample GLOBAL-HFD-sample-fin-csv.csv (Phase 4c, 2026-11-03): 6/6 rows in 2025-2026; range kept as a guard"
+      },
+      "amountFormat": {
+        "value": {
+          "currencySymbols": [
+            "$"
+          ],
+          "parenthesesNegative": true,
+          "trailingMinusNegative": true
+        },
+        "verified": true,
+        "basis": "owner sample GLOBAL-HFD-sample-fin-csv.csv (Phase 4c, 2026-11-03): \"$\", thousands commas, trailing space; negatives in parentheses, e.g. ($4,200.00) (3 rows)"
+      },
+      "columns": {
+        "value": {
+          "date": "Activation Date",
+          "funding_date": "Funding Release Date",
+          "ref": "HFDID",
+          "patient_ref": "Patient ID",
+          "gross": "Treatment Amount",
+          "fee": "Discount",
+          "bank": "Amount"
+        },
+        "verified": false,
+        "basis": "owner sample GLOBAL-HFD-sample-fin-csv.csv (Phase 4c, 2026-11-03): columns consistent with the identity; bank = Amount still an assumption (the bank sample is 2024, the HFD rows 2025-2026: no funding to trace)"
+      },
+      "kind": {
+        "value": {
+          "column": "Type",
+          "map": {
+            "Origination": "sale",
+            "Cancellation": "refund",
+            "Adjustment": "refund"
+          },
+          "default": null
+        },
+        "verified": true,
+        "basis": "owner sample GLOBAL-HFD-sample-fin-csv.csv (Phase 4c, 2026-11-03): Type values Origination (4 rows, positive amounts) -> sale; Cancellation (1) and Adjustment (1), both negative -> refund. Any other Type fails the check"
+      },
+      "expectSign": {
+        "value": {
+          "sale": "positive",
+          "refund": "negative"
+        },
+        "verified": true,
+        "basis": "owner sample GLOBAL-HFD-sample-fin-csv.csv (Phase 4c, 2026-11-03): sale positive and refund negative on 6/6 rows"
+      },
+      "identities": {
+        "value": {
+          "toleranceCents": 0,
+          "rules": [
+            {
+              "name": "Treatment Amount - Discount = Amount",
+              "enabled": true,
+              "left": "Amount",
+              "plus": [
+                "Treatment Amount"
+              ],
+              "minus": [
+                "Discount"
+              ],
+              "emptyAsZero": false
+            }
+          ]
+        },
+        "verified": true,
+        "basis": "owner sample GLOBAL-HFD-sample-fin-csv.csv (Phase 4c, 2026-11-03): Amount = Treatment Amount - Discount holds exactly on 6/6 rows (cancellation and adjustment included). Also seen, used by the Phase 4c discount check: Discount = Treatment Amount x Discount Rate on 6/6 rows, rate by Grade (A 4%, D 15%, E 22%)"
+      }
+    }
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "name": "@chainaim/actus",
+  "version": "0.1.0",
+  "private": true,
+  "description": "ACTUS cash flows for fixed-rate loans (PAM bullet, ANN equal instalments): terms -> ACTUS contract, run on ACTUS directly or through ACTUS Mentor, checked, and turned into schedule rows; terms read by a model are checked against the document's own text. Pure apart from fetch. No runtime dependencies.",
+  "type": "module",
+  "engines": { "node": ">=22.22" },
+  "exports": { ".": "./src/index.ts" },
+  "scripts": {
+    "test": "node --test \"test/*.test.ts\"",
+    "golden:check": "node ../../tools/golden/golden.ts --mode check --module src/index.ts --cases test/golden/cases.json --golden test/golden/actus.golden.json --skip runDirect,mentorBuild,mentorRun",
+    "golden:record": "node ../../tools/golden/golden.ts --mode record --module src/index.ts --cases test/golden/cases.json --golden test/golden/actus.golden.json --skip runDirect,mentorBuild,mentorRun"
+  }
+}

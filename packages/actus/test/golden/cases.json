@@ -1,0 +1,74 @@
+[
+  {"id": "addMonths.end-of-month", "fn": "addMonths", "args": ["2026-01-31", 1]},
+  {"id": "addMonths.three", "fn": "addMonths", "args": ["2026-11-02", 3]},
+  {"id": "addMonths.leap-day", "fn": "addMonths", "args": ["2024-02-29", 12]},
+  {"id": "addMonths.null-months", "fn": "addMonths", "args": ["2026-11-02", null]},
+
+  {"id": "maturityOf.date", "fn": "maturityOf", "args": [{"contractType": "PAM", "notional": 100000, "currency": "USD", "annualRate": 0.08, "startDate": "2026-01-15", "maturityDate": "2027-01-15"}]},
+  {"id": "maturityOf.term", "fn": "maturityOf", "args": [{"contractType": "ANN", "notional": 50000, "currency": "USD", "annualRate": 0.12, "startDate": "2026-11-02", "termMonths": 3}]},
+  {"id": "maturityOf.neither", "fn": "maturityOf", "args": [{"contractType": "ANN", "notional": 50000, "currency": "USD", "annualRate": 0.12, "startDate": "2026-11-02"}]},
+
+  {"id": "checkTerms.ok-ann", "fn": "checkTerms", "args": [{"contractType": "ANN", "notional": 50000, "currency": "USD", "annualRate": 0.12, "startDate": "2026-11-02", "termMonths": 3}]},
+  {"id": "checkTerms.ok-pam-full", "fn": "checkTerms", "args": [{"contractType": "PAM", "notional": 100000, "currency": "EUR", "annualRate": 0, "startDate": "2026-01-15", "maturityDate": "2027-01-15", "dayCount": "A360", "role": "RPA", "id": "loan-7"}]},
+  {"id": "checkTerms.bad-type", "fn": "checkTerms", "args": [{"contractType": "LAM", "notional": 1, "currency": "USD", "annualRate": 0.1, "startDate": "2026-01-01", "termMonths": 1}]},
+  {"id": "checkTerms.zero-notional", "fn": "checkTerms", "args": [{"contractType": "ANN", "notional": 0, "currency": "USD", "annualRate": 0.1, "startDate": "2026-01-01", "termMonths": 1}]},
+  {"id": "checkTerms.rate-percent", "fn": "checkTerms", "args": [{"contractType": "ANN", "notional": 1, "currency": "USD", "annualRate": 12, "startDate": "2026-01-01", "termMonths": 1}]},
+  {"id": "checkTerms.bad-start", "fn": "checkTerms", "args": [{"contractType": "ANN", "notional": 1, "currency": "USD", "annualRate": 0.1, "startDate": "1/1/2026", "termMonths": 1}]},
+  {"id": "checkTerms.bad-maturity", "fn": "checkTerms", "args": [{"contractType": "PAM", "notional": 1, "currency": "USD", "annualRate": 0.1, "startDate": "2026-01-01", "maturityDate": "2027"}]},
+  {"id": "checkTerms.term-too-long", "fn": "checkTerms", "args": [{"contractType": "ANN", "notional": 1, "currency": "USD", "annualRate": 0.1, "startDate": "2026-01-01", "termMonths": 361}]},
+  {"id": "checkTerms.maturity-before-start", "fn": "checkTerms", "args": [{"contractType": "PAM", "notional": 1, "currency": "USD", "annualRate": 0.1, "startDate": "2026-01-01", "maturityDate": "2025-12-31"}]},
+  {"id": "checkTerms.lowercase-currency", "fn": "checkTerms", "args": [{"contractType": "ANN", "notional": 1, "currency": "usd", "annualRate": 0.1, "startDate": "2026-01-01", "termMonths": 1}]},
+  {"id": "checkTerms.bad-daycount", "fn": "checkTerms", "args": [{"contractType": "ANN", "notional": 1, "currency": "USD", "annualRate": 0.1, "startDate": "2026-01-01", "termMonths": 1, "dayCount": "30/360"}]},
+  {"id": "checkTerms.bad-role", "fn": "checkTerms", "args": [{"contractType": "ANN", "notional": 1, "currency": "USD", "annualRate": 0.1, "startDate": "2026-01-01", "termMonths": 1, "role": "LENDER"}]},
+
+  {"id": "buildContract.ann", "fn": "buildContract", "args": [{"contractType": "ANN", "notional": 50000, "currency": "USD", "annualRate": 0.12, "startDate": "2026-11-02", "termMonths": 3}]},
+  {"id": "buildContract.pam", "fn": "buildContract", "args": [{"contractType": "PAM", "notional": 100000, "currency": "USD", "annualRate": 0.08, "startDate": "2026-01-15", "maturityDate": "2027-01-15"}]},
+  {"id": "buildContract.ann-options", "fn": "buildContract", "args": [{"contractType": "ANN", "notional": 120000, "currency": "USD", "annualRate": 0.095, "startDate": "2026-03-01", "termMonths": 36, "dayCount": "A365", "role": "RPA", "id": "equipment-1"}]},
+  {"id": "buildContract.invalid", "fn": "buildContract", "args": [{"contractType": "ANN", "notional": -5, "currency": "USD", "annualRate": 0.1, "startDate": "2026-01-01", "termMonths": 1}]},
+
+  {"id": "mentorRequest.ann", "fn": "mentorRequest", "args": [{"contractType": "ANN", "notional": 50000, "currency": "USD", "annualRate": 0.12, "startDate": "2026-11-02", "termMonths": 3}]},
+  {"id": "mentorRequest.pam", "fn": "mentorRequest", "args": [{"contractType": "PAM", "notional": 100000, "currency": "USD", "annualRate": 0.08, "startDate": "2026-01-15", "maturityDate": "2027-01-15", "dayCount": "A360"}]},
+
+  {"id": "intentChecks.match", "fn": "intentChecks", "args": [{"$call": {"fn": "buildContract", "args": [{"contractType": "ANN", "notional": 50000, "currency": "USD", "annualRate": 0.12, "startDate": "2026-11-02", "termMonths": 3}]}}, {"contractType": "ANN", "notional": 50000, "currency": "USD", "annualRate": 0.12, "startDate": "2026-11-02", "termMonths": 3}]},
+  {"id": "intentChecks.mismatch", "fn": "intentChecks", "args": [{"contracts": [{"contractType": "PAM", "notionalPrincipal": "50000", "nominalInterestRate": 0.13, "initialExchangeDate": "2026-11-03T00:00:00", "maturityDate": "2027-02-02"}], "riskFactors": []}, {"contractType": "ANN", "notional": 50000, "currency": "USD", "annualRate": 0.12, "startDate": "2026-11-02", "termMonths": 3}]},
+  {"id": "intentChecks.empty", "fn": "intentChecks", "args": [{}, {"contractType": "ANN", "notional": 50000, "currency": "USD", "annualRate": 0.12, "startDate": "2026-11-02", "termMonths": 3}]},
+
+  {"id": "scheduleChecks.ok", "fn": "scheduleChecks", "args": [
+    {"contractID": "ANN-50000-2026-11-02", "status": "Success", "events": [
+      {"type": "IED", "time": "2026-11-02T00:00:00", "payoff": -50000, "currency": "USD", "nominalValue": 50000, "nominalRate": 0.12},
+      {"type": "IP", "time": "2026-12-02T00:00:00", "payoff": 500, "currency": "USD", "nominalValue": 50000, "nominalRate": 0.12},
+      {"type": "PR", "time": "2026-12-02T00:00:00", "payoff": 16501.11, "currency": "USD", "nominalValue": 33498.89, "nominalRate": 0.12},
+      {"type": "PRF", "time": "2027-01-01T00:00:00", "payoff": 0, "currency": "USD", "nominalValue": 33498.89, "nominalRate": 0.12},
+      {"type": "IP", "time": "2027-01-02T00:00:00", "payoff": 334.99, "currency": "USD", "nominalValue": 33498.89, "nominalRate": 0.12},
+      {"type": "PR", "time": "2027-01-02T00:00:00", "payoff": 16666.12, "currency": "USD", "nominalValue": 16832.77, "nominalRate": 0.12},
+      {"type": "IP", "time": "2027-02-02T00:00:00", "payoff": 168.33, "currency": "USD", "nominalValue": 16832.77, "nominalRate": 0.12},
+      {"type": "MD", "time": "2027-02-02T00:00:00", "payoff": 16832.77, "currency": "USD", "nominalValue": 0, "nominalRate": 0.12}
+    ]}, 50000, "2027-02-02"]},
+  {"id": "scheduleChecks.failure-inside-200", "fn": "scheduleChecks", "args": [{"contractID": "ANN-1", "status": "Failure", "message": "made-up failure", "events": []}, 50000, "2027-02-02"]},
+  {"id": "scheduleChecks.undefined", "fn": "scheduleChecks", "args": [{"$undefined": true}, 50000, "2027-02-02"]},
+
+  {"id": "scheduleRows.drops-prf", "fn": "scheduleRows", "args": [
+    {"contractID": "ANN-50000-2026-11-02", "status": "Success", "events": [
+      {"type": "IED", "time": "2026-11-02T00:00:00", "payoff": -50000, "currency": "USD", "nominalValue": 50000, "nominalRate": 0.12},
+      {"type": "PRF", "time": "2027-01-01T00:00:00", "payoff": 0, "currency": "USD", "nominalValue": 33498.89, "nominalRate": 0.12},
+      {"type": "PR", "time": "2026-12-02T00:00:00", "payoff": 16501.105, "currency": "USD", "nominalValue": -33498.895, "nominalRate": 0.12},
+      {"type": "XYZ", "time": "2027-02-02", "payoff": 1, "currency": "USD", "nominalValue": 0, "nominalRate": 0}
+    ]}, "direct"]},
+
+  {"id": "firstPayload.in-prose", "fn": "firstPayload", "args": ["Here is the contract: {\"note\": 1} and then {\"contracts\": [{\"a\": {\"b\": 2}}], \"riskFactors\": []} done."]},
+  {"id": "firstPayload.broken-then-good", "fn": "firstPayload", "args": ["{not json} {\"contracts\": []}"]},
+  {"id": "firstPayload.none", "fn": "firstPayload", "args": ["no json here {\"x\": [1, 2]}"]},
+
+  {"id": "parseTerms.fenced", "fn": "parseTerms", "args": ["```json\n{\"contractType\": \"Annuity\", \"notional\": 50000, \"currency\": \"usd\", \"annualRate\": 12, \"startDate\": \"2026-11-02\", \"termMonths\": 3, \"dayCount\": \"30/360\"}\n```"]},
+  {"id": "parseTerms.plain-braces", "fn": "parseTerms", "args": ["The terms are {\"contractType\": \"bullet loan\", \"notional\": \"100000\", \"annualRate\": 0.08, \"startDate\": \"2026-01-15\", \"maturityDate\": \"2027-01-15\", \"dayCount\": \"Actual/365 Fixed\"}."]},
+  {"id": "parseTerms.daycount-act360", "fn": "parseTerms", "args": ["{\"contractType\": \"ANN\", \"notional\": 1, \"annualRate\": 0.1, \"startDate\": \"2026-01-01\", \"termMonths\": null, \"dayCount\": \"ACT/360\"}"]},
+  {"id": "parseTerms.daycount-actact", "fn": "parseTerms", "args": ["{\"contractType\": \"amortising\", \"notional\": 1, \"annualRate\": 0.1, \"startDate\": \"2026-01-01\", \"dayCount\": \"Actual/Actual\"}"]},
+  {"id": "parseTerms.unknown-kind-and-daycount", "fn": "parseTerms", "args": ["{\"contractType\": \"revolver\", \"notional\": 1, \"annualRate\": 0.1, \"startDate\": \"2026-01-01\", \"dayCount\": \"Bus/252\"}"]},
+  {"id": "parseTerms.not-json", "fn": "parseTerms", "args": ["I could not find the terms."]},
+
+  {"id": "termsInDocument.ann-term-in-words", "fn": "termsInDocument", "args": [{"contractType": "ANN", "notional": 50000, "currency": "USD", "annualRate": 0.12, "startDate": "2026-11-02", "maturityDate": "2027-02-02", "termMonths": 3}, "Term loan of USD 50,000 at 12% per annum, drawn on 2 November 2026, repayable in three equal monthly instalments."]},
+  {"id": "termsInDocument.made-up-values", "fn": "termsInDocument", "args": [{"contractType": "PAM", "notional": 55000, "currency": "USD", "annualRate": 0.125, "startDate": "2026-11-03", "maturityDate": "2027-05-02"}, "Term loan of USD 50,000 at 12% per annum, drawn on 2 November 2026, repayable in three equal monthly instalments."]},
+  {"id": "termsInDocument.pam-us-dates", "fn": "termsInDocument", "args": [{"contractType": "PAM", "notional": 100000, "currency": "USD", "annualRate": 0.095, "startDate": "2026-01-15", "maturityDate": "2027-01-15"}, "Bridge facility: $100,000.00 advanced January 15, 2026 at 9.50 percent, repayable in full on January 15, 2027 together with all accrued interest on that date."]},
+  {"id": "termsInDocument.term-only", "fn": "termsInDocument", "args": [{"contractType": "ANN", "notional": 120000, "currency": "USD", "annualRate": 0.095, "startDate": "2026-03-01", "termMonths": 36}, "Equipment loan 120000 USD, 9.5% fixed, start 2026-03-01, 36 equal instalments."]},
+  {"id": "termsInDocument.term-missing", "fn": "termsInDocument", "args": [{"contractType": "ANN", "notional": 120000, "currency": "USD", "annualRate": 0.095, "startDate": "2026-03-01", "termMonths": 48}, "Equipment loan 120000 USD, 9.5% fixed, start 2026-03-01, 36 equal instalments."]}
+]

@@ -1,0 +1,7 @@
+{
+  "id": "t02",
+  "name": "Riverside Clinic (synthetic test tenant)",
+  "seedPrefix": "XRPL_SEED_T02",
+  "address": "rD59tmENJNnHovdi4hKq79DVP4gnDNFGWk",
+  "devnetAddress": "r9tT1HGQxCzeLngjSz17ePMn3RBdpTu2q5"
+}

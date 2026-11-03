@@ -1,0 +1,10 @@
+{
+  "name": "@chainaim/crossask",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A question across the files of one folder: relations and one SELECT computed by the analyst (DuckDB), a model only to write the query and word the answer, every number in the answer checked against the result (verifyAnswer). Pure: the analyst and the model are passed in. No runtime dependencies.",
+  "type": "module",
+  "engines": { "node": ">=22.22" },
+  "exports": { ".": "./src/index.ts", "./verify": "./src/verify.ts" },
+  "scripts": { "test": "node --test \"test/*.test.ts\"" }
+}

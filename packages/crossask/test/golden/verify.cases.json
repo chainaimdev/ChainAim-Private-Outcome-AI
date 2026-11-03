@@ -1,0 +1,9 @@
+[
+  {"id": "verifyAnswer.all-found", "fn": "verifyAnswer", "args": ["The gap is -90,422.30 over 619 rows.", "variance -90,422.30 rows 619 total 1,069.50"]},
+  {"id": "verifyAnswer.some-missing", "fn": "verifyAnswer", "args": ["The gap is -90,422.30 over 619 rows, about 99,999.99 in total, in 2026.", "variance -90,422.30 rows 619"]},
+  {"id": "verifyAnswer.parentheses-negative", "fn": "verifyAnswer", "args": ["Short by (1,234.56).", "delta -1,234.56"]},
+  {"id": "verifyAnswer.dollar-and-decimals", "fn": "verifyAnswer", "args": ["Deposits were $12,345.67 and 0.50 fees.", "deposits 12345.67 fees 0.5"]},
+  {"id": "verifyAnswer.years-skipped", "fn": "verifyAnswer", "args": ["From 2024 to 2026 nothing changed.", ""]},
+  {"id": "verifyAnswer.repeat-counted-once", "fn": "verifyAnswer", "args": ["123.45 and again 123.45 and 777", "123.45"]},
+  {"id": "verifyAnswer.no-numbers", "fn": "verifyAnswer", "args": ["Nothing to check.", "1,000.00"]}
+]

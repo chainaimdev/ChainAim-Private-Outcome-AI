@@ -1,0 +1,13 @@
+# The extra addresses ledger-watch watches for Live Ops, one --watch spec per line: label=role=rADDRESS@network.
+# Public addresses only (never a seed). Read by test-console/start-live.ps1. Lines starting with # are ignored.
+# The tenants' own wallets (Testnet "address", Devnet "devnetAddress") come from rig/tenants/*/tenant.json and the
+# paywall's pay-to from XRPL_PAY_TO_TESTNET, so they are not listed here.
+#
+# Devnet lending demo (services/lending, data/lending/devnet-run.json). ChainAim's account is role payto: it is the
+# seller the TUSD stream pays, so the console shows it as the TUSD Seller Wallet.
+chainaim=payto=rwxRpqF1Mp33ZFtRFxarAtZKNRi28yVSBw@devnet
+tusd=issuer=rptwZFjsikk6utPfyqMn7Swk9BcxoUqcqt@devnet
+drill=borrower=rncbPEg6CA27sVN3yRC5dg2imQaTgbvf25@devnet
+broker=broker=rJVvHY42isyDYb89Ypc17mBwBAH1vhXxFf@devnet
+depositor=depositor=rsMbYptvMGjPZsxpPdyhynTEqm6mjwrXC7@devnet
+borrower=borrower=rBcb7JHeMHVT2v9KEvn2vyd35HYqiAVM1o@devnet

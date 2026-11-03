@@ -1,0 +1,83 @@
+{
+  "cases": {
+    "extractSql.bare-select": {
+      "value": "SELECT 1"
+    },
+    "extractSql.duckdb-block": {
+      "value": "WITH t AS (SELECT 1 AS n) SELECT n FROM t"
+    },
+    "extractSql.empty-block": {
+      "value": null
+    },
+    "extractSql.no-query": {
+      "value": null
+    },
+    "extractSql.plain-block": {
+      "value": "select count(*) from production"
+    },
+    "extractSql.prose-before": {
+      "value": "select \"Claim #\" from collections limit 5"
+    },
+    "extractSql.sql-block": {
+      "value": "SELECT \"Payer\", sum(\"Amount\") FROM bank GROUP BY 1"
+    },
+    "fanOutJoins.different-columns": {
+      "value": [
+        "visits.\"pt_id\" = patients.\"Patient ID\" is many-to-many: each row is repeated, so counts and sums are multiplied"
+      ]
+    },
+    "fanOutJoins.duplicates-collapsed": {
+      "value": [
+        "a.\"k\" = b.\"k\" is many-to-many: each row is repeated, so counts and sums are multiplied"
+      ]
+    },
+    "fanOutJoins.key-relation-ok": {
+      "value": []
+    },
+    "fanOutJoins.many-to-many-hit": {
+      "value": [
+        "receipts.\"Customer ID\" = sales_orders.\"Customer ID\" is many-to-many: each row is repeated, so counts and sums are multiplied"
+      ]
+    },
+    "fanOutJoins.no-relations": {
+      "value": []
+    },
+    "fanOutJoins.table-not-in-query": {
+      "value": []
+    },
+    "resultText.basic": {
+      "value": "Payer | Total\nAetna | 1234.5\nDelta Dental | "
+    },
+    "resultText.cut-by-maxRows": {
+      "value": "n\n1\n2\n(only the first 2 rows are shown)"
+    },
+    "resultText.no-rows": {
+      "value": "a | b"
+    },
+    "resultText.truncated-flag": {
+      "value": "n | note\n1 | line1 line2\n(only the first 1 rows are shown)"
+    }
+  },
+  "constants": {
+    "ANSWER_SYSTEM": "Answer the question in plain words using ONLY the result table given: one short sentence per row, or a short summary.\nQuote numbers exactly as they appear in the result. Do not comment on how the result was computed.\nIf the result does not answer the question, say so and say what is missing.",
+    "EXPLAIN_QUESTION": "Explain this deposit reconciliation for the practice's office manager: what did not reconcile, why, how much, and which payments or bank rows to check first.",
+    "EXPLAIN_SYSTEM": "You explain a deposit reconciliation that code has already computed. Use ONLY facts and figures from the EVIDENCE. Never compute, round or estimate a new figure; copy amounts exactly as written (two decimals). Every directional amount in the evidence is signed as bank minus Curve: a minus sign means money missing from the bank (say short, missing or below), a plus sign means extra money in the bank (say over, extra or above). Keep that direction. Name each exception by its code, date, amount and payment IDs or bank rows. Items marked watch are timing, not loss. Plain sentences, no tables. If the evidence shows no exceptions, say that everything reconciled.",
+    "SQL_SYSTEM": "You write DuckDB SQL for a question about the tables below.\nReply with exactly one SELECT (or WITH ... SELECT) statement inside a ```sql block, and nothing else.\nUse only the listed tables and columns. Write every column name in double quotes exactly as listed.\nTo combine files, join ONLY on relations marked key; for VARCHAR keys compare upper(trim(a.\"x\")) = upper(trim(b.\"y\")).\nNever join two tables on a relation marked category or many-to-many: every row would be repeated and counts and sums multiplied.\nWhen you need totals from two tables that share only such a column, aggregate each table first (GROUP BY that column) and join the aggregates.\nPrefer aggregates (count, sum, avg, min, max with GROUP BY) to listing rows; when you list rows, add LIMIT 50.\nRound money to 2 decimals. Never read files, change settings or use comments."
+  },
+  "functions": [
+    "analystClient",
+    "crossAsk",
+    "explainReconcile",
+    "extractSql",
+    "fanOutJoins",
+    "gatewayChat",
+    "resultText"
+  ],
+  "skipped": [
+    "analystClient",
+    "crossAsk",
+    "explainReconcile",
+    "gatewayChat"
+  ],
+  "version": 1
+}

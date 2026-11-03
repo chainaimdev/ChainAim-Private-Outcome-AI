@@ -1,0 +1,7 @@
+{
+  "id": "t03",
+  "name": "Harborline Traders (synthetic test tenant)",
+  "seedPrefix": "XRPL_SEED_T03",
+  "address": "rKSZJdBpp1vDpqYWbaDFKWDecwSMmmGA1B",
+  "devnetAddress": "rBiTxD7MPhkzWkbfuHDn47WVgwyJ6dP8xY"
+}

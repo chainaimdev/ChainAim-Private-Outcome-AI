@@ -1,0 +1,27 @@
+[
+  {"id": "extractSql.sql-block", "fn": "extractSql", "args": ["Here you go:\n```sql\nSELECT \"Payer\", sum(\"Amount\") FROM bank GROUP BY 1;\n```\nDone."]},
+  {"id": "extractSql.duckdb-block", "fn": "extractSql", "args": ["```duckdb\nWITH t AS (SELECT 1 AS n) SELECT n FROM t\n```"]},
+  {"id": "extractSql.plain-block", "fn": "extractSql", "args": ["```\nselect count(*) from production\n```"]},
+  {"id": "extractSql.bare-select", "fn": "extractSql", "args": ["  SELECT 1;  "]},
+  {"id": "extractSql.prose-before", "fn": "extractSql", "args": ["The query is: select \"Claim #\" from collections limit 5"]},
+  {"id": "extractSql.no-query", "fn": "extractSql", "args": ["I cannot answer that from the headers."]},
+  {"id": "extractSql.empty-block", "fn": "extractSql", "args": ["```sql\n;\n```"]},
+
+  {"id": "resultText.basic", "fn": "resultText", "args": [{"columns": ["Payer", "Total"], "rows": [{"Payer": "Aetna", "Total": 1234.5}, {"Payer": "Delta|Dental", "Total": null}], "truncated": false}, 10]},
+  {"id": "resultText.cut-by-maxRows", "fn": "resultText", "args": [{"columns": ["n"], "rows": [{"n": 1}, {"n": 2}, {"n": 3}], "truncated": false}, 2]},
+  {"id": "resultText.truncated-flag", "fn": "resultText", "args": [{"columns": ["n", "note"], "rows": [{"n": 1, "note": "line1\nline2"}], "truncated": true}, 5]},
+  {"id": "resultText.no-rows", "fn": "resultText", "args": [{"columns": ["a", "b"], "rows": [], "truncated": false}, 5]},
+
+  {"id": "fanOutJoins.many-to-many-hit", "fn": "fanOutJoins", "args": ["SELECT sum(r.\"Amount\") FROM receipts r JOIN sales_orders s ON r.\"Customer ID\" = s.\"Customer ID\" GROUP BY 1",
+    [{"a": {"table": "receipts", "column": "Customer ID"}, "b": {"table": "sales_orders", "column": "Customer ID"}, "link": "category", "cardinality": "many-to-many"}]]},
+  {"id": "fanOutJoins.key-relation-ok", "fn": "fanOutJoins", "args": ["SELECT * FROM production p JOIN collections c ON p.\"Claim #\" = c.\"Claim #\"",
+    [{"a": {"table": "production", "column": "Claim #"}, "b": {"table": "collections", "column": "Claim #"}, "link": "key", "cardinality": "one-to-many"}]]},
+  {"id": "fanOutJoins.table-not-in-query", "fn": "fanOutJoins", "args": ["SELECT * FROM receipts WHERE \"Customer ID\" = 'C1'",
+    [{"a": {"table": "receipts", "column": "Customer ID"}, "b": {"table": "sales_orders", "column": "Customer ID"}, "link": "category", "cardinality": "many-to-many"}]]},
+  {"id": "fanOutJoins.different-columns", "fn": "fanOutJoins", "args": ["SELECT * FROM visits v JOIN patients p ON v.\"pt_id\" = p.\"Patient ID\" JOIN rates r ON 1=1",
+    [{"a": {"table": "visits", "column": "pt_id"}, "b": {"table": "patients", "column": "Patient ID"}, "link": "category", "cardinality": "many-to-one"}]]},
+  {"id": "fanOutJoins.duplicates-collapsed", "fn": "fanOutJoins", "args": ["SELECT 1 FROM a JOIN b ON a.\"k\" = b.\"k\" JOIN b b2 ON a.\"k\" = b2.\"k\"",
+    [{"a": {"table": "a", "column": "k"}, "b": {"table": "b", "column": "k"}, "link": "category", "cardinality": "many-to-many"},
+     {"a": {"table": "a", "column": "k"}, "b": {"table": "b", "column": "k"}, "link": "category", "cardinality": "many-to-many"}]]},
+  {"id": "fanOutJoins.no-relations", "fn": "fanOutJoins", "args": ["SELECT 1", []]}
+]

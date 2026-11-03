@@ -1,0 +1,7 @@
+payer_code,payer_name,bank_originator,method,basis,owner_confirmed,notes
+MH,MassHealth Dental,COMM OF MASS,Direct Deposit,observed-in-sample,no,"14 'COMM OF MASS DES:HCCLAIMPMT' credits in BANK-ST-JUL-OCT-2024-sample.csv; Curve Payer 'MH' on Direct Deposit rows in BankDep-Det-Sim-Sample-5-fin-csv.csv"
+DentaQuest,DentaQuest MassHealth,DENTAQUEST,Direct Deposit,generator-assumption,no,"Curve Payer 'DENTAQUEST' on a Direct Deposit row in BankDep-Det-Sim-Sample-5-fin-csv.csv; no DENTAQUEST bank credit in BANK-ST-JUL-OCT-2024-sample.csv (tools/dental-synth PAYERS)"
+HUSKY,HUSKY Health CTDHP,STATE OF CONN DSS,Direct Deposit,generator-assumption,no,"not in the samples (tools/dental-synth PAYERS)"
+DELTA DENTAL MA(COVERSME.COM),Delta Dental of MA PPO,DELTA DENTAL MA,Direct Deposit,generator-assumption,no,"Curve Payer on 2 Direct Deposit rows in BankDep-Det-Sim-Sample-5-fin-csv.csv; no DELTA DENTAL bank credit in BANK-ST-JUL-OCT-2024-sample.csv (tools/dental-synth PAYERS)"
+ANTHEM BCBS,Anthem BCBS Dental,ANTHEM BLUE CROSS,Direct Deposit,generator-assumption,no,"not in the samples (tools/dental-synth PAYERS)"
+AETNA,Aetna Dental,AETNA,Direct Deposit,assumption-unobserved,no,"Curve Payer 'AETNA' on a Direct Deposit row (ID 226521) in BankDep-Det-Sim-Sample-5-fin-csv.csv; no Aetna bank credit in BANK-ST-JUL-OCT-2024-sample.csv, so the originator AETNA is a placeholder until a real Aetna ACH is seen (Phase 4c)"

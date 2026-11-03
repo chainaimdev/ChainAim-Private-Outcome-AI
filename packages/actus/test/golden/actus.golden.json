@@ -1,0 +1,512 @@
+{
+  "cases": {
+    "addMonths.end-of-month": {
+      "value": "2026-03-03"
+    },
+    "addMonths.leap-day": {
+      "value": "2025-03-01"
+    },
+    "addMonths.null-months": {
+      "value": "2026-11-02"
+    },
+    "addMonths.three": {
+      "value": "2027-02-02"
+    },
+    "buildContract.ann": {
+      "value": {
+        "contracts": [
+          {
+            "businessDayConvention": "SCF",
+            "calendar": "WEEKDAY",
+            "contractDealDate": "2026-11-01T00:00:00",
+            "contractID": "ANN-50000-2026-11-02",
+            "contractRole": "RPL",
+            "contractType": "ANN",
+            "currency": "USD",
+            "cycleAnchorDateOfInterestPayment": "2026-12-02T00:00:00",
+            "cycleAnchorDateOfPrincipalRedemption": "2026-12-02T00:00:00",
+            "cycleOfInterestPayment": "P1ML0",
+            "cycleOfPrincipalRedemption": "P1ML0",
+            "dayCountConvention": "30E360",
+            "initialExchangeDate": "2026-11-02T00:00:00",
+            "maturityDate": "2027-02-02T00:00:00",
+            "nominalInterestRate": 0.12,
+            "notionalPrincipal": 50000,
+            "premiumDiscountAtIED": 0,
+            "statusDate": "2026-11-01T00:00:00"
+          }
+        ],
+        "riskFactors": []
+      }
+    },
+    "buildContract.ann-options": {
+      "value": {
+        "contracts": [
+          {
+            "businessDayConvention": "SCF",
+            "calendar": "WEEKDAY",
+            "contractDealDate": "2026-02-28T00:00:00",
+            "contractID": "equipment-1",
+            "contractRole": "RPA",
+            "contractType": "ANN",
+            "currency": "USD",
+            "cycleAnchorDateOfInterestPayment": "2026-04-01T00:00:00",
+            "cycleAnchorDateOfPrincipalRedemption": "2026-04-01T00:00:00",
+            "cycleOfInterestPayment": "P1ML0",
+            "cycleOfPrincipalRedemption": "P1ML0",
+            "dayCountConvention": "A365",
+            "initialExchangeDate": "2026-03-01T00:00:00",
+            "maturityDate": "2029-03-01T00:00:00",
+            "nominalInterestRate": 0.095,
+            "notionalPrincipal": 120000,
+            "premiumDiscountAtIED": 0,
+            "statusDate": "2026-02-28T00:00:00"
+          }
+        ],
+        "riskFactors": []
+      }
+    },
+    "buildContract.invalid": {
+      "error": {
+        "message": "terms: notional must be above 0",
+        "name": "Error"
+      }
+    },
+    "buildContract.pam": {
+      "value": {
+        "contracts": [
+          {
+            "contractDealDate": "2026-01-14T00:00:00",
+            "contractID": "PAM-100000-2026-01-15",
+            "contractRole": "RPL",
+            "contractType": "PAM",
+            "currency": "USD",
+            "dayCountConvention": "A365",
+            "initialExchangeDate": "2026-01-15T00:00:00",
+            "maturityDate": "2027-01-15T00:00:00",
+            "nominalInterestRate": 0.08,
+            "notionalPrincipal": 100000,
+            "statusDate": "2026-01-14T00:00:00"
+          }
+        ],
+        "riskFactors": []
+      }
+    },
+    "checkTerms.bad-daycount": {
+      "error": {
+        "message": "terms: dayCount must be 30E360, A365, A360 or AA",
+        "name": "Error"
+      }
+    },
+    "checkTerms.bad-maturity": {
+      "error": {
+        "message": "terms: maturityDate must be YYYY-MM-DD",
+        "name": "Error"
+      }
+    },
+    "checkTerms.bad-role": {
+      "error": {
+        "message": "terms: role must be RPL (borrower) or RPA (lender)",
+        "name": "Error"
+      }
+    },
+    "checkTerms.bad-start": {
+      "error": {
+        "message": "terms: startDate must be YYYY-MM-DD",
+        "name": "Error"
+      }
+    },
+    "checkTerms.bad-type": {
+      "error": {
+        "message": "terms: contractType must be PAM (bullet) or ANN (equal instalments)",
+        "name": "Error"
+      }
+    },
+    "checkTerms.lowercase-currency": {
+      "error": {
+        "message": "terms: currency must be a 3-letter code",
+        "name": "Error"
+      }
+    },
+    "checkTerms.maturity-before-start": {
+      "error": {
+        "message": "terms: maturity must be after the start",
+        "name": "Error"
+      }
+    },
+    "checkTerms.ok-ann": {
+      "value": {
+        "annualRate": 0.12,
+        "contractType": "ANN",
+        "currency": "USD",
+        "notional": 50000,
+        "startDate": "2026-11-02",
+        "termMonths": 3
+      }
+    },
+    "checkTerms.ok-pam-full": {
+      "value": {
+        "annualRate": 0,
+        "contractType": "PAM",
+        "currency": "EUR",
+        "dayCount": "A360",
+        "id": "loan-7",
+        "maturityDate": "2027-01-15",
+        "notional": 100000,
+        "role": "RPA",
+        "startDate": "2026-01-15"
+      }
+    },
+    "checkTerms.rate-percent": {
+      "error": {
+        "message": "terms: annualRate is a decimal: 0.12 means 12%",
+        "name": "Error"
+      }
+    },
+    "checkTerms.term-too-long": {
+      "error": {
+        "message": "terms: give maturityDate or termMonths (1 to 360)",
+        "name": "Error"
+      }
+    },
+    "checkTerms.zero-notional": {
+      "error": {
+        "message": "terms: notional must be above 0",
+        "name": "Error"
+      }
+    },
+    "firstPayload.broken-then-good": {
+      "value": {
+        "contracts": []
+      }
+    },
+    "firstPayload.in-prose": {
+      "value": {
+        "contracts": [
+          {
+            "a": {
+              "b": 2
+            }
+          }
+        ],
+        "riskFactors": []
+      }
+    },
+    "firstPayload.none": {
+      "value": null
+    },
+    "intentChecks.empty": {
+      "value": [
+        [
+          "contract type as asked",
+          false
+        ],
+        [
+          "notional as asked",
+          false
+        ],
+        [
+          "rate as asked",
+          false
+        ],
+        [
+          "start date as asked",
+          false
+        ],
+        [
+          "maturity date as asked",
+          false
+        ]
+      ]
+    },
+    "intentChecks.match": {
+      "value": [
+        [
+          "contract type as asked",
+          true
+        ],
+        [
+          "notional as asked",
+          true
+        ],
+        [
+          "rate as asked",
+          true
+        ],
+        [
+          "start date as asked",
+          true
+        ],
+        [
+          "maturity date as asked",
+          true
+        ]
+      ]
+    },
+    "intentChecks.mismatch": {
+      "value": [
+        [
+          "contract type as asked",
+          false
+        ],
+        [
+          "notional as asked",
+          true
+        ],
+        [
+          "rate as asked",
+          false
+        ],
+        [
+          "start date as asked",
+          false
+        ],
+        [
+          "maturity date as asked",
+          true
+        ]
+      ]
+    },
+    "maturityOf.date": {
+      "value": "2027-01-15"
+    },
+    "maturityOf.neither": {
+      "error": {
+        "message": "Invalid time value",
+        "name": "RangeError"
+      }
+    },
+    "maturityOf.term": {
+      "value": "2027-02-02"
+    },
+    "mentorRequest.ann": {
+      "value": "ANN contract for a borrower (contractRole RPL): notionalPrincipal 50000 USD, fixed nominalInterestRate 0.12, initialExchangeDate 2026-11-02, maturityDate 2027-02-02, dayCountConvention 30E360, monthly principal and interest (cycle P1ML0) starting 2026-12-02, no risk factors. Return the eventsBatch body {\"contracts\":[...],\"riskFactors\":[]}."
+    },
+    "mentorRequest.pam": {
+      "value": "PAM contract for a borrower (contractRole RPL): notionalPrincipal 100000 USD, fixed nominalInterestRate 0.08, initialExchangeDate 2026-01-15, maturityDate 2027-01-15, dayCountConvention A360, interest and principal paid at maturity, no risk factors. Return the eventsBatch body {\"contracts\":[...],\"riskFactors\":[]}."
+    },
+    "parseTerms.daycount-act360": {
+      "value": {
+        "annualRate": 0.1,
+        "contractType": "ANN",
+        "currency": "USD",
+        "dayCount": "A360",
+        "notional": 1,
+        "startDate": "2026-01-01"
+      }
+    },
+    "parseTerms.daycount-actact": {
+      "value": {
+        "annualRate": 0.1,
+        "contractType": "ANN",
+        "currency": "USD",
+        "dayCount": "AA",
+        "notional": 1,
+        "startDate": "2026-01-01"
+      }
+    },
+    "parseTerms.fenced": {
+      "value": {
+        "annualRate": 0.12,
+        "contractType": "ANN",
+        "currency": "USD",
+        "dayCount": "30E360",
+        "notional": 50000,
+        "startDate": "2026-11-02",
+        "termMonths": 3
+      }
+    },
+    "parseTerms.not-json": {
+      "error": {
+        "message": "the model did not return JSON terms",
+        "name": "Error"
+      }
+    },
+    "parseTerms.plain-braces": {
+      "value": {
+        "annualRate": 0.08,
+        "contractType": "PAM",
+        "currency": "USD",
+        "dayCount": "A365",
+        "maturityDate": "2027-01-15",
+        "notional": 100000,
+        "startDate": "2026-01-15"
+      }
+    },
+    "parseTerms.unknown-kind-and-daycount": {
+      "value": {
+        "annualRate": 0.1,
+        "contractType": "REVOLVER",
+        "currency": "USD",
+        "dayCount": "BUS252",
+        "notional": 1,
+        "startDate": "2026-01-01"
+      }
+    },
+    "scheduleChecks.failure-inside-200": {
+      "value": [
+        [
+          "ACTUS status Success",
+          false
+        ],
+        [
+          "first event is IED for the notional",
+          false
+        ],
+        [
+          "principal paid back equals the notional",
+          false
+        ],
+        [
+          "last event on the maturity date",
+          false
+        ]
+      ]
+    },
+    "scheduleChecks.ok": {
+      "value": [
+        [
+          "ACTUS status Success",
+          true
+        ],
+        [
+          "first event is IED for the notional",
+          true
+        ],
+        [
+          "principal paid back equals the notional",
+          true
+        ],
+        [
+          "last event on the maturity date",
+          true
+        ]
+      ]
+    },
+    "scheduleChecks.undefined": {
+      "value": [
+        [
+          "ACTUS status Success",
+          false
+        ],
+        [
+          "first event is IED for the notional",
+          false
+        ],
+        [
+          "principal paid back equals the notional",
+          false
+        ],
+        [
+          "last event on the maturity date",
+          false
+        ]
+      ]
+    },
+    "scheduleRows.drops-prf": {
+      "value": [
+        [
+          "ANN-50000-2026-11-02",
+          "direct",
+          "2026-11-02",
+          "IED",
+          "money received (initial exchange)",
+          "-50000.00",
+          "USD",
+          "50000.00",
+          0.12
+        ],
+        [
+          "ANN-50000-2026-11-02",
+          "direct",
+          "2026-12-02",
+          "PR",
+          "principal repayment",
+          "16501.10",
+          "USD",
+          "33498.89",
+          0.12
+        ],
+        [
+          "ANN-50000-2026-11-02",
+          "direct",
+          "2027-02-02",
+          "XYZ",
+          "XYZ",
+          "1.00",
+          "USD",
+          "0.00",
+          0
+        ]
+      ]
+    },
+    "termsInDocument.ann-term-in-words": {
+      "value": []
+    },
+    "termsInDocument.made-up-values": {
+      "value": [
+        "notional 55000 is not in the document",
+        "rate 12.5% is not in the document",
+        "start date 2026-11-03 is not in the document",
+        "maturity date 2027-05-02 is not in the document (and no term in months was given)",
+        "PAM (one repayment at the end) is not what the document describes"
+      ]
+    },
+    "termsInDocument.pam-us-dates": {
+      "value": []
+    },
+    "termsInDocument.term-missing": {
+      "value": [
+        "term of 48 months is not in the document"
+      ]
+    },
+    "termsInDocument.term-only": {
+      "value": []
+    }
+  },
+  "constants": {
+    "EVENT_NAMES": {
+      "FP": "fee",
+      "IED": "money received (initial exchange)",
+      "IP": "interest payment",
+      "MD": "maturity (last principal)",
+      "PR": "principal repayment",
+      "PRF": "payment fixing (no cash)",
+      "RR": "rate reset"
+    },
+    "SCHEDULE_HEADER": [
+      "Contract ID",
+      "Source",
+      "Date",
+      "Event",
+      "Event Name",
+      "Payoff",
+      "Currency",
+      "Principal After",
+      "Rate"
+    ],
+    "TERMS_SYSTEM": "You read a loan or financing document and return its terms as JSON only, in a ```json block, with these keys:\n{\"contractType\": \"ANN\" when the loan is repaid in equal (monthly) instalments of principal and interest, e.g. \"36 equal monthly instalments\";\n \"PAM\" only when the whole principal is repaid in ONE payment at the end (a bullet),\n \"notional\": number, \"currency\": \"USD\", \"annualRate\": decimal (12% -> 0.12), \"startDate\": \"YYYY-MM-DD\" (drawdown / advance date),\n \"maturityDate\": \"YYYY-MM-DD\" if the document states the final date, \"termMonths\": integer if it states a term in months,\n \"dayCount\": \"30E360\" for 30/360, \"A365\" for actual/365, omitted if not stated}\nCopy numbers and dates exactly from the document. If a value is not in the document, leave the key out. No other text."
+  },
+  "functions": [
+    "addMonths",
+    "buildContract",
+    "checkTerms",
+    "firstPayload",
+    "intentChecks",
+    "maturityOf",
+    "mentorBuild",
+    "mentorRequest",
+    "mentorRun",
+    "parseTerms",
+    "runDirect",
+    "scheduleChecks",
+    "scheduleRows",
+    "termsInDocument"
+  ],
+  "skipped": [
+    "mentorBuild",
+    "mentorRun",
+    "runDirect"
+  ],
+  "version": 1
+}

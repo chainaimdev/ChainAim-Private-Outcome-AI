@@ -1,0 +1,79 @@
+{
+ "notes": "SHARED with the borrower side: how to measure (book settings, stress questions, product grid, loan defaults). No pass marks. Used by scripts/facts.ts.",
+ "questionsId": "q-wc-2026-10-a",
+ "description": "Working-capital loans: repaid from existing receivables, the financed order and the business's run-rate (new sales collected with a haircut, new supplier bills in full), within the loan term.",
+ "books": {
+  "asOf": "last-bank-date",
+  "trailingMonths": 3,
+  "latenessWindowDays": 120,
+  "overdueCollectDays": 14,
+  "doubtfulAfterDays": 90,
+  "recurring": [
+   {
+    "label": "payroll",
+    "match": "^Payroll"
+   },
+   {
+    "label": "rent",
+    "match": "^Factory rent"
+   }
+  ],
+  "countOpenOrders": true,
+  "orderCostRatio": 0.45,
+  "newBusiness": {
+   "enabled": true,
+   "trailingMonths": 6,
+   "salesHaircut": 0.9,
+   "salesFromMonth": 3,
+   "billsFromMonth": 2
+  }
+ },
+ "scenarios": [
+  {
+   "id": "base",
+   "label": "Base case"
+  },
+  {
+   "id": "rate+200",
+   "label": "Rate +2 % on the new loan",
+   "rateShockTenthBps": 2000
+  },
+  {
+   "id": "late+30",
+   "label": "All customers pay 30 days later",
+   "delayDays": 30
+  },
+  {
+   "id": "top-customer+60",
+   "label": "Largest customer pays 60 days later",
+   "topCustomerDelayDays": 60
+  },
+  {
+   "id": "order-cancelled",
+   "label": "Open order cancelled after costs are spent",
+   "orderCancelled": true
+  }
+ ],
+ "counterOffer": {
+  "structures": [
+   "ANN",
+   "PAM"
+  ],
+  "termMonths": [
+   3,
+   4,
+   6
+  ],
+  "stepAmount": 5000,
+  "minAmount": 10000,
+  "maxMultiple": 3
+ },
+ "loanDefaults": {
+  "gracePeriodDays": 5,
+  "lateInterestRateTenthBps": 6000,
+  "closeInterestRateTenthBps": 0,
+  "loanOriginationFee": 0,
+  "loanServiceFee": 0,
+  "latePaymentFee": 50
+ }
+}

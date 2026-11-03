@@ -1,0 +1,16 @@
+{
+ "notes": "PRIVATE to the lender (demo lender policy for Harbor Credit). In production this file exists only on the lender's side and is never sent to the borrower. Used by scripts/decide.ts.",
+ "policyId": "uw-wc-2026-10-a",
+ "rules": {
+  "minCashBufferBase": 10000,
+  "minCoverageBase": 1.25,
+  "minCashStress": 0,
+  "maxCustomerShare": 0.4,
+  "concentrationAction": "condition"
+ },
+ "broker": {
+  "managementFeeRateTenthBps": 1000,
+  "coverRateMinimumTenthBps": 10000,
+  "coverRateLiquidationTenthBps": 50000
+ }
+}

@@ -1,0 +1,83 @@
+{
+  "cases": {
+    "verifyAnswer.all-found": {
+      "value": {
+        "checked": 2,
+        "notFound": []
+      }
+    },
+    "verifyAnswer.dollar-and-decimals": {
+      "value": {
+        "checked": 2,
+        "notFound": []
+      }
+    },
+    "verifyAnswer.no-numbers": {
+      "value": {
+        "checked": 0,
+        "notFound": []
+      }
+    },
+    "verifyAnswer.parentheses-negative": {
+      "value": {
+        "checked": 1,
+        "notFound": []
+      }
+    },
+    "verifyAnswer.repeat-counted-once": {
+      "value": {
+        "checked": 2,
+        "notFound": [
+          "777"
+        ]
+      }
+    },
+    "verifyAnswer.some-missing": {
+      "value": {
+        "checked": 3,
+        "notFound": [
+          "99,999.99"
+        ]
+      }
+    },
+    "verifyAnswer.years-skipped": {
+      "value": {
+        "checked": 0,
+        "notFound": []
+      }
+    }
+  },
+  "constants": {
+    "NEGATIVE_WORDS": [
+      "short",
+      "shortfall",
+      "missing",
+      "below",
+      "less",
+      "under",
+      "lower",
+      "debit",
+      "deficit",
+      "undeposited",
+      "lost"
+    ],
+    "POSITIVE_WORDS": [
+      "over",
+      "extra",
+      "above",
+      "more",
+      "excess",
+      "higher",
+      "credit",
+      "surplus"
+    ]
+  },
+  "functions": [
+    "verifyAnswer",
+    "verifyMoney"
+  ],
+  "skipped": [
+    "verifyMoney"
+  ],
+  "version": 1
+}
