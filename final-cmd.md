@@ -16,7 +16,7 @@ copy config\data-sources.example.json config\data-sources.json
 ```powershell
 cd C:\SATHYA\CHAINAIM3003\mcp-servers\chainiam-private-ai
 .\test-console\stack.ps1 -Rebuild all -XrplNetwork testnet -PayTo rYOUR_TESTNET_ADDRESS
-.\test-console\switch-models.ps1 -To stub
+.\test-console\switch-models.ps1 -To ollama-cpu-8gb-all
 .\test-console\stack.ps1 -Check
 ```
 
