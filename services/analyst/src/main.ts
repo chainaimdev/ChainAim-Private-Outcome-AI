@@ -77,6 +77,9 @@ import { BUILT_IN_SOURCES } from "./sources/index.ts";
 import { type ReconcileReport, reconcileFolder } from "./reconcile.ts";
 import { type EvidenceConfig, readReconcileConfig } from "./engines/deposit-match.ts";
 import { reconcileEvidenceOf } from "./reconcile-evidence.ts";
+import { bankPathOf, buildTables, factSheet, loadBank } from "./packquery.ts";
+import { FACT_SYSTEM, type FactSheet, plainFacts, verifyFactAnswer } from "./facts.ts";
+import { checkSelect } from "./sqlrun.ts";
 
 const VERSION = "1.0.0";
 const flags: Flags = parseFlags(process.argv.slice(2));
@@ -99,6 +102,14 @@ function packFor(id: unknown): ResolvedPack {
   if (id !== undefined && typeof id !== "string") throw new HttpError(400, "recipe: pack must be a pack id string");
   try { return packs.resolve(id ?? defaultPack); } catch (e) { if (e instanceof PackError) throw new HttpError(400, `recipe: ${e.message}`); throw e; }
 }
+/** A domain pack for /pack-* (absent = --reconcile-pack, the dental pack by default); it must have a reconciliation config. */
+function resolvePack(id: unknown): ResolvedPack {
+  if (id !== undefined && typeof id !== "string") throw new HttpError(400, "pack must be a pack id string");
+  let p: ResolvedPack;
+  try { p = packs.resolve((id as string | undefined) ?? flags.reconcilePack); } catch (e) { if (e instanceof PackError) throw new HttpError(400, e.message); throw e; }
+  if (!p.reconcile) throw new HttpError(400, `pack ${p.id} has no reconciliation config, so it has no query bank to run`);
+  return p;
+}
 /** One store for every run /evidence and /verify can use (Phase 4b-3: analysis or reconcile), oldest evicted beyond --runs-in-memory. */
 type Stored = { kind: "analysis"; runId: string; folder: string; analysis: Analysis; findings: Finding[] }
   | { kind: "reconcile"; runId: string; folder: string; report: ReconcileReport; evidence: EvidenceConfig | null };
@@ -107,6 +118,13 @@ const newRunId = () => `${new Date().toISOString().replace(/[-:]/g, "").slice(0,
 function remember(s: Stored): void {
   runs.set(s.runId, s);
   while (runs.size > flags.runsInMemory) runs.delete(runs.keys().next().value as string);
+}
+
+/** Domain-pack runs (DESIGN/xrplh-29): the fact sheets a console question is checked against, by runId; same eviction as runs. */
+const packRuns = new Map<string, { folder: string; sheets: Map<string, FactSheet> }>();
+function rememberPack(runId: string, v: { folder: string; sheets: Map<string, FactSheet> }): void {
+  packRuns.set(runId, v);
+  while (packRuns.size > flags.runsInMemory) packRuns.delete(packRuns.keys().next().value as string);
 }
 
 function send(res: ServerResponse, status: number, body: unknown): void {
@@ -225,6 +243,55 @@ createServer(async (req, res) => {
       const runId = newRunId();
       remember({ kind: "reconcile", runId, folder, report, evidence });
       return send(res, 200, { runId, ...report });
+    }
+    // ---- domain-pack queries (DESIGN/xrplh-29): the pack's query bank over one reconciliation of a folder ----
+    if (path === "/pack-queries") {
+      const pack = resolvePack(b.pack);
+      const bank = loadBank(bankPathOf(flags.configRoot, pack.id));
+      return send(res, 200, { pack: pack.id, topics: bank.topics ?? [], queries: bank.queries.map((q) => ({ id: q.id, title: q.title, kind: q.sql ? "sql" : "model", topic: q.topic ?? null, pair: q.pair ?? null, ...(q.question ? { question: q.question, facts: q.facts } : {}) })) });
+    }
+    if (path === "/pack-run") {
+      const folder = await folderOf(b, cfg);
+      const pack = resolvePack(b.pack);
+      const bank = loadBank(bankPathOf(flags.configRoot, pack.id));
+      const ids: string[] = Array.isArray(b.ids) ? b.ids.map(String) : [];
+      const own = typeof b.sql === "string" && b.sql.trim() ? b.sql : null;
+      const picked = ids.map((id) => bank.queries.find((q) => q.id === id) ?? (() => { throw new HttpError(400, `no query ${id} in ${pack.id}'s bank`); })());
+      if (!picked.length && !own) throw new HttpError(400, "give ids (query bank entries) or sql");
+      try { for (const q of picked) if (q.sql) checkSelect(q.sql); if (own) checkSelect(own); } catch (e) { if (e instanceof SqlRefused) throw new HttpError(400, e.message); throw e; }
+      const maxRows = Number.isInteger(b.maxRows) && b.maxRows > 0 ? Math.min(b.maxRows, flags.sqlMaxRows) : flags.sqlMaxRows;
+      const { cfg: rc } = readReconcileConfig(join(flags.configRoot, pack.reconcile!), flags.configRoot);
+      const actions = ((rc as unknown as { actions?: Record<string, string> }).actions) ?? {};
+      const results: { id: string; title: string; columns?: string[]; rows?: Record<string, unknown>[]; truncated?: boolean; skipped?: string; error?: string }[] = [];
+      const sheets = new Map<string, FactSheet>();
+      const report = await reconcileFolder({ files: await listDataFiles(folder, cfg, flags.maxFiles), sources, pack, configRoot: flags.configRoot,
+        sourceOptions: { patientNameFormat: flags.patientNameFormat }, toleranceCents: flags.reconcileToleranceCents, open: openDb,
+        inspect: async (db, tables, rep) => {
+          await buildTables(db, tables, rep, rc.evidence?.directions ?? {});
+          const sqls = [...picked.filter((q) => q.sql).map((q) => ({ id: q.id, title: q.title, sql: q.sql! })), ...(own ? [{ id: "your-query", title: "your query", sql: own }] : [])];
+          for (const q of sqls) {
+            try { const r = await runSelect(db, q.sql, { maxRows, timeoutMs: flags.sqlTimeoutMs }); results.push({ id: q.id, title: q.title, columns: r.columns, rows: r.rows, truncated: r.truncated }); }
+            catch (e) {
+              const m = (e as Error).message; const miss = /Table with name (\w+) does not exist/i.exec(m);
+              results.push(miss ? { id: q.id, title: q.title, skipped: `no ${miss[1]} file in this folder` } : { id: q.id, title: q.title, error: m.split("\n")[0] });
+            }
+          }
+          for (const q of picked.filter((x) => x.question)) sheets.set(q.id, await factSheet(db, q.facts!, actions));
+        } });
+      const runId = newRunId();
+      if (sheets.size) rememberPack(runId, { folder, sheets });
+      return send(res, 200, { runId, pack: pack.id, files: report.files.map((f) => ({ name: f.name, adapter: f.adapter, rows: f.rows })), exceptions: report.exceptions.length, results,
+        questions: picked.filter((q) => q.question).map((q) => ({ id: q.id, title: q.title, question: q.question, facts: sheets.get(q.id)!.facts.length, sheet: sheets.get(q.id)!.text })),
+        system: FACT_SYSTEM });
+    }
+    if (path === "/pack-verify") {
+      const run = typeof b.runId === "string" ? packRuns.get(b.runId) : undefined;
+      if (!run) throw new HttpError(404, "unknown or expired runId: run the question again");
+      const sheet = typeof b.id === "string" ? run.sheets.get(b.id) : undefined;
+      if (!sheet) throw new HttpError(400, "id is not a question of this run");
+      if (typeof b.answer !== "string") throw new HttpError(400, "answer must be text");
+      const check = verifyFactAnswer(b.answer, sheet);
+      return send(res, 200, { ok: check.ok, checked: check.checked, problems: check.problems, computed: plainFacts(sheet) });
     }
     if (path === "/status") return send(res, 200, await status(await folderOf(b, cfg), cfg));
     if (path === "/relations") {

@@ -1,0 +1,73 @@
+{
+  "version": 1,
+  "notes": "Datasets shown in tab 03 (DESIGN/xrplh-29). Committed: names, descriptions, templates and folders relative to a data root, never data. root: 'samples' = sample-data (git-ignored), 'private' = the second allowedRoots entry in config/data-sources.json (real data, outside the repository). The same folder layout works under either root. engine crossask: a model writes one SQL query from column names only. engine domain-pack: the pack's reconciliation builds tables and its query bank (queries.json) answers exactly (sql) or through checked fact sheets (question). subfolders: list sub-folders holding data files as a Set picklist.",
+  "roots": {
+    "samples": "sample-data",
+    "private": "C:\\PRIV-AI-DATA\\chainaim3003"
+  },
+  "datasets": [
+    {
+      "id": "smb-fin-1",
+      "label": "Small Biz Financials - 1",
+      "folder": "smb-fin/statements",
+      "engine": "crossask",
+      "description": "A small business's bank statement (Bank of America CSV export): a summary block, then deposits, ATM and other debits and fees with a running balance.",
+      "templates": [
+        {
+          "label": "Cash flow vs installment",
+          "q": "By month, how much cash came into and went out of our bank account, and what was the net cash flow? Could it cover a loan installment of 20,368 a month?"
+        },
+        {
+          "label": "Receivables vs payables: need a loan?",
+          "q": "Based on our accounts receivable (unpaid customer invoices) and accounts payable (unpaid supplier bills), how much is owed to us and how much do we owe? Do we need a loan?"
+        }
+      ]
+    },
+    {
+      "id": "dental-pms",
+      "label": "Practice Management - Dental",
+      "folder": "prms/dent-prms-c-sample",
+      "engine": "domain-pack",
+      "pack": "finance/rcm/dental",
+      "subfolders": true,
+      "defaultSubfolder": "SET-2/NEG-ALL",
+      "description": "Curve Dental exports (day-sheet ledger, bank deposit detail, patient list) reconciled with the practice's Bank of America statement to find revenue leaks. SET-2 holds 10 generated scenarios (POS and 9 leak sets); sample-prms-fin holds anonymized sample exports.",
+      "templates": {
+        "from": "pack"
+      },
+      "setLabels": {
+        "SET-2/POS": "POS - everything reconciles",
+        "SET-2/NEG-ALL": "NEG-ALL - all 8 leaks planted",
+        "SET-2/NEG-UNDEPOSITED-CHECK": "NEG-UNDEPOSITED-CHECK - a check never deposited",
+        "SET-2/NEG-EFT-MISSING": "NEG-EFT-MISSING - an insurance EFT never arrived",
+        "SET-2/NEG-CARD-BATCH-SHORT": "NEG-CARD-BATCH-SHORT - a card settlement short",
+        "SET-2/NEG-CASH-SHORT": "NEG-CASH-SHORT - a cash deposit short",
+        "SET-2/NEG-REF-MISMATCH": "NEG-REF-MISMATCH - ledger and deposit references differ",
+        "SET-2/NEG-POSTED-TWICE": "NEG-POSTED-TWICE - a payment posted twice",
+        "SET-2/NEG-BANK-UNPOSTED": "NEG-BANK-UNPOSTED - bank money Curve never posted",
+        "SET-2/NEG-HFD-LAG": "NEG-HFD-LAG - financing funded late",
+        "SET-2/TRY-1": "TRY-1 - trial set",
+        "sample-prms-fin": "sample-prms-fin - anonymized sample exports"
+      },
+      "fileKinds": {
+        "BANK-ST": "Bank statement",
+        "BankDep-Det": "Deposit detail",
+        "Per-Sum": "Ledger (day sheet)",
+        "SPR-patientlist": "Patient list",
+        "LOCS-patientlist": "Patient list",
+        "GLOBAL-CareCredit": "CareCredit financing",
+        "GLOBAL-Cherry": "Cherry financing",
+        "GLOBAL-HFD": "HFD financing",
+        "curveIptReport": "Procedures report"
+      }
+    },
+    {
+      "id": "pers-fin",
+      "label": "Personal Financials",
+      "folder": "pers-fin",
+      "engine": "crossask",
+      "description": "Personal finance files (bank and card statements). No files yet: add CSV exports to this folder.",
+      "templates": []
+    }
+  ]
+}

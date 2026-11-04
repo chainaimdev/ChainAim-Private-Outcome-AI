@@ -9,3 +9,7 @@ secrets
 eval
 docs
 test-console
+sample-data
+runtime
+config/local
+config/data-sources.json

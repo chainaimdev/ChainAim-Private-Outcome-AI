@@ -1,6 +1,6 @@
 /**
  * L2 (DESIGN/xrplh-24 §8): the source adapters on small inline files built from the quirks seen in the owner's samples
- * (Phase 4c layouts: data/pms/dent-pms-c-sample/sample-pms-fin). No data folder needed; every value below is made up.
+ * (Phase 4c layouts: sample-data/prms/dent-prms-c-sample/sample-prms-fin). No data folder needed; every value below is made up.
  */
 import { test, after } from "node:test";
 import assert from "node:assert/strict";

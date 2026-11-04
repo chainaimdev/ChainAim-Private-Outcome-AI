@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ChainAim Audit Desk</title>
+<title>Private AI Desk — powered by ChainAim</title>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600&family=Instrument+Serif:ital@0;1&family=JetBrains+Mono:wght@400;500;600&display=swap">
 <style>
@@ -65,9 +65,17 @@ body { background: var(--paper); color: var(--ink); font: 400 15px/1.6 var(--san
 
 /* masthead */
 header.top { padding-block: 26px 20px; border-bottom: 1px solid var(--rule-firm); display: grid; gap: 14px; }
-.titleline { display: flex; align-items: flex-end; gap: 14px; flex-wrap: wrap; }
+.titleline { display: flex; align-items: flex-start; gap: 14px; }
+.titleline .brand { display: grid; gap: 6px; }
 .titleline h1 { margin: 0; font: 400 clamp(1.9rem, 1.5rem + 2vw, 2.8rem)/1.05 var(--serif); letter-spacing: -0.01em; }
-.titleline .sub { font: italic 400 clamp(1rem, .95rem + .3vw, 1.15rem)/1.3 var(--serif); color: var(--muted); margin-bottom: .25em; }
+.titleline .poweredby { font: 500 10.5px/1 var(--mono); letter-spacing: .14em; text-transform: uppercase; color: var(--muted); }
+header.top p.sub { font: italic 400 clamp(1.05rem, 1rem + .3vw, 1.2rem)/1.35 var(--serif); color: var(--muted); }
+ul.points { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); grid-auto-rows: 1fr; gap: 10px; max-width: 1040px; }
+@media (max-width: 900px) { ul.points { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 560px) { ul.points { grid-template-columns: 1fr; grid-auto-rows: auto; } }
+ul.points li { display: grid; align-content: start; gap: 4px; padding: 10px 14px; border: 1px solid var(--rule); border-left: 3px solid var(--ink); border-radius: 4px; background: var(--sheet); }
+ul.points b { font: 600 11px/1.2 var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--ink); }
+ul.points span { font-size: 13.5px; line-height: 1.45; color: var(--ink-2); }
 header.top p { margin: 0; max-width: 68ch; color: var(--ink-2); }
 header.top code { font: 500 .88em var(--mono); background: var(--field); border: 1px solid var(--rule); border-radius: 2px; padding: 1px 5px; }
 .meta { display: flex; flex-wrap: wrap; gap: 8px 20px; align-items: center; }
@@ -180,6 +188,26 @@ td.num { font-variant-numeric: tabular-nums; }
 td.ph { background: none; border: 0; padding: 9px 13px; white-space: nowrap; }
 table.kv th { width: 11rem; white-space: nowrap; }
 /* Blockchain queries twisty: picklists in a row that wraps, results as cards that never scroll sideways */
+/* Dataset picker (DESIGN/xrplh-29) */
+#t5 [hidden] { display: none !important; } /* .xmodels and the Set label set display themselves; hidden must still win */
+.ds-pick { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 14rem), 1fr)); gap: 12px; }
+.ds-pick label { display: grid; gap: 6px; min-width: 0; }
+.ds-pick select { width: 100%; min-width: 0; }
+#dsDesc { overflow-wrap: anywhere; max-width: 90ch; }
+#xTemplates { display: grid; gap: 8px; }
+#xTemplates .tpl-group { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+#xTemplates .tpl-group > .blabel { width: 100%; }
+.ds-questions { display: grid; gap: 4px; margin: 4px 0; }
+.ds-q { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 10px; align-items: baseline; padding: 6px 10px; border: 1px solid var(--rule); border-radius: 6px; background: var(--sheet); cursor: pointer; }
+.ds-q:has(input:checked) { border-color: var(--ink); }
+.ds-q .muted { font: 400 11px/1.4 var(--mono); }
+.ds-style { display: flex; flex-wrap: wrap; gap: 8px 18px; align-items: center; }
+.ds-opt { display: inline-flex; gap: 6px; align-items: baseline; }
+.ds-opt .muted { font-size: 12px; }
+.ds-model { display: inline-grid; gap: 4px; min-width: 14rem; }
+.ds-files { color: var(--muted); }
+ol.how { margin: 4px 0 0; padding-left: 1.4em; display: grid; gap: 2px; }
+#xTemplates button.on { outline: 2px solid var(--ink); }
 #chainBox > summary { cursor: pointer; }
 #chainBox button:disabled { opacity: .4; cursor: not-allowed; }
 #chainBox .chain-pick { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 13rem), 1fr)); gap: 12px; }
@@ -235,11 +263,21 @@ footer.fine { margin-top: 30px; padding-top: 16px; border-top: 1px solid var(--r
 <div class="wrap">
   <header class="top">
     <div class="titleline">
-      <h1>Audit Desk</h1>
-      <span class="sub">what leaves, and what stays</span>
+      <div class="brand">
+        <h1>Private AI Desk</h1>
+        <span class="poweredby">powered by ChainAim</span>
+      </div>
       <button class="themebtn" id="theme" type="button">theme</button>
     </div>
-    <p>Everything runs on this PC: the real Presidio scanner in Docker, and the gateway and paywall built from <code>main</code>. By default the "model" is a stand-in that echoes what it received, so no real model is called and nothing leaves this computer. After <code>use-real-models.cmd</code>, chat goes to OpenRouter's free models, and they receive only the masked text. The paywall runs on TestNet, and no payment is made.</p>
+    <p class="sub">AI on your business data, without exposing it.</p>
+    <ul class="points">
+      <li><b>Stays here</b><span>Your files never leave this computer.</span></li>
+      <li><b>Hidden first</b><span>Names, account numbers and other personal details are masked before any AI sees them.</span></li>
+      <li><b>What AI does</b><span>Turns your question into an exact calculation on your files, then reasons about the result.</span></li>
+      <li><b>Verified</b><span>Every number in an AI answer is matched against your own data; anything that doesn&rsquo;t match is flagged.</span></li>
+      <li><b>Your choice of AI</b><span>Runs on this PC, or in a cloud service only when you pick it.</span></li>
+      <li><b>Pay per use</b><span>About a cent a call, by card, bank transfer or regulated stablecoins on several blockchains.</span></li>
+    </ul>
     <div class="meta">
       <span><span class="led"></span>gateway 8720</span>
       <span><span class="led"></span>presidio</span>
@@ -252,7 +290,7 @@ footer.fine { margin-top: 30px; padding-top: 16px; border-top: 1px solid var(--r
     <nav class="rail" aria-label="Tasks">
       <button type="button" class="ghost" data-go="t1" aria-current="true"><span class="idx">01</span>Scan and mask</button>
       <button type="button" class="ghost" data-go="t2"><span class="idx">02</span>Private chat</button>
-      <button type="button" class="ghost" data-go="t5"><span class="idx">03</span>Private Chat (Across Files)</button>
+      <button type="button" class="ghost" data-go="t5"><span class="idx">03</span>Private Chat and AI (Across Files)</button>
       <button type="button" class="ghost" data-go="t3"><span class="idx">04</span>Payment</button>
       <button type="button" class="ghost" data-go="t4"><span class="idx">05</span>Ledger</button>
     </nav>
@@ -311,19 +349,26 @@ footer.fine { margin-top: 30px; padding-top: 16px; border-top: 1px solid var(--r
       </section>
 
       <section class="sheet" id="t5" hidden>
-        <h2>Private Chat (Across Files)</h2>
+        <h2>Private Chat and AI (Across Files)</h2>
         <p class="deck">Questions that need several CSV files at once. The analyst on this PC reads the files and finds how they relate; a model writes one query from the column names only; the answer is computed here.</p>
         <div class="block">
-          <span class="blabel">1. Folder</span>
+          <span class="blabel">1. Dataset</span>
+          <div class="ds-pick">
+            <label class="blabel">Data<select id="dsRoot"><option value="samples">Samples (sample-data)</option><option value="private">Private (real data, outside the repository)</option></select></label>
+            <label class="blabel">Dataset<select id="dsSel"><option value="">loading…</option></select></label>
+            <label class="blabel" id="dsSetWrap" hidden>Set<select id="dsSet"></select></label>
+          </div>
+          <p class="muted" id="dsDesc"></p>
+          <span class="blabel">Folder</span>
           <div id="xFolder"></div>
           <span class="blabel">2. Question</span>
-          <div class="row-actions" id="xTemplates"><button type="button" class="ghost xtpl" data-q="By month, how much cash came into and went out of our bank account, and what was the net cash flow? Could it cover a loan installment of 20,368 a month?">Cash flow vs installment</button><button type="button" class="ghost xtpl" data-q="Based on our accounts receivable (unpaid customer invoices) and accounts payable (unpaid supplier bills), how much is owed to us and how much do we owe? Do we need a loan?">Receivables vs payables: need a loan?</button></div>
+          <div id="xTemplates"></div>
           <textarea id="xaskQ" spellcheck="false">By month, how much cash came into and went out of our bank account, and what was the net cash flow? Could it cover a loan installment of 20,368 a month?</textarea>
           <div class="xmodels">
             <label class="blabel">Writes the query (sees column names only)<select id="xaskModel"><option value="">loading the models…</option></select></label>
             <label class="blabel">Words the answer (sees the result rows)<select id="xaskAnswerModel"><option value="">no worded answer: table only</option></select></label>
           </div>
-          <details><summary class="muted">Or type the query yourself (no model writes it)</summary>
+          <details><summary class="muted" id="xaskSqlSummary">Or type the query yourself (no model writes it)</summary>
             <textarea id="xaskSql" spellcheck="false" placeholder='SELECT "Payer", count(*) FROM collections GROUP BY 1'></textarea>
           </details>
           <div class="row-actions">
@@ -897,7 +942,7 @@ function renderFolder() {
       up.onclick = () => browse(b.parent || "");
       const use = el("button", { type: "button", textContent: "Use this folder" });
       use.onclick = () => { folder.browse = null; openFolder(b.path); };
-      rows.push(el("div", { className: "row-actions" }, up, use, el("span", { className: "muted", textContent: b.path })));
+      rows.push(el("div", { className: "row-actions" }, up, use, el("span", { className: "muted", textContent: shortPath(b.path), title: b.path })));
     } else rows.push(el("span", { className: "muted", textContent: "Allowed folders (allowedRoots in config/data-sources.json):" }));
     const subs = b.folders.map((f) => { const go = el("button", { className: "ghost", type: "button", textContent: "› " + f.name }); go.onclick = () => browse(f.path); return go; });
     rows.push(subs.length ? el("div", { className: "row-actions" }, ...subs) : empty("No sub-folders here."));
@@ -1269,7 +1314,8 @@ function xRender() {
   const kids = [];
   const change = el("button", { className: "ghost", type: "button", textContent: xf.browse ? "Close" : "Change folder…" });
   change.onclick = () => { if (xf.browse) { xf.browse = null; xRender(); } else xBrowse(xf.path); };
-  kids.push(el("div", { className: "row-actions" }, pill(xf.path || "(no folder yet)"), change));
+  const where = pill(xf.path ? shortPath(xf.path) : "(no folder yet)"); if (xf.path) where.title = xf.path;
+  kids.push(el("div", { className: "row-actions" }, where, change));
   if (xf.browse) {
     const b = xf.browse, rows = [];
     if (b.path) {
@@ -1301,16 +1347,13 @@ document.querySelector('nav.rail button[data-go="t5"]').addEventListener("click"
   xModels();
   // start in the configured default folder (config/data-sources.json defaultFolder) when one is set
   const d = (typeof folder !== "undefined" && folder.config && folder.config.defaultFolder) || "";
-  if (!xf.path && !xf.browse) {
-    if (d) xOpen(d);
-    else getJson("/data/config").then((c) => (c && c.defaultFolder && c.defaultExists !== false ? xOpen(c.defaultFolder) : xBrowse(""))).catch(() => xBrowse(""));
-  } else xRender();
+  if (!ds.list.length) dsLoad().catch((e) => { $("dsDesc").textContent = e.message; if (!xf.path && !xf.browse) { if (d) xOpen(d); else xBrowse(""); } });
+  else xRender();
 });
-for (const b of document.querySelectorAll("#xTemplates .xtpl")) b.addEventListener("click", () => { $("xaskQ").value = b.dataset.q; $("xaskQ").focus(); });
 // Deep link: /?tab=t5&q=<question> opens a tab and pre-fills the "Ask across files" question (used by the CreditSeal demo).
 { const qp = new URLSearchParams(location.search);
   if (qp.get("q")) $("xaskQ").value = qp.get("q");
-  const tab = qp.get("tab") || "t5"; // default focus: Private Chat (Across Files)
+  const tab = qp.get("tab") || "t5"; // default focus: Private Chat and AI (Across Files)
   // wait until the model list has loaded, then open the tab and pre-select ?model= (writes the query) and ?answer= (words it)
   const t0 = Date.now();
   const ready = () => [...$("model").options].some((x) => x.value) || Date.now() - t0 > 10000;
@@ -1334,6 +1377,7 @@ $("xaskGo").onclick = () => busy($("xaskGo"), async () => {
   const out = $("xaskOut"); out.replaceChildren();
   if (!xf.path && xf.browse?.path) await xOpen(xf.browse.path); // browsed into a folder but did not press "Use this folder"
   if (!xf.path) { out.append(block(empty("Pick a folder first (1. Folder)."))); return; }
+  if (ds.cur?.engine === "domain-pack" && (ds.pick || $("xaskSql").value.trim())) return packAsk(out);
   const question = $("xaskQ").value.trim(), sql = $("xaskSql").value.trim(), answerModel = $("xaskAnswerModel").value;
   if (!question) { out.append(block(empty("Type a question first."))); return; }
   out.append(block(el("p", { className: "muted", textContent: "Working: relations, query, result" + (answerModel ? ", answer" : "") + "… (a reasoning or CPU model can take a minute)" })));
@@ -1358,6 +1402,153 @@ $("xaskGo").onclick = () => busy($("xaskGo"), async () => {
     ...r.attempts.map((a, i) => block(el("span", { className: "blabel", textContent: `Try ${i + 1}${a.error ? " (failed)" : ""}` }), pre(a.sql || "(no query in the reply)"), a.error ? el("p", { className: "flag", textContent: a.error }) : null))));
   out.append(el("details", { className: "behind" }, el("summary", { textContent: "How the files relate" }), relationsBlock(r.relations)));
 });
+// ---- Datasets (config/datasets.json, DESIGN/xrplh-29): picks the folder, describes it, and supplies the questions ----
+const ds = { list: [], cur: null, pick: null, rootPath: "", rootLabel: "", bank: null, intent: null, style: "table" };
+/** "Samples > smb-fin/statements" instead of the full path; the full path stays in the tooltip. Paths outside the root are shown whole. */
+function shortPath(p) {
+  if (!p) return p;
+  const norm = (x) => x.replace(/[\\/]+/g, "/").replace(/\/$/, "").toLowerCase();
+  const r = ds.rootPath && norm(ds.rootPath);
+  if (r && (norm(p) === r || norm(p).startsWith(r + "/"))) { const rel = p.replace(/[\\/]+/g, "/").slice(ds.rootPath.replace(/[\\/]+$/, "").length).replace(/^\//, ""); return rel ? `${ds.rootLabel} › ${rel}` : ds.rootLabel; }
+  return p;
+}
+const dsJoin = (base, rel) => { const sp = base.includes("\\") ? "\\" : "/"; return base.replace(/[\\/]+$/, "") + sp + rel.split("/").join(sp); };
+/** The kind of a file from the dataset's fileKinds (longest matching name prefix), else its name. */
+function fileKind(d, name) {
+  const k = Object.keys(d.fileKinds ?? {}).filter((p) => name.toLowerCase().startsWith(p.toLowerCase())).sort((x, y) => y.length - x.length)[0];
+  return k ? d.fileKinds[k] : name;
+}
+async function dsLoad() {
+  const r = await getJson(`/datasets?root=${enc($("dsRoot").value)}`);
+  ds.list = r.datasets; ds.rootPath = r.rootPath; ds.rootLabel = $("dsRoot").selectedOptions[0]?.textContent.split(" (")[0] ?? r.root;
+  const keep = $("dsSel").value;
+  $("dsSel").replaceChildren(...ds.list.map((d) => el("option", { value: d.id, textContent: d.label + (d.exists ? "" : "  (no folder yet)") })));
+  if (keep && ds.list.some((d) => d.id === keep)) $("dsSel").value = keep;
+  if (!r.rootAllowed) $("dsDesc").textContent = `${r.rootPath} is not in allowedRoots (config/data-sources.json).`;
+  await dsSelect();
+}
+async function dsSelect(keepSet) {
+  const d = ds.list.find((x) => x.id === $("dsSel").value); ds.cur = d; ds.pick = null; ds.intent = null;
+  if (!d) return;
+  const pack = d.engine === "domain-pack";
+  document.querySelector("#t5 .xmodels").hidden = pack;
+  $("xaskSqlSummary").textContent = pack ? "Advanced: write your own SQL over the reconciliation tables (exceptions, matches, unmatched_curve, unmatched_bank, group_totals, file_checks, bank, deposit, ledger, patients, ...)" : "Or type the query yourself (no model writes it)";
+  const setSel = $("dsSet");
+  $("dsSetWrap").hidden = !d.sets.length;
+  if (d.sets.length) {
+    const want = keepSet || setSel.value || d.defaultSubfolder;
+    const label = (n) => d.setLabels?.[n] ?? n;
+    const ordered = [...d.sets].sort((x, y) => (d.setLabels?.[x.name] ? 0 : 1) - (d.setLabels?.[y.name] ? 0 : 1) || x.name.localeCompare(y.name));
+    setSel.replaceChildren(...ordered.map((x) => el("option", { value: x.name, textContent: `${label(x.name)}  (${x.files.length} files)` })));
+    setSel.value = d.sets.some((x) => x.name === want) ? want : d.sets.some((x) => x.name === d.defaultSubfolder) ? d.defaultSubfolder : ordered[0].name;
+  }
+  const folder = d.sets.length ? dsJoin(d.folder, setSel.value) : d.folder;
+  const files = d.sets.length ? d.sets.find((x) => x.name === setSel.value)?.files ?? [] : d.files;
+  const kinds = [...new Set(files.map((f) => fileKind(d, f)))];
+  $("dsDesc").replaceChildren(el("span", { textContent: d.description }),
+    d.exists ? (files.length ? el("span", { className: "ds-files", title: files.join("\n"), textContent: `  Files: ${kinds.join(" · ")}` }) : el("span", { textContent: "  No data files yet." }))
+      : el("span", { textContent: `  Folder not found: ${shortPath(d.folder)}` }));
+  if (d.exists && d.allowed) await xOpen(folder); else { xf.path = ""; xf.files = []; xRender(); }
+  await dsTemplates(d);
+}
+async function dsTemplates(d) {
+  const box = $("xTemplates");
+  if (d.engine !== "domain-pack") {
+    ds.bank = null;
+    const row = el("div", { className: "tpl-group" }, ...d.templates.map((t) => {
+      const b = el("button", { type: "button", className: "ghost", textContent: t.label, title: t.q });
+      b.onclick = () => { for (const x of row.querySelectorAll("button")) x.classList.remove("on"); b.classList.add("on"); ds.pick = null; $("xaskQ").value = t.q; $("xaskQ").focus(); };
+      return b;
+    }));
+    box.replaceChildren(d.templates.length ? row : empty("No templates for this dataset yet: type a question."));
+    return;
+  }
+  try { ds.bank = await postData("/analyst/pack-queries", { pack: d.pack }); }
+  catch (e) { ds.bank = null; box.replaceChildren(el("p", { className: "flag", textContent: `Query bank not available: ${e.message}` })); return; }
+  const topicSel = el("select", { id: "dsTopic" }, ...ds.bank.topics.map((t) => el("option", { value: t.id, textContent: `${t.label}  (${dsIntents(t.id).length})` })));
+  topicSel.onchange = () => dsTopic(topicSel.value);
+  box.replaceChildren(el("div", { className: "ds-pick" }, el("label", { className: "blabel" }, "Topic", topicSel)), el("div", { id: "dsQuestions", className: "ds-questions" }), el("div", { id: "dsStyle", className: "ds-style" }));
+  dsTopic(topicSel.value);
+}
+/** The questions of a topic: an exact entry and its paired model entry are one question. */
+function dsIntents(topic) {
+  const qs = ds.bank.queries.filter((q) => q.topic === topic), byId = new Map(ds.bank.queries.map((q) => [q.id, q])), out = [];
+  for (const q of qs) {
+    if (q.kind === "model" && q.pair && byId.get(q.pair)?.topic === topic) continue; // shown with its exact partner
+    const exact = q.kind === "sql" ? q : null, model = q.kind === "model" ? q : (q.pair ? byId.get(q.pair) : null);
+    out.push({ id: q.id, label: (exact ?? model).title.replace(/^MODEL:\s*/, "").replace(/^./, (c) => c.toUpperCase()), exact, model });
+  }
+  return out;
+}
+function dsTopic(topic) {
+  const list = dsIntents(topic);
+  $("dsQuestions").replaceChildren(...list.map((it, i) => {
+    const r = el("input", { type: "radio", name: "dsQ", value: it.id }); r.checked = i === 0;
+    r.onchange = () => dsIntent(it);
+    const tag = it.exact && it.model ? "table or explained" : it.exact ? "table" : "explained";
+    return el("label", { className: "ds-q" }, r, el("span", { textContent: it.label }), el("span", { className: "muted", textContent: tag }));
+  }));
+  if (list.length) dsIntent(list[0]); else { ds.intent = null; ds.pick = null; $("dsStyle").replaceChildren(); }
+}
+function dsIntent(it) {
+  ds.intent = it;
+  if (!(ds.style === "explained" && it.model) && !(ds.style === "table" && it.exact)) ds.style = it.exact ? "table" : "explained";
+  dsStyleRender();
+}
+function dsStyleRender() {
+  const it = ds.intent, both = it.exact && it.model;
+  const opt = (value, text, sub) => {
+    const r = el("input", { type: "radio", name: "dsStyle", value }); r.checked = ds.style === value; r.disabled = !both;
+    r.onchange = () => { ds.style = value; dsStyleRender(); };
+    return el("label", { className: "ds-opt" }, r, el("span", { textContent: text }), el("span", { className: "muted", textContent: sub }));
+  };
+  const models = [...$("xaskModel").options].filter((o) => o.value);
+  const keep = $("dsModel")?.value || $("xaskAnswerModel").value || $("xaskModel").value;
+  const modelSel = el("select", { id: "dsModel" }, ...models.map((o) => el("option", { value: o.value, textContent: o.textContent })));
+  if ([...modelSel.options].some((o) => o.value === keep)) modelSel.value = keep;
+  $("dsStyle").replaceChildren(el("span", { className: "blabel", textContent: "Answer as" }),
+    ...(it.exact ? [opt("table", "Table", "exact, computed on this PC; no model")] : []),
+    ...(it.model ? [opt("explained", "Explained", "a model words the computed facts; every figure is checked")] : []),
+    ds.style === "explained" ? el("label", { className: "blabel ds-model" }, "Model", modelSel) : el("span"));
+  ds.pick = ds.style === "explained" ? it.model : it.exact;
+  $("xaskQ").value = (ds.style === "explained" ? it.model.question : null) ?? it.label;
+  $("xaskSql").value = "";
+}
+/** "How this was answered": the steps actually taken, shown above every Dental answer. */
+function howStrip(steps) {
+  return block(el("span", { className: "blabel", textContent: "How this was answered" }), el("ol", { className: "how" }, ...steps.map((t) => el("li", { textContent: t }))));
+}
+async function packAsk(out) {
+  const sql = $("xaskSql").value.trim(), p = sql ? null : ds.pick;
+  const set = $("dsSetWrap").hidden ? "" : ` (${$("dsSet").value})`;
+  if (sql || p.kind === "sql") {
+    const r = await postData("/analyst/pack-run", { folder: xf.path, pack: ds.cur.pack, ...(sql ? { sql } : { ids: [p.id] }) });
+    const kinds = r.files.map((f) => f.adapter ? fileKind(ds.cur, f.name) : `${f.name} (not recognised)`);
+    out.replaceChildren(howStrip([
+      `Reconciled ${r.files.length} file(s) on this PC with DuckDB${set}: ${kinds.join(", ")}; ${r.exceptions} exception(s) found.`,
+      sql ? "Ran your own SELECT on the reconciliation tables." : `Ran the exact query "${p.title}".`,
+      "Nothing was sent to any model."]));
+    for (const x of r.results) out.append(block(el("span", { className: "blabel", textContent: x.title }),
+      x.error ? el("p", { className: "flag", textContent: x.error }) : x.skipped ? empty(`Skipped: ${x.skipped}`) : resultTable(x.columns, x.rows),
+      x.truncated ? el("p", { className: "muted", textContent: "First rows only." }) : null));
+    return;
+  }
+  const model = $("dsModel")?.value || $("xaskModel").value;
+  const r = await postData("/packask", { folder: xf.path, pack: ds.cur.pack, id: p.id, model });
+  out.replaceChildren(howStrip([
+    `Reconciled ${r.files.length} file(s) on this PC with DuckDB${set}.`,
+    `Built a fact sheet: ${r.facts} fact(s), ${r.sheetChars} characters (codes, dates, amounts; no names).`,
+    `The gateway masked it and sent it to ${r.served.model ?? model}${r.served.zone ? ` (zone ${r.served.zone})` : ""}; answered in ${r.served.seconds} s.`,
+    r.check.ok ? `Checked ${r.check.checked} figure(s)/ID(s) against the facts: all match.` : `Checked the figures: ${r.check.problems.length} problem(s), so the computed facts are shown instead of the model's text.`]));
+  if (r.check.ok) out.append(block(el("span", { className: "blabel", textContent: "Answer" }), pre(r.answer)));
+  else out.append(block(el("span", { className: "blabel", textContent: "Answer (computed facts)" }), pre(r.computed)),
+    block(el("span", { className: "blabel", textContent: "Why the model's text was not shown" }), pre(r.check.problems.join("\n"))),
+    el("details", {}, el("summary", { className: "muted", textContent: "The model's text" }), pre(r.answer)));
+}
+$("dsRoot").addEventListener("change", () => dsLoad().catch((e) => { $("dsDesc").textContent = e.message; }));
+$("dsSel").addEventListener("change", () => dsSelect().catch((e) => { $("dsDesc").textContent = e.message; }));
+$("dsSet").addEventListener("change", () => dsSelect($("dsSet").value).catch((e) => { $("dsDesc").textContent = e.message; }));
+$("xaskQ").addEventListener("input", () => { if (ds.pick) { ds.pick = null; for (const x of document.querySelectorAll('#dsQuestions input[name="dsQ"]')) x.checked = false; } });
 // ---- Blockchain queries twisty (services/chain-query through /chain/*; read-only) -------------------------------------
 let chainData = null;
 const chainEl = (tag, text, cls) => { const e = document.createElement(tag); if (text !== undefined && text !== null) e.textContent = String(text); if (cls) e.className = cls; return e; };

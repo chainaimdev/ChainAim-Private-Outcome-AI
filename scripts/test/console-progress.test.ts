@@ -51,3 +51,13 @@ test("blockchain queries use the activity bar and stop it in finally", () => {
   assert.match(body, /finally \{[\s\S]*activity\.stop\(\)/);
   assert.match(body, /AbortSignal\.timeout\(/);
 });
+
+test("Dental (domain-pack) questions: a Topic picklist, one question per intent with Answer as Table | Explained, and a 'How this was answered' strip (DESIGN/xrplh-29 section 8)", () => {
+  assert.match(page, /function dsIntents\(topic\)/);
+  assert.match(page, /el\("select", \{ id: "dsTopic" \}/);
+  assert.match(fnBody("dsStyleRender"), /"Answer as"/);
+  assert.match(fnBody("dsStyleRender"), /ds\.style === "explained" \? el\("label", \{ className: "blabel ds-model" \}/, "the model picker shows only for Explained");
+  const ask = fnBody("packAsk");
+  assert.equal((ask.match(/howStrip\(\[/g) ?? []).length, 2, "both answer paths say how the answer was obtained");
+  assert.match(ask, /Nothing was sent to any model/);
+});

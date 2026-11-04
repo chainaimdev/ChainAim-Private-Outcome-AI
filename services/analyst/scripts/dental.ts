@@ -36,7 +36,7 @@
  * every figure checked) only when named in --id or with --with-ask. --sql runs one ad-hoc SELECT. --list prints the bank.
  *
  * Where: --set <SET[/SCENARIO]> is a folder under the data root; --data-root <dir> (default: env DENTAL_DATA_ROOT, else
- * <repo>/data/pms/dent-pms-c-sample); --folder <dir> instead of --set, relative to the folder you ran npm from. Any other
+ * <repo>/sample-data/prms/dent-prms-c-sample); --folder <dir> instead of --set, relative to the folder you ran npm from. Any other
  * flag is passed on to the script unchanged. "sets" generates every scenario into <SET>/<SCENARIO> (upper case, like the tests
  * expect) and checks each against its answer key; exit 0 only when all pass. Exit 2 = bad flags.
  */
@@ -45,14 +45,15 @@ import { isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { readFileSync } from "node:fs";
 import { gatewayChat } from "../../../packages/crossask/src/index.ts";
-import { type Category, type ExceptionFact, type Fact, FACT_SYSTEM, type FactSheet, plainFacts, renderSheet, verifyFactAnswer } from "../src/facts.ts";
+import { FACT_SYSTEM, type FactSheet, plainFacts, verifyFactAnswer } from "../src/facts.ts";
 import { PackRegistry, SourceRegistry } from "../src/core/registry.ts";
-import { type Db, ident, literal, openDb } from "../src/db.ts";
+import { openDb } from "../src/db.ts";
 import { BUILT_IN_PACKS } from "../src/domain-packs/index.ts";
 import { readReconcileConfig } from "../src/engines/deposit-match.ts";
 import { type ReconcileReport, reconcileFolder } from "../src/reconcile.ts";
 import { BUILT_IN_SOURCES } from "../src/sources/index.ts";
 import { checkSelect, runSelect } from "../src/sqlrun.ts";
+import { buildTables, type Entry, factSheet, SECTIONS } from "../src/packquery.ts";
 import { SCENARIOS } from "../src/synth/dental-gen.ts";
 
 const HERE = fileURLToPath(new URL(".", import.meta.url));
@@ -76,7 +77,7 @@ for (let i = 0; i < argv.length; i++) {
 // npm runs scripts from the repo root; INIT_CWD is the folder the person ran npm from, so a relative --folder means what they typed.
 const base = process.env.INIT_CWD ?? process.cwd();
 const env = opt["data-root"] ?? process.env.DENTAL_DATA_ROOT?.trim();
-const dataRoot = env ? (isAbsolute(env) ? env : resolve(base, env)) : join(REPO, "data", "pms", "dent-pms-c-sample");
+const dataRoot = env ? (isAbsolute(env) ? env : resolve(base, env)) : join(REPO, "sample-data", "prms", "dent-prms-c-sample");
 const where = (): string => {
   if (opt.set && opt.folder) usage("give --set or --folder, not both");
   if (opt.folder) return resolve(base, opt.folder);
@@ -113,11 +114,6 @@ async function waiting<T>(label: string, limitSec: number, work: Promise<T>): Pr
   finally { clearInterval(timer); if (live && width) process.stderr.write(`\r${" ".repeat(width)}\r`); }
 }
 
-const SECTIONS = ["totals", "groups", "losses", "extra", "timing", "posting", "payers", "card", "branch", "eft", "all"];
-const CATEGORY_SQL = `CASE WHEN severity = 'watch' THEN 'timing' WHEN direction = 'negative' THEN 'loss' WHEN direction = 'positive' THEN 'extra' ELSE 'posting' END`;
-const RANK_SQL = `CASE category WHEN 'loss' THEN 0 WHEN 'extra' THEN 1 WHEN 'timing' THEN 2 ELSE 3 END`;
-const WHERE: Record<string, string> = { losses: "category = 'loss'", extra: "category = 'extra'", timing: "category = 'timing'", posting: "category = 'posting'",
-  payers: "payer IS NOT NULL AND category IN ('loss', 'extra')", card: "grp = 'card_processor'", branch: "grp = 'branch_atm_deposit'", eft: "grp = 'insurance_eft'", all: "TRUE" };
 
 if (cmd === "gen") process.exit(run("make-dental-fixtures.ts", ["--out", where(), ...rest]));
 if (cmd === "check") process.exit(run("reconcile-check.ts", ["--folder", where(), ...rest]));
@@ -148,7 +144,6 @@ process.stdout.write(`dental sets: ${want.length - failed}/${want.length} scenar
 process.exit(failed ? 1 : 0);
 
 // ---------------------------------------------------------------- query
-type Entry = { id: string; title: string; sql?: string; question?: string; facts?: string[] };
 async function query(): Promise<number> {
   if (rest.length) usage(`query does not take ${rest.join(" ")}`);
   const bankPath = opt.bank ? resolve(base, opt.bank) : join(REPO, "config", "domain-packs", "finance", "rcm", "dental", "queries.json");
@@ -208,32 +203,6 @@ async function query(): Promise<number> {
   return failures ? 1 : 0;
 }
 
-/** The report as tables (amounts in cents and as dollars), and the loaded sources under short names. */
-async function buildTables(db: Db, tables: Readonly<Record<string, string>>, rep: ReconcileReport, dirs: Record<string, string>): Promise<void> {
-  const make = async (name: string, cols: [string, string][], data: unknown[][]) => {
-    await db.conn.run(`CREATE TABLE ${ident(name)} (${cols.map(([c, t]) => `${ident(c)} ${t}`).join(", ")})`);
-    // an empty value is NULL in a typed column (e.g. an exception with no date, such as an ID found only in the ledger)
-    const v = (x: unknown, t: string) => x === null || x === undefined || (x === "" && t !== "VARCHAR") ? "NULL" : typeof x === "number" || typeof x === "boolean" ? String(x) : literal(String(x));
-    for (let i = 0; i < data.length; i += 200) await db.conn.run(`INSERT INTO ${ident(name)} VALUES ${data.slice(i, i + 200).map((r) => `(${r.map((x, j) => v(x, cols[j][1])).join(", ")})`).join(", ")}`);
-  };
-  const usd = (c: number) => (c / 100).toFixed(2);
-  const d = rep.result.depositToBank;
-  await make("exceptions", [["n", "INTEGER"], ["code", "VARCHAR"], ["severity", "VARCHAR"], ["direction", "VARCHAR"], ["grp", "VARCHAR"], ["payer", "VARCHAR"], ["date", "DATE"], ["cents", "BIGINT"], ["amount", "DECIMAL(18,2)"], ["payment_ids", "VARCHAR"], ["bank_rows", "VARCHAR"], ["detail", "VARCHAR"]],
-    rep.exceptions.map((e, i) => [i + 1, e.code, e.severity, dirs[e.code] ?? null, e.group, e.payer, e.date, e.cents, usd(e.cents), e.paymentIds.join(";"), e.bankRows.join(";"), e.detail]));
-  await make("matches", [["bank_row", "INTEGER"], ["bank_date", "DATE"], ["grp", "VARCHAR"], ["payer", "VARCHAR"], ["curve_date", "DATE"], ["lag_days", "INTEGER"], ["cents", "BIGINT"], ["amount", "DECIMAL(18,2)"], ["n_payments", "INTEGER"], ["payment_ids", "VARCHAR"]],
-    d.matched.map((m) => [m.bankRow, m.bankDate, m.group, m.payer, m.curveDate, m.lagDays, m.cents, usd(m.cents), m.paymentIds.length, m.paymentIds.join(";")]));
-  await make("unmatched_curve", [["grp", "VARCHAR"], ["payer", "VARCHAR"], ["date", "DATE"], ["cents", "BIGINT"], ["amount", "DECIMAL(18,2)"], ["n_payments", "INTEGER"], ["payment_ids", "VARCHAR"]],
-    d.unmatchedCurve.map((u) => [u.group, u.payer, u.date, u.cents, usd(u.cents), u.ids.length, u.ids.join(";")]));
-  await make("unmatched_bank", [["bank_row", "INTEGER"], ["date", "DATE"], ["grp", "VARCHAR"], ["payer", "VARCHAR"], ["kind", "VARCHAR"], ["originator", "VARCHAR"], ["cents", "BIGINT"], ["amount", "DECIMAL(18,2)"]],
-    d.unmatchedBank.map((b) => [b.row, b.date, b.group, b.payer, b.kind, b.originator, b.cents, usd(b.cents)]));
-  await make("group_totals", [["grp", "VARCHAR"], ["curve_amount", "DECIMAL(18,2)"], ["matched_amount", "DECIMAL(18,2)"], ["unmatched_amount", "DECIMAL(18,2)"]],
-    Object.entries(rep.result.totals).map(([g, t]) => [g, usd(t.curveCents), usd(t.matchedCents), usd(t.curveCents - t.matchedCents)]));
-  await make("file_checks", [["file", "VARCHAR"], ["adapter", "VARCHAR"], ["rows", "INTEGER"], ["check_name", "VARCHAR"], ["ok", "BOOLEAN"], ["detail", "VARCHAR"]],
-    rep.files.flatMap((f) => f.checks.length ? f.checks.map((c) => [f.name, f.adapter, f.rows, c.name, c.ok, c.detail]) : [[f.name, f.adapter, f.rows, "(no layout recognised)", f.adapter !== null, ""]]));
-  const short: Record<string, string> = { "bank/bofa": "bank", "pms/curve-hero/deposit-detail": "deposit", "pms/curve-hero/ledger": "ledger", "pms/curve-hero/patient-list": "patients",
-    "pms/curve-hero/procedures": "procedures", "financing/carecredit": "carecredit", "financing/cherry": "cherry", "financing/hfd": "hfd" };
-  for (const [id, t] of Object.entries(tables)) if (short[id]) await db.conn.run(`CREATE VIEW ${ident(short[id])} AS SELECT * FROM ${ident(t)}`);
-}
 
 function cell(x: unknown): string { return x === null || x === undefined ? "" : typeof x === "object" ? JSON.stringify(x) : String(x); }
 function toTable(cols: string[], rows: Record<string, unknown>[]): string {
@@ -319,34 +288,6 @@ async function status(): Promise<number> {
 
 // ---------------------------------------------------------------- fact sheets (DuckDB) and model questions
 
-/** One question's facts, computed by DuckDB from the reconciliation tables: classified, signed, totalled, ranked, with actions. */
-async function factSheet(db: Db, sections: string[], actions: Record<string, string>): Promise<FactSheet> {
-  const { rows } = await import("../src/db.ts");
-  const base = `(SELECT n, code, ${CATEGORY_SQL} AS category, CAST(date AS VARCHAR) AS d, cents, payer, grp, payment_ids, bank_rows FROM exceptions)`;
-  const facts: Fact[] = []; const seen = new Set<number>(); let t = 0, g = 0, f = 0;
-  const signedCents = (cat: string, c: number) => (cat === "loss" || cat === "timing" ? -Math.abs(c) : Math.abs(c));
-  for (const sec of sections) {
-    if (sec === "totals") {
-      for (const r of await rows<{ category: Category; items: number; cents: number }>(db, `SELECT category, CAST(count(*) AS INTEGER) AS items, CAST(sum(cents) AS BIGINT) AS cents FROM ${base} GROUP BY category ORDER BY ${RANK_SQL.replaceAll("category", "category")}`))
-        facts.push({ tag: `T${++t}`, kind: "T", category: r.category, items: Number(r.items), cents: signedCents(r.category, Number(r.cents)) });
-    } else if (sec === "groups") {
-      for (const r of await rows<{ grp: string; c: number; m: number }>(db, `SELECT grp, CAST(round(curve_amount * 100) AS BIGINT) AS c, CAST(round(matched_amount * 100) AS BIGINT) AS m FROM group_totals ORDER BY curve_amount DESC`))
-        facts.push({ tag: `G${++g}`, kind: "G", group: r.grp, curveCents: Number(r.c), matchedCents: Number(r.m), unmatchedCents: Number(r.c) - Number(r.m) });
-    } else {
-      const order = sec === "payers" ? "payer, abs(cents) DESC, d, n" : `${RANK_SQL}, abs(cents) DESC, d, n`;
-      for (const r of await rows<{ n: number; code: string; category: Category; d: string | null; cents: number; payer: string | null; grp: string | null; payment_ids: string; bank_rows: string }>(db,
-        `SELECT * FROM ${base} WHERE ${WHERE[sec]} ORDER BY ${order}`)) {
-        if (seen.has(Number(r.n))) continue; seen.add(Number(r.n));
-        const fact: ExceptionFact = { tag: `F${++f}`, kind: "F", category: r.category, code: r.code, date: r.d, cents: signedCents(r.category, Number(r.cents)), payer: r.payer, group: r.grp,
-          paymentIds: r.payment_ids ? r.payment_ids.split(";").filter(Boolean) : [], bankRows: r.bank_rows ? r.bank_rows.split(";").filter(Boolean).map(Number) : [],
-          action: actions[r.code] ?? "check this item" };
-        facts.push(fact);
-      }
-    }
-  }
-  const nF = facts.filter((x) => x.kind === "F").length;
-  return renderSheet(facts, `Scope: ${sections.join(", ")}. ${nF ? `${nF} exception fact(s), already ranked.` : "There are no exceptions of these kinds."}`);
-}
 
 async function askWithFacts(qs: Entry[], sheets: Map<string, FactSheet>): Promise<number> {
   if (opt["facts-only"]) {

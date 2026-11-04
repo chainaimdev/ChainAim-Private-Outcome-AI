@@ -1,245 +1,46 @@
 {
   "version": 1,
-  "notes": "Query bank for `npm run dental -- query` (services/analyst/scripts/dental.ts, Phase 4c). An entry with \"sql\" is one read-only SELECT, answered exactly by code (no model); an entry with \"question\" goes through reconcile-explain (gateway + model, every figure checked) and runs only when asked for by id or with --with-ask. Add entries freely; ids are unique, lowercase, hyphenated. TABLES: exceptions(code, severity, direction, grp, payer, date, cents, amount, payment_ids, bank_rows, detail) | matches(bank_row, bank_date, grp, payer, curve_date, lag_days, cents, amount, n_payments, payment_ids) | unmatched_curve(grp, payer, date, cents, amount, n_payments, payment_ids) | unmatched_bank(bank_row, date, grp, payer, kind, originator, cents, amount) | group_totals(grp, curve_amount, matched_amount, unmatched_amount) | file_checks(file, adapter, rows, check_name, ok, detail) | sources when present: deposit, ledger, bank, patients, procedures, carecredit, cherry, hfd (columns as the adapters load them; amounts in cents; names are never loaded). direction = bank minus Curve: negative = money missing from the bank, positive = extra money in the bank, neutral = no bank difference. Phase 4c: a \"question\" entry also names \"facts\", the sections of the DuckDB fact sheet it is answered from (totals, groups, losses, extra, timing, posting, payers, card, branch, eft, all); the model rewords only those facts and must cite [T#]/[G#]/[F#] for every figure.",
+  "notes": "Query bank for `npm run dental -- query` (services/analyst/scripts/dental.ts, Phase 4c). An entry with \"sql\" is one read-only SELECT, answered exactly by code (no model); an entry with \"question\" goes through reconcile-explain (gateway + model, every figure checked) and runs only when asked for by id or with --with-ask. Add entries freely; ids are unique, lowercase, hyphenated. TABLES: exceptions(code, severity, direction, grp, payer, date, cents, amount, payment_ids, bank_rows, detail) | matches(bank_row, bank_date, grp, payer, curve_date, lag_days, cents, amount, n_payments, payment_ids) | unmatched_curve(grp, payer, date, cents, amount, n_payments, payment_ids) | unmatched_bank(bank_row, date, grp, payer, kind, originator, cents, amount) | group_totals(grp, curve_amount, matched_amount, unmatched_amount) | file_checks(file, adapter, rows, check_name, ok, detail) | sources when present: deposit, ledger, bank, patients, procedures, carecredit, cherry, hfd (columns as the adapters load them; amounts in cents; names are never loaded). direction = bank minus Curve: negative = money missing from the bank, positive = extra money in the bank, neutral = no bank difference. Phase 4c: a \"question\" entry also names \"facts\", the sections of the DuckDB fact sheet it is answered from (totals, groups, losses, extra, timing, posting, payers, card, branch, eft, all); the model rewords only those facts and must cite [T#]/[G#]/[F#] for every figure. topics / topic / pair (DESIGN/xrplh-29 section 8): the console groups questions by topic; an exact (sql) entry and a model (question) entry that answer the same intent name each other in 'pair', and the console shows them as one question with 'Answer as: Table | Explained'. The CLI (npm run dental) ignores these fields.",
+  "topics": [{"id": "leaks", "label": "Leaks overview"}, {"id": "payers", "label": "Insurance payers & EFT"}, {"id": "deposits", "label": "Deposits & bank matching"}, {"id": "card", "label": "Card processing"}, {"id": "cash", "label": "Cash & branch deposits"}, {"id": "production", "label": "Production & patient balances"}, {"id": "financing", "label": "Financing"}, {"id": "actions", "label": "Office actions & controls"}, {"id": "quality", "label": "Data quality & posting"}],
   "queries": [
-    {
-      "id": "leak-summary",
-      "title": "Every leak type found: how many and how much",
-      "sql": "SELECT code, severity, direction, count(*) AS items, sum(amount) AS amount FROM exceptions GROUP BY ALL ORDER BY amount DESC"
-    },
-    {
-      "id": "money-at-risk",
-      "title": "Money missing from the bank vs extra unposted money vs timing items",
-      "sql": "SELECT coalesce(sum(amount) FILTER (WHERE severity = 'exception' AND direction = 'negative'), 0) AS missing_from_bank, coalesce(sum(amount) FILTER (WHERE direction = 'positive'), 0) AS in_bank_not_posted, coalesce(sum(amount) FILTER (WHERE severity = 'watch'), 0) AS timing_watch, count(*) FILTER (WHERE direction = 'neutral') AS posting_errors, count(*) AS items FROM exceptions"
-    },
-    {
-      "id": "top-leaks",
-      "title": "The 10 largest leaks, with dates and payment IDs",
-      "sql": "SELECT code, date, amount, payer, payment_ids, detail FROM exceptions ORDER BY amount DESC, date LIMIT 10"
-    },
-    {
-      "id": "leaks-by-day",
-      "title": "Leaks per day (which days to investigate)",
-      "sql": "SELECT date, count(*) AS items, sum(amount) AS amount, string_agg(DISTINCT code, ', ' ORDER BY code) AS codes FROM exceptions GROUP BY date ORDER BY date"
-    },
-    {
-      "id": "leaks-by-payer",
-      "title": "Leaks per insurance payer",
-      "sql": "SELECT payer, count(*) AS items, sum(amount) AS amount, string_agg(DISTINCT code, ', ' ORDER BY code) AS codes FROM exceptions WHERE payer IS NOT NULL GROUP BY payer ORDER BY amount DESC"
-    },
-    {
-      "id": "group-reconciliation",
-      "title": "Posted in Curve vs matched in the bank, per deposit group",
-      "sql": "SELECT grp, curve_amount, matched_amount, unmatched_amount, round(100.0 * matched_amount / nullif(curve_amount, 0), 2) AS matched_pct FROM group_totals ORDER BY curve_amount DESC"
-    },
-    {
-      "id": "unmatched-curve",
-      "title": "Curve deposit sums that reached no bank credit",
-      "sql": "SELECT grp, payer, date, amount, n_payments, payment_ids FROM unmatched_curve ORDER BY date, grp"
-    },
-    {
-      "id": "unmatched-bank",
-      "title": "Bank credits of a deposit group that match no Curve sum",
-      "sql": "SELECT bank_row, date, grp, payer, kind, amount FROM unmatched_bank ORDER BY date"
-    },
-    {
-      "id": "deposit-lag",
-      "title": "How many days each deposit group takes to reach the bank",
-      "sql": "SELECT grp, lag_days, count(*) AS credits, sum(amount) AS amount FROM matches GROUP BY ALL ORDER BY grp, lag_days"
-    },
-    {
-      "id": "card-batches",
-      "title": "Each card settlement (GB PY GLOBAL DEP) and the Curve day it pays",
-      "sql": "SELECT bank_date, curve_date, lag_days, amount, n_payments FROM matches WHERE grp = 'card_processor' ORDER BY bank_date"
-    },
-    {
-      "id": "eft-by-payer",
-      "title": "Insurance EFTs received per payer",
-      "sql": "SELECT payer, count(*) AS remittances, sum(amount) AS amount, min(bank_date) AS first, max(bank_date) AS last FROM matches WHERE grp = 'insurance_eft' GROUP BY payer ORDER BY amount DESC"
-    },
-    {
-      "id": "payer-remittances",
-      "title": "Direct Deposit payments posted in Curve, per payer and day",
-      "sql": "SELECT payer, date, count(DISTINCT payment_id) AS payments, sum(cents) / 100.0 AS amount FROM deposit WHERE method = 'Direct Deposit' GROUP BY ALL ORDER BY date, payer"
-    },
-    {
-      "id": "payments-by-method",
-      "title": "Payments posted per payment method",
-      "sql": "SELECT method, count(DISTINCT payment_id) AS payments, sum(cents) / 100.0 AS amount FROM deposit GROUP BY method ORDER BY amount DESC"
-    },
-    {
-      "id": "provider-production",
-      "title": "Production, adjustments, collections and collection rate per provider (ledger)",
-      "sql": "SELECT provider, coalesce(sum(cents) FILTER (WHERE entry = 'invoice'), 0) / 100.0 AS production, coalesce(-sum(cents) FILTER (WHERE entry = 'adjustment'), 0) / 100.0 AS adjustments, (coalesce(sum(cents) FILTER (WHERE entry = 'deposit'), 0) - coalesce(sum(cents) FILTER (WHERE entry = 'payment' AND coalesce(method, '') <> 'Account Credit'), 0)) / 100.0 AS collected, round(100.0 * (coalesce(sum(cents) FILTER (WHERE entry = 'deposit'), 0) - coalesce(sum(cents) FILTER (WHERE entry = 'payment' AND coalesce(method, '') <> 'Account Credit'), 0)) / nullif(sum(cents) FILTER (WHERE entry = 'invoice'), 0), 1) AS collected_pct FROM ledger GROUP BY provider ORDER BY production DESC"
-    },
-    {
-      "id": "writeoffs-by-type",
-      "title": "Write-offs and adjustments by type",
-      "sql": "SELECT method AS adjustment_type, count(*) AS items, -sum(cents) / 100.0 AS amount FROM ledger WHERE entry = 'adjustment' GROUP BY 1 ORDER BY amount DESC"
-    },
-    {
-      "id": "open-balances",
-      "title": "Largest open patient balances (invoices - payments - adjustments)",
-      "sql": "SELECT pt_pseudonym AS patient, sum(cents) / 100.0 AS balance FROM ledger WHERE entry IN ('invoice', 'payment', 'adjustment') GROUP BY 1 HAVING sum(cents) > 0 ORDER BY balance DESC LIMIT 15"
-    },
-    {
-      "id": "unapplied-credits",
-      "title": "Patient money received (Deposit) but not applied (Account Credit)",
-      "sql": "SELECT pt_pseudonym AS patient, coalesce(sum(cents) FILTER (WHERE entry = 'deposit'), 0) / 100.0 AS received, coalesce(-sum(cents) FILTER (WHERE entry = 'payment' AND method = 'Account Credit'), 0) / 100.0 AS applied, (coalesce(sum(cents) FILTER (WHERE entry = 'deposit'), 0) + coalesce(sum(cents) FILTER (WHERE entry = 'payment' AND method = 'Account Credit'), 0)) / 100.0 AS unapplied FROM ledger GROUP BY 1 HAVING unapplied <> 0 ORDER BY abs(unapplied) DESC"
-    },
-    {
-      "id": "bank-credits-by-source",
-      "title": "Bank credits by kind and originator",
-      "sql": "SELECT kind, originator, count(*) AS credits, sum(cents) / 100.0 AS amount FROM bank WHERE cents > 0 GROUP BY ALL ORDER BY amount DESC"
-    },
-    {
-      "id": "bank-debits-by-payee",
-      "title": "Bank debits by kind and originator (fees, chargebacks, payroll, ...)",
-      "sql": "SELECT kind, originator, des, count(*) AS debits, -sum(cents) / 100.0 AS amount FROM bank WHERE cents < 0 GROUP BY ALL ORDER BY amount DESC LIMIT 20"
-    },
-    {
-      "id": "card-fees",
-      "title": "Card processor fees (GLOBAL STL) and chargebacks (GLOBAL CBK) vs card deposits",
-      "sql": "SELECT coalesce(-sum(cents) FILTER (WHERE originator = 'GB PY' AND des = 'GLOBAL STL'), 0) / 100.0 AS fees, coalesce(-sum(cents) FILTER (WHERE originator = 'GB PY' AND des = 'GLOBAL CBK'), 0) / 100.0 AS chargebacks, coalesce(sum(cents) FILTER (WHERE originator = 'GB PY' AND des = 'GLOBAL DEP'), 0) / 100.0 AS card_deposits, round(100.0 * coalesce(-sum(cents) FILTER (WHERE originator = 'GB PY' AND des = 'GLOBAL STL'), 0) / nullif(sum(cents) FILTER (WHERE originator = 'GB PY' AND des = 'GLOBAL DEP'), 0), 2) AS fee_pct FROM bank"
-    },
-    {
-      "id": "procedures-by-code",
-      "title": "Procedures performed and their fees, by CDT code",
-      "sql": "SELECT procedure_code, count(*) AS procedures, sum(cents) / 100.0 AS fees FROM procedures GROUP BY 1 ORDER BY fees DESC"
-    },
-    {
-      "id": "procedures-without-invoice",
-      "title": "Procedures with no ledger invoice for that patient within 14 days (possible unbilled work)",
-      "sql": "WITH p AS (SELECT pr.date, pr.procedure_code, pr.cents, pl.patient_key FROM procedures pr LEFT JOIN (SELECT DISTINCT name_key, patient_key FROM patients) pl USING (name_key)) SELECT p.patient_key AS patient, p.date, p.procedure_code, p.cents / 100.0 AS fee, CASE WHEN p.patient_key IS NULL THEN 'patient not in the patient list' ELSE 'no invoice within 14 days' END AS reason FROM p WHERE p.patient_key IS NULL OR NOT EXISTS (SELECT 1 FROM ledger l WHERE l.entry = 'invoice' AND l.pt_pseudonym = p.patient_key AND l.date BETWEEN p.date AND p.date + 14) ORDER BY p.date"
-    },
-    {
-      "id": "hfd-financing",
-      "title": "HFD financing: treatment, discount and funded amount by kind",
-      "sql": "SELECT kind, count(*) AS rows, sum(gross_cents) / 100.0 AS treatment, sum(fee_cents) / 100.0 AS discount, sum(bank_cents) / 100.0 AS funded, round(100.0 * sum(fee_cents) / nullif(sum(gross_cents), 0), 2) AS discount_pct FROM hfd GROUP BY kind ORDER BY kind"
-    },
-    {
-      "id": "cherry-financing",
-      "title": "Cherry financing: gross, fees and net",
-      "sql": "SELECT kind, count(*) AS rows, sum(gross_cents) / 100.0 AS gross, sum(fee_cents) / 100.0 AS fees, sum(bank_cents) / 100.0 AS net, round(100.0 * sum(fee_cents) / nullif(sum(gross_cents), 0), 2) AS fee_pct FROM cherry GROUP BY kind ORDER BY kind"
-    },
-    {
-      "id": "file-checks",
-      "title": "Data-quality checks that failed, per file",
-      "sql": "SELECT file, adapter, check_name, detail FROM file_checks WHERE NOT ok ORDER BY file, check_name"
-    },
-    {
-      "id": "ask-priorities",
-      "title": "MODEL: which leaks lose money, the total, and what the office should do first",
-      "question": "Which leaks lose money, how much in total, and what should the office do first? Rank by amount.",
-      "facts": [
-        "totals",
-        "losses"
-      ]
-    },
-    {
-      "id": "ask-payers",
-      "title": "MODEL: which insurance payers owe money, for which remittance dates",
-      "question": "Which insurance payers owe us money, for which remittance dates and amounts, and what should we ask each payer?",
-      "facts": [
-        "payers"
-      ]
-    },
-    {
-      "id": "ask-loss-vs-timing",
-      "title": "MODEL: separate real losses from timing items and posting errors",
-      "question": "Separate real losses from timing items and from posting errors that move no money. Give the amount of each group.",
-      "facts": [
-        "totals",
-        "all"
-      ]
-    },
-    {
-      "id": "ask-linked",
-      "title": "MODEL: which exceptions could explain each other",
-      "question": "Could any exceptions explain each other (for example an unposted bank credit and a missing EFT of the same payer, or a short batch and a duplicate posting)? Say which, with dates and amounts, and how sure the evidence makes you.",
-      "facts": [
-        "all"
-      ]
-    },
-    {
-      "id": "ask-office-actions",
-      "title": "MODEL: a checklist for the office manager, one line per exception",
-      "question": "Write a checklist for the office manager: one line per exception with the action to take in Curve, at the bank or with the payer.",
-      "facts": [
-        "all"
-      ]
-    },
-    {
-      "id": "ask-controls",
-      "title": "MODEL: which process controls would have prevented these leaks",
-      "question": "Which daily or weekly office controls would have prevented these exceptions? Tie each control to the exceptions it would have caught.",
-      "facts": [
-        "all"
-      ]
-    },
-    {
-      "id": "ask-reconciled",
-      "title": "MODEL: did the period reconcile, per deposit group",
-      "question": "For each deposit group (card processor, branch deposit, insurance EFT), say how much Curve posted, how much reached the bank, and how much did not. Use only the group totals in the evidence.",
-      "facts": [
-        "groups"
-      ]
-    },
-    {
-      "id": "ask-missing-money",
-      "title": "MODEL: every amount missing from the bank, with its payment IDs",
-      "question": "List every exception where money is missing from the bank (negative amount, not watch): code, date, amount and payment IDs or bank rows, largest first.",
-      "facts": [
-        "losses"
-      ]
-    },
-    {
-      "id": "ask-extra-money",
-      "title": "MODEL: money in the bank that Curve never posted",
-      "question": "Which bank credits are not posted in Curve (positive amounts)? Give the date, amount, payer code and bank row, and say what the office should post.",
-      "facts": [
-        "extra"
-      ]
-    },
-    {
-      "id": "ask-eft-followup",
-      "title": "MODEL: insurance EFT follow-up per payer",
-      "question": "For each insurance payer with a missing EFT or an unposted bank credit, say the remittance date, amount and payment IDs, and what to ask the payer.",
-      "facts": [
-        "payers"
-      ]
-    },
-    {
-      "id": "ask-card-batches",
-      "title": "MODEL: card settlements that do not match the day's card payments",
-      "question": "Which card settlements do not match the day's card payments? Give the date, the settlement amount, the Curve amount and the difference, and the likely reasons to check.",
-      "facts": [
-        "card"
-      ]
-    },
-    {
-      "id": "ask-branch-deposits",
-      "title": "MODEL: branch / ATM deposits: cash and checks not deposited in full",
-      "question": "Which branch deposits are short of the day's cash and checks? Name any check that was never deposited, with its payment ID and amount.",
-      "facts": [
-        "branch"
-      ]
-    },
-    {
-      "id": "ask-posting-errors",
-      "title": "MODEL: posting errors in Curve that move no money",
-      "question": "Which exceptions are posting errors in Curve that move no money (for example a reference mismatch or a duplicate posting)? Say what to correct in Curve for each.",
-      "facts": [
-        "posting"
-      ]
-    },
-    {
-      "id": "ask-timing",
-      "title": "MODEL: timing items to watch, not losses",
-      "question": "Which items are timing only (watch), how late are they, and when should they become a loss to chase?",
-      "facts": [
-        "timing"
-      ]
-    }
+    {"id": "leak-summary", "title": "Every leak type found: how many and how much", "topic": "leaks", "pair": "ask-priorities", "sql": "SELECT code, severity, direction, count(*) AS items, sum(amount) AS amount FROM exceptions GROUP BY ALL ORDER BY amount DESC"},
+    {"id": "money-at-risk", "title": "Money missing from the bank vs extra unposted money vs timing items", "topic": "leaks", "pair": "ask-loss-vs-timing", "sql": "SELECT coalesce(sum(amount) FILTER (WHERE severity = 'exception' AND direction = 'negative'), 0) AS missing_from_bank, coalesce(sum(amount) FILTER (WHERE direction = 'positive'), 0) AS in_bank_not_posted, coalesce(sum(amount) FILTER (WHERE severity = 'watch'), 0) AS timing_watch, count(*) FILTER (WHERE direction = 'neutral') AS posting_errors, count(*) AS items FROM exceptions"},
+    {"id": "top-leaks", "title": "The 10 largest leaks, with dates and payment IDs", "topic": "leaks", "sql": "SELECT code, date, amount, payer, payment_ids, detail FROM exceptions ORDER BY amount DESC, date LIMIT 10"},
+    {"id": "leaks-by-day", "title": "Leaks per day (which days to investigate)", "topic": "leaks", "sql": "SELECT date, count(*) AS items, sum(amount) AS amount, string_agg(DISTINCT code, ', ' ORDER BY code) AS codes FROM exceptions GROUP BY date ORDER BY date"},
+    {"id": "leaks-by-payer", "title": "Leaks per insurance payer", "topic": "payers", "pair": "ask-payers", "sql": "SELECT payer, count(*) AS items, sum(amount) AS amount, string_agg(DISTINCT code, ', ' ORDER BY code) AS codes FROM exceptions WHERE payer IS NOT NULL GROUP BY payer ORDER BY amount DESC"},
+    {"id": "group-reconciliation", "title": "Posted in Curve vs matched in the bank, per deposit group", "topic": "deposits", "pair": "ask-reconciled", "sql": "SELECT grp, curve_amount, matched_amount, unmatched_amount, round(100.0 * matched_amount / nullif(curve_amount, 0), 2) AS matched_pct FROM group_totals ORDER BY curve_amount DESC"},
+    {"id": "unmatched-curve", "title": "Curve deposit sums that reached no bank credit", "topic": "deposits", "pair": "ask-missing-money", "sql": "SELECT grp, payer, date, amount, n_payments, payment_ids FROM unmatched_curve ORDER BY date, grp"},
+    {"id": "unmatched-bank", "title": "Bank credits of a deposit group that match no Curve sum", "topic": "deposits", "pair": "ask-extra-money", "sql": "SELECT bank_row, date, grp, payer, kind, amount FROM unmatched_bank ORDER BY date"},
+    {"id": "deposit-lag", "title": "How many days each deposit group takes to reach the bank", "topic": "deposits", "sql": "SELECT grp, lag_days, count(*) AS credits, sum(amount) AS amount FROM matches GROUP BY ALL ORDER BY grp, lag_days"},
+    {"id": "card-batches", "title": "Each card settlement (GB PY GLOBAL DEP) and the Curve day it pays", "topic": "card", "pair": "ask-card-batches", "sql": "SELECT bank_date, curve_date, lag_days, amount, n_payments FROM matches WHERE grp = 'card_processor' ORDER BY bank_date"},
+    {"id": "eft-by-payer", "title": "Insurance EFTs received per payer", "topic": "payers", "pair": "ask-eft-followup", "sql": "SELECT payer, count(*) AS remittances, sum(amount) AS amount, min(bank_date) AS first, max(bank_date) AS last FROM matches WHERE grp = 'insurance_eft' GROUP BY payer ORDER BY amount DESC"},
+    {"id": "payer-remittances", "title": "Direct Deposit payments posted in Curve, per payer and day", "topic": "payers", "sql": "SELECT payer, date, count(DISTINCT payment_id) AS payments, sum(cents) / 100.0 AS amount FROM deposit WHERE method = 'Direct Deposit' GROUP BY ALL ORDER BY date, payer"},
+    {"id": "payments-by-method", "title": "Payments posted per payment method", "topic": "cash", "sql": "SELECT method, count(DISTINCT payment_id) AS payments, sum(cents) / 100.0 AS amount FROM deposit GROUP BY method ORDER BY amount DESC"},
+    {"id": "provider-production", "title": "Production, adjustments, collections and collection rate per provider (ledger)", "topic": "production", "sql": "SELECT provider, coalesce(sum(cents) FILTER (WHERE entry = 'invoice'), 0) / 100.0 AS production, coalesce(-sum(cents) FILTER (WHERE entry = 'adjustment'), 0) / 100.0 AS adjustments, (coalesce(sum(cents) FILTER (WHERE entry = 'deposit'), 0) - coalesce(sum(cents) FILTER (WHERE entry = 'payment' AND coalesce(method, '') <> 'Account Credit'), 0)) / 100.0 AS collected, round(100.0 * (coalesce(sum(cents) FILTER (WHERE entry = 'deposit'), 0) - coalesce(sum(cents) FILTER (WHERE entry = 'payment' AND coalesce(method, '') <> 'Account Credit'), 0)) / nullif(sum(cents) FILTER (WHERE entry = 'invoice'), 0), 1) AS collected_pct FROM ledger GROUP BY provider ORDER BY production DESC"},
+    {"id": "writeoffs-by-type", "title": "Write-offs and adjustments by type", "topic": "production", "sql": "SELECT method AS adjustment_type, count(*) AS items, -sum(cents) / 100.0 AS amount FROM ledger WHERE entry = 'adjustment' GROUP BY 1 ORDER BY amount DESC"},
+    {"id": "open-balances", "title": "Largest open patient balances (invoices - payments - adjustments)", "topic": "production", "sql": "SELECT pt_pseudonym AS patient, sum(cents) / 100.0 AS balance FROM ledger WHERE entry IN ('invoice', 'payment', 'adjustment') GROUP BY 1 HAVING sum(cents) > 0 ORDER BY balance DESC LIMIT 15"},
+    {"id": "unapplied-credits", "title": "Patient money received (Deposit) but not applied (Account Credit)", "topic": "production", "sql": "SELECT pt_pseudonym AS patient, coalesce(sum(cents) FILTER (WHERE entry = 'deposit'), 0) / 100.0 AS received, coalesce(-sum(cents) FILTER (WHERE entry = 'payment' AND method = 'Account Credit'), 0) / 100.0 AS applied, (coalesce(sum(cents) FILTER (WHERE entry = 'deposit'), 0) + coalesce(sum(cents) FILTER (WHERE entry = 'payment' AND method = 'Account Credit'), 0)) / 100.0 AS unapplied FROM ledger GROUP BY 1 HAVING unapplied <> 0 ORDER BY abs(unapplied) DESC"},
+    {"id": "bank-credits-by-source", "title": "Bank credits by kind and originator", "topic": "deposits", "sql": "SELECT kind, originator, count(*) AS credits, sum(cents) / 100.0 AS amount FROM bank WHERE cents > 0 GROUP BY ALL ORDER BY amount DESC"},
+    {"id": "bank-debits-by-payee", "title": "Bank debits by kind and originator (fees, chargebacks, payroll, ...)", "topic": "deposits", "sql": "SELECT kind, originator, des, count(*) AS debits, -sum(cents) / 100.0 AS amount FROM bank WHERE cents < 0 GROUP BY ALL ORDER BY amount DESC LIMIT 20"},
+    {"id": "card-fees", "title": "Card processor fees (GLOBAL STL) and chargebacks (GLOBAL CBK) vs card deposits", "topic": "card", "sql": "SELECT coalesce(-sum(cents) FILTER (WHERE originator = 'GB PY' AND des = 'GLOBAL STL'), 0) / 100.0 AS fees, coalesce(-sum(cents) FILTER (WHERE originator = 'GB PY' AND des = 'GLOBAL CBK'), 0) / 100.0 AS chargebacks, coalesce(sum(cents) FILTER (WHERE originator = 'GB PY' AND des = 'GLOBAL DEP'), 0) / 100.0 AS card_deposits, round(100.0 * coalesce(-sum(cents) FILTER (WHERE originator = 'GB PY' AND des = 'GLOBAL STL'), 0) / nullif(sum(cents) FILTER (WHERE originator = 'GB PY' AND des = 'GLOBAL DEP'), 0), 2) AS fee_pct FROM bank"},
+    {"id": "procedures-by-code", "title": "Procedures performed and their fees, by CDT code", "topic": "production", "sql": "SELECT procedure_code, count(*) AS procedures, sum(cents) / 100.0 AS fees FROM procedures GROUP BY 1 ORDER BY fees DESC"},
+    {"id": "procedures-without-invoice", "title": "Procedures with no ledger invoice for that patient within 14 days (possible unbilled work)", "topic": "production", "sql": "WITH p AS (SELECT pr.date, pr.procedure_code, pr.cents, pl.patient_key FROM procedures pr LEFT JOIN (SELECT DISTINCT name_key, patient_key FROM patients) pl USING (name_key)) SELECT p.patient_key AS patient, p.date, p.procedure_code, p.cents / 100.0 AS fee, CASE WHEN p.patient_key IS NULL THEN 'patient not in the patient list' ELSE 'no invoice within 14 days' END AS reason FROM p WHERE p.patient_key IS NULL OR NOT EXISTS (SELECT 1 FROM ledger l WHERE l.entry = 'invoice' AND l.pt_pseudonym = p.patient_key AND l.date BETWEEN p.date AND p.date + 14) ORDER BY p.date"},
+    {"id": "hfd-financing", "title": "HFD financing: treatment, discount and funded amount by kind", "topic": "financing", "sql": "SELECT kind, count(*) AS rows, sum(gross_cents) / 100.0 AS treatment, sum(fee_cents) / 100.0 AS discount, sum(bank_cents) / 100.0 AS funded, round(100.0 * sum(fee_cents) / nullif(sum(gross_cents), 0), 2) AS discount_pct FROM hfd GROUP BY kind ORDER BY kind"},
+    {"id": "cherry-financing", "title": "Cherry financing: gross, fees and net", "topic": "financing", "sql": "SELECT kind, count(*) AS rows, sum(gross_cents) / 100.0 AS gross, sum(fee_cents) / 100.0 AS fees, sum(bank_cents) / 100.0 AS net, round(100.0 * sum(fee_cents) / nullif(sum(gross_cents), 0), 2) AS fee_pct FROM cherry GROUP BY kind ORDER BY kind"},
+    {"id": "file-checks", "title": "Data-quality checks that failed, per file", "topic": "quality", "sql": "SELECT file, adapter, check_name, detail FROM file_checks WHERE NOT ok ORDER BY file, check_name"},
+    {"id": "ask-priorities", "title": "MODEL: which leaks lose money, the total, and what the office should do first", "topic": "leaks", "pair": "leak-summary", "question": "Which leaks lose money, how much in total, and what should the office do first? Rank by amount.", "facts": ["totals", "losses"]},
+    {"id": "ask-payers", "title": "MODEL: which insurance payers owe money, for which remittance dates", "topic": "payers", "pair": "leaks-by-payer", "question": "Which insurance payers owe us money, for which remittance dates and amounts, and what should we ask each payer?", "facts": ["payers"]},
+    {"id": "ask-loss-vs-timing", "title": "MODEL: separate real losses from timing items and posting errors", "topic": "leaks", "pair": "money-at-risk", "question": "Separate real losses from timing items and from posting errors that move no money. Give the amount of each group.", "facts": ["totals", "all"]},
+    {"id": "ask-linked", "title": "MODEL: which exceptions could explain each other", "topic": "leaks", "question": "Could any exceptions explain each other (for example an unposted bank credit and a missing EFT of the same payer, or a short batch and a duplicate posting)? Say which, with dates and amounts, and how sure the evidence makes you.", "facts": ["all"]},
+    {"id": "ask-office-actions", "title": "MODEL: a checklist for the office manager, one line per exception", "topic": "actions", "question": "Write a checklist for the office manager: one line per exception with the action to take in Curve, at the bank or with the payer.", "facts": ["all"]},
+    {"id": "ask-controls", "title": "MODEL: which process controls would have prevented these leaks", "topic": "actions", "question": "Which daily or weekly office controls would have prevented these exceptions? Tie each control to the exceptions it would have caught.", "facts": ["all"]},
+    {"id": "ask-reconciled", "title": "MODEL: did the period reconcile, per deposit group", "topic": "deposits", "pair": "group-reconciliation", "question": "For each deposit group (card processor, branch deposit, insurance EFT), say how much Curve posted, how much reached the bank, and how much did not. Use only the group totals in the evidence.", "facts": ["groups"]},
+    {"id": "ask-missing-money", "title": "MODEL: every amount missing from the bank, with its payment IDs", "topic": "deposits", "pair": "unmatched-curve", "question": "List every exception where money is missing from the bank (negative amount, not watch): code, date, amount and payment IDs or bank rows, largest first.", "facts": ["losses"]},
+    {"id": "ask-extra-money", "title": "MODEL: money in the bank that Curve never posted", "topic": "deposits", "pair": "unmatched-bank", "question": "Which bank credits are not posted in Curve (positive amounts)? Give the date, amount, payer code and bank row, and say what the office should post.", "facts": ["extra"]},
+    {"id": "ask-eft-followup", "title": "MODEL: insurance EFT follow-up per payer", "topic": "payers", "pair": "eft-by-payer", "question": "For each insurance payer with a missing EFT or an unposted bank credit, say the remittance date, amount and payment IDs, and what to ask the payer.", "facts": ["payers"]},
+    {"id": "ask-card-batches", "title": "MODEL: card settlements that do not match the day's card payments", "topic": "card", "pair": "card-batches", "question": "Which card settlements do not match the day's card payments? Give the date, the settlement amount, the Curve amount and the difference, and the likely reasons to check.", "facts": ["card"]},
+    {"id": "ask-branch-deposits", "title": "MODEL: branch / ATM deposits: cash and checks not deposited in full", "topic": "cash", "question": "Which branch deposits are short of the day's cash and checks? Name any check that was never deposited, with its payment ID and amount.", "facts": ["branch"]},
+    {"id": "ask-posting-errors", "title": "MODEL: posting errors in Curve that move no money", "topic": "quality", "question": "Which exceptions are posting errors in Curve that move no money (for example a reference mismatch or a duplicate posting)? Say what to correct in Curve for each.", "facts": ["posting"]},
+    {"id": "ask-timing", "title": "MODEL: timing items to watch, not losses", "topic": "deposits", "question": "Which items are timing only (watch), how late are they, and when should they become a loss to chase?", "facts": ["timing"]}
   ]
 }

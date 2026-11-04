@@ -142,7 +142,7 @@ const PAGE = new URL("./index.html", import.meta.url);
 const ANALYST = flags.analyst!.replace(/\/+$/, "");
 const CHAIN_QUERY = flags["chain-query"]!.replace(/\/+$/, "");
 const CHAIN_ROUTES = new Set(["healthz", "chains", "vaults", "loan-terms", "export"]);
-const ANALYST_ROUTES = new Set(["profile", "recipe", "analyze", "status", "evidence", "verify", "relations", "sql"]);
+const ANALYST_ROUTES = new Set(["profile", "recipe", "analyze", "status", "evidence", "verify", "relations", "sql", "pack-queries", "pack-run"]);
 const ROUTES: Record<string, string> = { scan: "/v1/privacy/scan", mask: "/v1/privacy/mask", chat: "/v1/chat/completions" };
 
 // "Open page" links: HTML pages found in model answers, kept in memory only, served sandboxed.
@@ -169,6 +169,8 @@ const viewHeaders = { "content-security-policy": VIEW_CSP, "x-content-type-optio
 // ---- From data folder ------------------------------------------------------------------------------
 // The page only NAMES a folder or file; this server decides. Only paths inside allowedRoots (the data config, re-read on
 // every call so edits need no restart) are listed or read, after resolving links. Read-only; nothing is created.
+/** The repository root: relative paths in the data config and in config/datasets.json are resolved against it. */
+const REPO = fileURLToPath(new URL("../../", import.meta.url));
 type DataConfig = { allowedRoots: string[]; defaultFolder: string; extensions: string[]; maxBytes: Record<string, number>; exclude: RegExp[]; excludeText: string[]; maxFiles: number; defaultMode: "whole" | "pick"; hideFolders: RegExp[] };
 const fold = (p: string): string => (process.platform === "win32" ? p.toLowerCase() : p);
 function within(child: string, root: string): boolean {
@@ -184,9 +186,10 @@ function readDataConfig(): { config?: DataConfig; error?: string } {
   } catch (e) {
     return { error: `Data folders are off: cannot read ${flags["data-config"]} (${(e as Error).message}). Copy config/data-sources.example.json to config/data-sources.json.` };
   }
-  const roots: string[] = Array.isArray(raw.allowedRoots) ? raw.allowedRoots.filter((r: unknown) => typeof r === "string" && isAbsolute(r)).map((r: string) => resolve(r)) : [];
-  if (!roots.length) return { error: "Data folders are off: allowedRoots must list at least one absolute folder." };
-  const defaultFolder = typeof raw.defaultFolder === "string" && isAbsolute(raw.defaultFolder) ? resolve(raw.defaultFolder) : roots[0];
+  // A relative path is relative to the repository (e.g. "sample-data"), so one config works on every PC (DESIGN/xrplh-29).
+  const roots: string[] = Array.isArray(raw.allowedRoots) ? raw.allowedRoots.filter((r: unknown) => typeof r === "string" && r.trim()).map((r: string) => resolve(REPO, r)) : [];
+  if (!roots.length) return { error: "Data folders are off: allowedRoots must list at least one folder." };
+  const defaultFolder = typeof raw.defaultFolder === "string" && raw.defaultFolder.trim() ? resolve(REPO, raw.defaultFolder) : roots[0];
   if (!roots.some((r) => within(defaultFolder, r))) return { error: `Data folders are off: defaultFolder ${defaultFolder} is not inside allowedRoots.` };
   const extensions: string[] = (Array.isArray(raw.extensions) ? raw.extensions : [".csv", ".tsv", ".txt", ".pdf"]).map((e: unknown) => String(e).toLowerCase());
   const maxBytes: Record<string, number> = {};
@@ -393,6 +396,76 @@ createServer(async (req, res) => {
       res.writeHead(r.status, { "content-type": r.headers.get("content-type") ?? "application/json", ...(disposition ? { "content-disposition": disposition } : {}), ...dataHeaders });
       res.end(Buffer.from(await r.arrayBuffer()));
       return;
+    }
+    // Datasets for tab 03 (config/datasets.json, DESIGN/xrplh-29): each dataset's folder under the chosen root, whether it exists,
+    // its data files and (for subfolders) the sets inside. Only folders inside allowedRoots are listed. GET only, read-only.
+    if (api === "datasets" && !name && req.method === "GET") {
+      if (!hostOk(req)) return dataJson(res, 403, { error: `open the console as http://127.0.0.1:${PORT}` });
+      const { config, error } = readDataConfig();
+      if (!config) return dataJson(res, 503, { error });
+      let reg: { roots: Record<string, string>; datasets: Record<string, any>[] };
+      try { const t = readFileSync(join(REPO, "config", "datasets.json"), "utf8"); reg = JSON.parse(t.charCodeAt(0) === 0xfeff ? t.slice(1) : t); }
+      catch (e) { return dataJson(res, 503, { error: `cannot read config/datasets.json: ${(e as Error).message}` }); }
+      const rootId = url.searchParams.get("root") ?? "samples";
+      if (!reg.roots?.[rootId]) return dataJson(res, 400, { error: `unknown root ${rootId} (known: ${Object.keys(reg.roots ?? {}).join(", ")})` });
+      const root = resolve(REPO, reg.roots[rootId]);
+      const allowed = config.allowedRoots.some((r) => within(root, r));
+      const isData = (n: string) => config.extensions.includes(extname(n).toLowerCase()) && !config.exclude.some((re) => re.test(n));
+      const filesIn = async (dir: string) => { try { return (await readdir(dir, { withFileTypes: true })).filter((e) => e.isFile() && isData(e.name)).map((e) => e.name).sort(); } catch { return null; } };
+      const out = [];
+      for (const d of reg.datasets ?? []) {
+        const folder = resolve(root, d.folder);
+        const ok = allowed && within(folder, root);
+        const files = ok ? await filesIn(folder) : null;
+        let sets: { name: string; files: string[] }[] = [];
+        if (ok && d.subfolders && files !== null) {
+          const walk = async (dir: string, rel: string, depth: number): Promise<void> => {
+            let ents; try { ents = await readdir(dir, { withFileTypes: true }); } catch { return; }
+            for (const e of ents.filter((x) => x.isDirectory() && !x.isSymbolicLink() && !config.hideFolders.some((re) => re.test(x.name))).sort((a, b) => a.name.localeCompare(b.name))) {
+              const sub = join(dir, e.name), r = rel ? `${rel}/${e.name}` : e.name, f = await filesIn(sub);
+              if (f && f.length) sets.push({ name: r, files: f });
+              if (depth < 2) await walk(sub, r, depth + 1);
+            }
+          };
+          await walk(folder, "", 1);
+        }
+        out.push({ id: d.id, label: d.label, description: d.description, engine: d.engine, pack: d.pack ?? null, templates: Array.isArray(d.templates) ? d.templates : [],
+          templatesFrom: d.templates && !Array.isArray(d.templates) ? d.templates.from : null, defaultSubfolder: d.defaultSubfolder ?? null, setLabels: d.setLabels ?? {}, fileKinds: d.fileKinds ?? {},
+          folder, exists: files !== null, allowed: ok, files: files ?? [], sets });
+      }
+      return dataJson(res, 200, { root: rootId, rootPath: root, rootAllowed: allowed, roots: Object.keys(reg.roots), datasets: out });
+    }
+    // Domain-pack question (DESIGN/xrplh-29): the analyst builds the fact sheet, the model rewords it through the gateway (masked),
+    // the analyst checks every figure; a failed check shows the computed facts instead of the answer.
+    if (api === "packask" && !name && req.method === "POST") {
+      if (!hostOk(req)) return dataJson(res, 403, { error: `open the console as http://127.0.0.1:${PORT}` });
+      let b: Record<string, unknown>;
+      try { b = JSON.parse(await readBody(req)); } catch { return dataJson(res, 400, { error: "body must be JSON" }); }
+      const model = typeof b.model === "string" && b.model ? b.model : DEFAULT_MODEL;
+      if (!/^[\w.-]+\/[\w.:-]+$/.test(model)) return dataJson(res, 400, { error: `model must look like provider/name, got ${model}` });
+      if (typeof b.folder !== "string" || typeof b.id !== "string") return dataJson(res, 400, { error: "folder and id are required" });
+      const post = async (route: string, body: unknown) => {
+        let r: Response;
+        try { r = await fetch(`${ANALYST}/${route}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body), signal: AbortSignal.timeout(CROSSASK_TIMEOUT_MS) }); }
+        catch { throw new Error(`the analyst is not running at ${ANALYST}: start test-console\\start-analyst.cmd and keep its window open`); }
+        const j = await r.json() as Record<string, any>;
+        if (!r.ok) throw new Error(j.error ?? `analyst HTTP ${r.status}`);
+        return j;
+      };
+      try {
+        const run = await post("pack-run", { folder: b.folder, pack: b.pack, ids: [b.id] });
+        const q = run.questions?.[0];
+        if (!q) return dataJson(res, 400, { error: `${b.id} is not a model question in the pack's query bank` });
+        const t0 = Date.now();
+        const reply = await gatewayChat({ url: GATEWAY, key: KEY, timeoutMs: CROSSASK_TIMEOUT_MS })([{ role: "system", content: run.system }, { role: "user", content: `${q.question}\n\n${q.sheet}` }], model);
+        const seconds = Math.round((Date.now() - t0) / 100) / 10;
+        const answer = reply.text.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
+        const check = await post("pack-verify", { runId: run.runId, id: b.id, answer: reply.text });
+        return dataJson(res, 200, { id: q.id, title: q.title, question: q.question, files: run.files, facts: q.facts, sheetChars: q.sheet.length,
+          served: { model: reply.model ?? null, zone: reply.zone ?? null, seconds }, answer, check: { ok: check.ok, checked: check.checked, problems: check.problems }, computed: check.computed });
+      } catch (e) {
+        return dataJson(res, 502, { error: (e as Error).message });
+      }
     }
     // Ask across files: relations and query on this PC (analyst), the model through the gateway (headers first, the result only with phrase llm).
     if (api === "crossask" && !name && req.method === "POST") {

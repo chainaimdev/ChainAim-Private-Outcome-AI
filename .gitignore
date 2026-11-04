@@ -4,6 +4,10 @@
 !.env.example
 secrets/
 data/
+# inputs and outputs are never committed (DESIGN/xrplh-29): sample datasets, and anything a program writes.
+# Real data lives outside the repository (C:\PRIV-AI-DATA\chainaim3003). Guarded by scripts/test/repo-hygiene.test.ts.
+sample-data/
+runtime/
 # local model weights (large, downloaded)
 models
 models/

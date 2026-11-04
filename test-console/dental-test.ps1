@@ -19,13 +19,13 @@ It only calls the existing entry point (npm run dental -- ..., services/analyst/
   -Kind             sql | model | all (default all)
   -Ids              comma-separated ids from -Bank (default: every entry of the chosen kind)
   -Bank             query bank (default config\domain-packs\finance\rcm\dental\queries.json)
-  -DataRoot         data root; default env DENTAL_DATA_ROOT, else <repo>\data\pms\dent-pms-c-sample (git-ignored)
+  -DataRoot         data root; default env DENTAL_DATA_ROOT, else <repo>\sample-data\prms\dent-prms-c-sample (git-ignored)
   -Regenerate       run "sets" even when the scenario folder exists
   -SkipSets         never run "sets" (fails if the scenario folder is missing)
   -TimeoutSec       per model question (default 600)
   -CooldownWaitSec  wait once when the gateway benches a model (default 35; 0 = do not wait)
   -NoDocker         never start containers (model questions fail if the gateway is down)
-  -LogDir           where the run log goes (default data\pms\_runs, git-ignored with data/)
+  -LogDir           where the run log goes (default runtime\logs\dental, git-ignored)
   -GatewayMode      switch-models.ps1 mode that serves -Model (default: gatewayMode in -ProfileFile, else ollama). Before the
                     model step the script asks the running gateway for its models; only when one of -Model is missing
                     does it run switch-models.ps1 -To <mode> -SkipTest (recreates ca-gateway).
@@ -51,7 +51,7 @@ param(
   [int]$TimeoutSec = 600,
   [int]$CooldownWaitSec = 35,
   [switch]$NoDocker,
-  [string]$LogDir = "data\pms\_runs",
+  [string]$LogDir = "runtime\logs\dental",
   [ValidateSet("spinner", "lines")][string]$Progress = "spinner",
   [string]$GatewayMode = "",
   [switch]$ForceSwitch,
@@ -113,7 +113,7 @@ $runAsk = ($Kind -in @("model", "all")) -and ($want.Count -eq 0 -or $askIds.Coun
 
 # Data root: flag, else environment, else the repository default. The flag is set for this process only.
 if ($DataRoot) { $env:DENTAL_DATA_ROOT = [IO.Path]::GetFullPath((Join-Path $repo $DataRoot)) }
-$root = if ($env:DENTAL_DATA_ROOT) { $env:DENTAL_DATA_ROOT } else { Join-Path $repo "data\pms\dent-pms-c-sample" }
+$root = if ($env:DENTAL_DATA_ROOT) { $env:DENTAL_DATA_ROOT } else { Join-Path $repo "sample-data\prms\dent-prms-c-sample" }
 $scenarioDir = Join-Path $root (Join-Path $Set $Scenario)
 $target = "$Set/$Scenario"
 

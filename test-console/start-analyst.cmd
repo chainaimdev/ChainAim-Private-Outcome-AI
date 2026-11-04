@@ -14,5 +14,5 @@ if not exist "node_modules\@duckdb\node-api\package.json" (
     call npm install || (echo npm install failed. & pause & exit /b 1)
   )
 )
-node src\main.ts %*
+node src\main.ts --work-dir "%~dp0..\runtime\analyst" %*
 pause

@@ -162,6 +162,8 @@ export const settingsOf = (f: Flags): Settings => ({
 });
 
 // ---- data folders (config/data-sources.json, shared with the test console) -------------------------
+/** The repository root: relative paths in the data config are resolved against it. */
+export const REPO_ROOT = fileURLToPath(new URL("../../../", import.meta.url));
 export type DataConfig = { allowedRoots: string[]; exclude: RegExp[]; hideFolders: RegExp[]; workDir: string };
 export const ANALYST_EXTENSIONS = [".csv", ".tsv", ".json"];
 
@@ -186,8 +188,9 @@ export function readDataConfig(flags: Flags): DataConfig {
   } catch (e) {
     throw new HttpError(503, `cannot read the data config ${flags.dataConfig} (${(e as Error).message}); copy config/data-sources.example.json to config/data-sources.json`);
   }
-  const roots: string[] = Array.isArray(raw.allowedRoots) ? raw.allowedRoots.filter((r: unknown) => typeof r === "string" && isAbsolute(r)).map((r: string) => resolve(r)) : [];
-  if (!roots.length) throw new HttpError(503, "the data config has no allowedRoots (absolute folders)");
+  // A relative root is relative to the repository (e.g. "sample-data"), so one config works on every PC (DESIGN/xrplh-29).
+  const roots: string[] = Array.isArray(raw.allowedRoots) ? raw.allowedRoots.filter((r: unknown) => typeof r === "string" && r.trim()).map((r: string) => resolve(REPO_ROOT, r)) : [];
+  if (!roots.length) throw new HttpError(503, "the data config has no allowedRoots");
   const exclude = (Array.isArray(raw.exclude) ? raw.exclude.map(String) : []).map(globToRe);
   const hideFolders = (Array.isArray(raw.hideFolders) ? raw.hideFolders.map(String) : ["_*"]).map(globToRe);
   return { allowedRoots: roots, exclude, hideFolders, workDir: flags.workDir ?? join(roots[0], "_analyst") };
