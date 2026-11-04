@@ -71,8 +71,8 @@ export async function buildTables(db: Db, tables: Readonly<Record<string, string
     Object.entries(rep.result.totals).map(([g, t]) => [g, usd(t.curveCents), usd(t.matchedCents), usd(t.curveCents - t.matchedCents)]));
   await make("file_checks", [["file", "VARCHAR"], ["adapter", "VARCHAR"], ["rows", "INTEGER"], ["check_name", "VARCHAR"], ["ok", "BOOLEAN"], ["detail", "VARCHAR"]],
     rep.files.flatMap((f) => f.checks.length ? f.checks.map((c) => [f.name, f.adapter, f.rows, c.name, c.ok, c.detail]) : [[f.name, f.adapter, f.rows, "(no layout recognised)", f.adapter !== null, ""]]));
-  const short: Record<string, string> = { "bank/bofa": "bank", "pms/curve-hero/deposit-detail": "deposit", "pms/curve-hero/ledger": "ledger", "pms/curve-hero/patient-list": "patients",
-    "pms/curve-hero/procedures": "procedures", "financing/carecredit": "carecredit", "financing/cherry": "cherry", "financing/hfd": "hfd" };
+  const short: Record<string, string> = { "bank/bofa": "bank", "prms/curve-hero/deposit-detail": "deposit", "prms/curve-hero/ledger": "ledger", "prms/curve-hero/patient-list": "patients",
+    "prms/curve-hero/procedures": "procedures", "financing/carecredit": "carecredit", "financing/cherry": "cherry", "financing/hfd": "hfd" };
   for (const [id, t] of Object.entries(tables)) if (short[id]) await db.conn.run(`CREATE VIEW ${ident(short[id])} AS SELECT * FROM ${ident(t)}`);
 }
 

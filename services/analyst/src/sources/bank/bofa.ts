@@ -1,5 +1,5 @@
 /**
- * Bank of America online-banking CSV export (layout read from the owner's sample BANK-ST-JUL-OCT-2026.csv; config/pms/
+ * Bank of America online-banking CSV export (layout read from the owner's sample BANK-ST-JUL-OCT-2026.csv; config/prms/
  * curve-bofa-835-schema.csv rows for bofa_statement). Layout: a summary block ("Description,,Summary Amt.", Beginning balance,
  * Total credits, Total debits, Ending balance), a blank line, then "Date,Description,Amount,Running Bal.,..." and one row per
  * transaction. The first detail row repeats the beginning balance with no amount and is skipped.

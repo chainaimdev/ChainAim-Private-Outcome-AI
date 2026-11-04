@@ -30,7 +30,7 @@ const signOf = (code: string) => (EV.directions[code] === "negative" ? "-" : EV.
 // ---------------------------------------------------------------- A. pure
 const report = (exceptions: ReconcileReport["exceptions"], matched = 30): ReconcileReport => ({
   pack: "finance/rcm/dental", packChain: ["finance-generic", "finance/rcm", "finance/rcm/dental"], checksFailed: 0,
-  files: [{ name: "BankDep-Det-X.csv", adapter: "pms/curve-hero/deposit-detail", rows: 10, checks: [{ name: "unique id+provider", ok: true, detail: "" }] }],
+  files: [{ name: "BankDep-Det-X.csv", adapter: "prms/curve-hero/deposit-detail", rows: 10, checks: [{ name: "unique id+provider", ok: true, detail: "" }] }],
   exceptions,
   result: { ledgerToDeposit: null, totals: { card_processor: { curveCents: 1234567, matchedCents: 1230000 } },
     depositToBank: { matched: Array.from({ length: matched }, (_, i) => ({ bankRow: 10 + i, bankDate: "2024-09-03", cents: 10000 + i, group: "card_processor", payer: null,

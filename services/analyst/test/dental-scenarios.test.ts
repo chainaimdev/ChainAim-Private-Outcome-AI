@@ -1,6 +1,6 @@
 /**
  * L3 (POS: no false alarms) and L4 (NEG: each planted leak found with its cause, amount, date and payment IDs) on every
- * generated scenario folder under <DENTAL_DATA_ROOT>/SET-2/ (Phase 4c layouts; default data/pms/dent-pms-c-sample/SET-2/) that has an answer key (git-ignored; made by
+ * generated scenario folder under <DENTAL_DATA_ROOT>/SET-2/ (Phase 4c layouts; default sample-data/prms/dent-prms-c-sample/SET-2/) that has an answer key (git-ignored; made by
  * tools/dental-synth/gen_dental_set.py --scenario pos|neg-all|neg-<leak>). Skipped with the reason when none exist.
  */
 import { test } from "node:test";

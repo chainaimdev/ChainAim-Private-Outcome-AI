@@ -153,7 +153,7 @@ node scripts\ask.ts --folder C:\PRIV-AI-DATA\pm\clinic-a --question "Paid amount
 ## Deposit reconciliation (finance/rcm/dental, Phase 4a)
 
 `POST /reconcile {"folder": "<abs>", "pack"?: "finance/rcm/dental"}` detects each file's layout with the source adapters
-(`src/sources/`: `bank/bofa`, `pms/curve-hero/{deposit-detail, ledger, patient-list}`), loads every row, locks file access
+(`src/sources/`: `bank/bofa`, `prms/curve-hero/{deposit-detail, ledger, patient-list}`), loads every row, locks file access
 and runs `src/engines/deposit-match.ts`:
 
 1. ledger <-> deposit detail: exact by payment ID, amounts with the crosswalk's sign rule (Account Credit rows are internal);
@@ -172,7 +172,7 @@ ID_NOT_IN_DEPOSIT, LEDGER_AMOUNT_MISMATCH, UNMAPPED_METHOD. Method names and the
 Not covered yet: X12 835 remittances and the Global Payments settlement report (no samples in the repo).
 
 ```powershell
-node scripts/reconcile-check.ts --folder C:\...\data\pms\dent-pms-c-sample\SET-2\POS   # PASS = answer key reproduced
+node scripts/reconcile-check.ts --folder C:\...\sample-data\prms\dent-prms-c-sample\SET-2\POS   # PASS = answer key reproduced
 ```
 
 ### Synthetic dental sets without Python (Phase 4b-2)

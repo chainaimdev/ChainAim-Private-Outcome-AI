@@ -16,7 +16,7 @@ export const CURVE_PROCEDURE_HEADERS = ["Procedure Name", "Procedure Code", "Cos
   "Provider Full Name", "Full Name", "Prim. Carrier Name"];
 
 export const CURVE_PROCEDURES: SourceAdapter = {
-  id: "pms/curve-hero/procedures",
+  id: "prms/curve-hero/procedures",
   title: "Curve Hero procedure report (completed procedures and their fees)",
   columns: ["row", "date", "procedure_code", "description", "tooth", "clinic", "carrier", "name_key", "cents"],
   detect: (lines) => sameHeadersPadded(lines, CURVE_PROCEDURE_HEADERS),

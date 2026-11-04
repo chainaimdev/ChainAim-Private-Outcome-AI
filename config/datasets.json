@@ -24,7 +24,7 @@
       ]
     },
     {
-      "id": "dental-pms",
+      "id": "dental-prms",
       "label": "Practice Management - Dental",
       "folder": "prms/dent-prms-c-sample",
       "engine": "domain-pack",

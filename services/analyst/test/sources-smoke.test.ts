@@ -22,13 +22,13 @@ const registry = () => { const r = new SourceRegistry(); for (const a of BUILT_I
 test("each SET-2 file is recognised by exactly one adapter: deposit detail, ledger, bank statement, patient list", { skip }, async () => {
   const r = registry();
   const got = Object.fromEntries(await Promise.all(readdirSync(SET).filter((n) => n.endsWith(".csv")).map(async (n) => [n, r.detect(await firstLines(join(SET, n))).map((a) => a.id)])));
-  assert.deepEqual(got, { "BANK-ST-SET1-POS.csv": ["bank/bofa"], "BankDep-Det-SET1-POS.csv": ["pms/curve-hero/deposit-detail"],
-    "Per-Sum-SET1-POS.csv": ["pms/curve-hero/ledger"], "SPR-patientlist-SET1-POS.csv": ["pms/curve-hero/patient-list"] });
+  assert.deepEqual(got, { "BANK-ST-SET1-POS.csv": ["bank/bofa"], "BankDep-Det-SET1-POS.csv": ["prms/curve-hero/deposit-detail"],
+    "Per-Sum-SET1-POS.csv": ["prms/curve-hero/ledger"], "SPR-patientlist-SET1-POS.csv": ["prms/curve-hero/patient-list"] });
 });
 
 test("every adapter loads its SET-2 file and all of the file's own checks pass (bank totals, running balance, keys)", { skip }, async () => {
   const r = registry();
-  for (const [file, id] of [["BANK-ST-SET1-POS.csv", "bank/bofa"], ["BankDep-Det-SET1-POS.csv", "pms/curve-hero/deposit-detail"], ["Per-Sum-SET1-POS.csv", "pms/curve-hero/ledger"]] as const) {
+  for (const [file, id] of [["BANK-ST-SET1-POS.csv", "bank/bofa"], ["BankDep-Det-SET1-POS.csv", "prms/curve-hero/deposit-detail"], ["Per-Sum-SET1-POS.csv", "prms/curve-hero/ledger"]] as const) {
     const db = await openDb();
     try {
       const loaded = await r.get(id).load(db, "t", join(SET, file), { patientNameFormat: "last_first" });

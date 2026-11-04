@@ -1,7 +1,7 @@
 # dental-synth: synthetic Curve + BofA data sets for payment reconciliation
 
 Generates and checks **synthetic** dental-practice data in the exact layouts of the Curve Hero
-and Bank of America sample exports in `data/pms/dent-pms-c-sample/sample-pms-fin/` (Phase 4c layouts: patient key `PTn` in
+and Bank of America sample exports in `sample-data/prms/dent-prms-c-sample/sample-prms-fin/` (Phase 4c layouts: patient key `PTn` in
 every Curve file, name columns filled with synthetic names, 4-column BofA statement, `GB PY DES:GLOBAL DEP` card credits). The sets are test fixtures
 for the reconciliation engine (Curve postings vs. bank deposits vs. payer remits).
 All names, IDs, amounts and bank descriptions are made up.
@@ -17,13 +17,13 @@ Related, committed reference (not generated):
 
 | File | Purpose |
 |---|---|
-| `config/pms/curve-bofa-835-schema.csv` | Every column in the Curve and BofA samples (format, canonical field, join key, privacy), plus X12 835 fields (from the standard; not yet checked against a real 835) |
-| `config/pms/header-crosswalk.csv` | One row per concept: which column in each file holds it and the rule that links them |
+| `config/prms/curve-bofa-835-schema.csv` | Every column in the Curve and BofA samples (format, canonical field, join key, privacy), plus X12 835 fields (from the standard; not yet checked against a real 835) |
+| `config/prms/header-crosswalk.csv` | One row per concept: which column in each file holds it and the rule that links them |
 
 ## Output (git-ignored: `data/` is in `.gitignore`)
 
 ```
-data/pms/dent-pms-c-sample/<SET>/<SCENARIO>/   (SET-2 = Phase 4c layouts; tests read DENTAL_DATA_ROOT, default data/pms/dent-pms-c-sample)
+sample-data/prms/dent-prms-c-sample/<SET>/<SCENARIO>/   (SET-2 = Phase 4c layouts; tests read DENTAL_DATA_ROOT, default sample-data/prms/dent-prms-c-sample)
   BankDep-Det-<TAG>.csv        Curve payments (bank deposit detail layout)
   Per-Sum-<TAG>.csv            Curve transaction ledger
   SPR-patientlist-<TAG>.csv    Curve patient list
@@ -37,8 +37,8 @@ data/pms/dent-pms-c-sample/<SET>/<SCENARIO>/   (SET-2 = Phase 4c layouts; tests 
 ## Run (from the repo root, Python 3.9+)
 
 ```powershell
-python tools\dental-synth\gen_dental_set.py --out data\pms\dent-pms-c-sample\SET-2\POS
-python tools\dental-synth\verify_set.py --dir data\pms\dent-pms-c-sample\SET-2\POS --tag SET1-POS
+python tools\dental-synth\gen_dental_set.py --out sample-data\prms\dent-prms-c-sample\SET-2\POS
+python tools\dental-synth\verify_set.py --dir sample-data\prms\dent-prms-c-sample\SET-2\POS --tag SET1-POS
 ```
 
 Expected: the verifier prints `ALL CHECKS PASS` (SET-2/POS: 159 deposit IDs, 45 bank credits, 45 matches; files keep the tag SET1, set by --set-name).
@@ -113,7 +113,7 @@ values. Exit 1 when layouts differ.
 ## Quick commands (repo root, no full paths)
 
 `npm run dental -- <command>` resolves set names under the data root (`DENTAL_DATA_ROOT`, default
-`data/pms/dent-pms-c-sample`) and runs the existing scripts (`services/analyst/scripts/dental.ts`; the TypeScript generator is
+`sample-data/prms/dent-prms-c-sample`) and runs the existing scripts (`services/analyst/scripts/dental.ts`; the TypeScript generator is
 byte-identical to `gen_dental_set.py`, so no Python is needed):
 
 ```

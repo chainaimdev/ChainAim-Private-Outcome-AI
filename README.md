@@ -88,7 +88,7 @@ npm ci --prefix services/analyst
 ```powershell
 npm run dental -- sets
 ```
-Generates the 10 test scenarios (1 positive, 9 with planted leaks) into `data\pms\dent-pms-c-sample\SET-2\` and checks each
+Generates the 10 test scenarios (1 positive, 9 with planted leaks) into `sample-data\prms\dent-prms-c-sample\SET-2\` and checks each
 against its answer key. Expected: ten `PASS` lines, then `dental sets: 10/10 scenarios pass`.
 
 ```powershell

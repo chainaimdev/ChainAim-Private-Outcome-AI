@@ -14,7 +14,7 @@ import { readSourceConfigs } from "./core/source-configs.ts";
 import { firstLines } from "./sources/lines.ts";
 
 /** Source ids the deposit reconciliation needs (required) or uses when present. */
-export const RECONCILE_SOURCES = { deposit: "pms/curve-hero/deposit-detail", bank: "bank/bofa", ledger: "pms/curve-hero/ledger", patients: "pms/curve-hero/patient-list" } as const;
+export const RECONCILE_SOURCES = { deposit: "prms/curve-hero/deposit-detail", bank: "bank/bofa", ledger: "prms/curve-hero/ledger", patients: "prms/curve-hero/patient-list" } as const;
 
 export type FileReport = { name: string; adapter: string | null; rows: number | null; checks: LoadedSource["checks"] };
 export type ReconcileReport = { pack: string; packChain: string[]; files: FileReport[]; checksFailed: number; exceptions: Exception[]; result: ReconcileResult };

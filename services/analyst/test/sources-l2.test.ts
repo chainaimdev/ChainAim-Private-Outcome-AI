@@ -13,10 +13,10 @@ import { openDb, rows } from "../src/db.ts";
 import { firstLines } from "../src/sources/lines.ts";
 import { BUILT_IN_SOURCES } from "../src/sources/index.ts";
 import { BOFA_STATEMENT } from "../src/sources/bank/bofa.ts";
-import { CURVE_DEPOSIT_DETAIL } from "../src/sources/pms/curve-hero/deposit-detail.ts";
-import { CURVE_LEDGER } from "../src/sources/pms/curve-hero/ledger.ts";
-import { CURVE_PATIENT_LIST } from "../src/sources/pms/curve-hero/patient-list.ts";
-import { CURVE_PROCEDURES, CURVE_PROCEDURE_HEADERS } from "../src/sources/pms/curve-hero/procedures.ts";
+import { CURVE_DEPOSIT_DETAIL } from "../src/sources/prms/curve-hero/deposit-detail.ts";
+import { CURVE_LEDGER } from "../src/sources/prms/curve-hero/ledger.ts";
+import { CURVE_PATIENT_LIST } from "../src/sources/prms/curve-hero/patient-list.ts";
+import { CURVE_PROCEDURES, CURVE_PROCEDURE_HEADERS } from "../src/sources/prms/curve-hero/procedures.ts";
 import { existsSync } from "node:fs";
 import { SAMPLES } from "./data-root.ts";
 
@@ -120,9 +120,9 @@ test("layout detection: each sample header picks exactly one adapter; an unrelat
   const r = new SourceRegistry(); for (const a of BUILT_IN_SOURCES) r.register(a);
   const ids = async (p: string) => r.detect(await firstLines(p)).map((a) => a.id);
   assert.deepEqual(await ids(file("d1.csv", BANK)), ["bank/bofa"]);
-  assert.deepEqual(await ids(file("d2.csv", [LEDGER_H], "\r\n", true)), ["pms/curve-hero/ledger"]);
-  assert.deepEqual(await ids(file("d3.csv", [DEP_H], "\r\n", true)), ["pms/curve-hero/deposit-detail"]);
-  assert.deepEqual(await ids(file("d5.csv", [CURVE_PROCEDURE_HEADERS.join(",") + ",,,,"], "\r\n", true)), ["pms/curve-hero/procedures"]);
+  assert.deepEqual(await ids(file("d2.csv", [LEDGER_H], "\r\n", true)), ["prms/curve-hero/ledger"]);
+  assert.deepEqual(await ids(file("d3.csv", [DEP_H], "\r\n", true)), ["prms/curve-hero/deposit-detail"]);
+  assert.deepEqual(await ids(file("d5.csv", [CURVE_PROCEDURE_HEADERS.join(",") + ",,,,"], "\r\n", true)), ["prms/curve-hero/procedures"]);
   // Phase 4a.2: the CareCredit header used here before is now a real layout (financing/carecredit); an unrelated header instead
   assert.deepEqual(await ids(file("d4.csv", ["Merchant ID,Date,Name,Amount,Promo Code,Status"])), []);
 });

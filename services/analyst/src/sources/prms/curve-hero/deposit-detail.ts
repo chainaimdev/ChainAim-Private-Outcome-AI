@@ -1,6 +1,6 @@
 /**
  * Curve Hero "bank deposit detail" export (layout read from the owner's sample BankDep-Det-Sim-Sample-5-fin-csv.csv, Phase 4c;
- * config/pms/curve-bofa-835-schema.csv): one row per posted payment. Row key = ID + Provider (one ID can repeat once per
+ * config/prms/curve-bofa-835-schema.csv): one row per posted payment. Row key = ID + Provider (one ID can repeat once per
  * provider). Payer stays (a carrier code, or the self-pay name used for EFT aliasing); Responsible Party (a name) is never
  * loaded — matching uses the patient key in RP (PT1, ...).
  */
@@ -11,7 +11,7 @@ import { sameHeaders } from "../../lines.ts";
 export const CURVE_DEPOSIT_HEADERS = ["Date", "ID", "Payment Posted By", "Payment Type", "Ref. ID", "Ext. ID", "Payer", "RP", "Responsible Party", "Provider", "Posted At Clinic", "Amount"];
 
 export const CURVE_DEPOSIT_DETAIL: SourceAdapter = {
-  id: "pms/curve-hero/deposit-detail",
+  id: "prms/curve-hero/deposit-detail",
   title: "Curve Hero bank deposit detail (one row per posted payment)",
   columns: ["row", "date", "payment_id", "method", "ref_id", "ext_id", "payer", "rp_pseudonym", "provider", "clinic", "cents"],
   detect: (lines) => sameHeaders(lines, CURVE_DEPOSIT_HEADERS),

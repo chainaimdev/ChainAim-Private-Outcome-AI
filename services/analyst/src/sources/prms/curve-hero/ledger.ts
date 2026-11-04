@@ -1,5 +1,5 @@
 /**
- * Curve Hero ledger / period summary export (layout read from the owner's sample Per-Sum-Sample-7-anon-fin-csv.csv, Phase 4c; config/pms
+ * Curve Hero ledger / period summary export (layout read from the owner's sample Per-Sum-Sample-7-anon-fin-csv.csv, Phase 4c; config/prms
  * header-crosswalk.csv). "Details" carries the entry: "Payment #<id>, <method>" (amount negative), "Deposit #<id>, <method>"
  * (amount positive), "Adjustment #<id>, <type>" (PPO Write-off, Credit Adjustment, Write Off), "Invoice #<id>"; a reference
  * may follow " - ". (Phase 4a first read the Adjustment form without its ID; the ledger's own check caught it on SET-1.) The patient name columns
@@ -12,7 +12,7 @@ import { sameHeaders } from "../../lines.ts";
 export const CURVE_LEDGER_HEADERS = ["Date", "Details", "Patient", "Patient-LM", "Patient-FM", "Default dentist", "Provider of service", "Clinic", "Posted at clinic", "Amount"];
 
 export const CURVE_LEDGER: SourceAdapter = {
-  id: "pms/curve-hero/ledger",
+  id: "prms/curve-hero/ledger",
   title: "Curve Hero ledger / period summary (invoices, payments, deposits, adjustments)",
   columns: ["row", "date", "entry", "entry_id", "method", "ref", "pt_pseudonym", "provider", "clinic", "cents"],
   detect: (lines) => sameHeaders(lines, CURVE_LEDGER_HEADERS),

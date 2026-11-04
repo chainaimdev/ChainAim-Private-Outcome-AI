@@ -22,7 +22,7 @@ export function nameKeyExpr(column: string, format: SourceOptions["patientNameFo
 }
 
 export const CURVE_PATIENT_LIST: SourceAdapter = {
-  id: "pms/curve-hero/patient-list",
+  id: "prms/curve-hero/patient-list",
   title: "Curve Hero patient list (reference: status, clinic, doctor, plans)",
   columns: ["row", "patient_key", "name_key", "status", "clinic", "doctor", "primary_plan", "secondary_plan"],
   detect: (lines) => sameHeaders(lines, CURVE_PATIENT_HEADERS),
