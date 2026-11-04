@@ -22,11 +22,12 @@ const app = createWebApp({
   pageFile: new URL("../public/index.html", import.meta.url),
   cookiesFile: new URL("../public/cookies.html", import.meta.url),
   walletFile: new URL("../public/wallet.js", import.meta.url),
+  ...(config.nearWallet ? { nearWallet: config.nearWallet, nearWalletFile: new URL("../public/near-wallet.js", import.meta.url) } : {}),
   log: (line) => console.log(JSON.stringify({ ts: new Date().toISOString(), ...line })),
 });
 
 const server = serve({ fetch: app.fetch, port: config.port, hostname: config.host }, (info) => {
-  console.log(`[privacybuddy] listening on http://${config.host}:${info.port}  paywall=${config.paywallUrl}  buyers pay with Crossmark`);
+  console.log(`[privacybuddy] listening on http://${config.host}:${info.port}  paywall=${config.paywallUrl}  buyers pay with Crossmark${config.nearWallet ? ` or ${config.nearWallet} (USDC on NEAR, when the paywall offers it)` : ""}`);
 });
 const shutdown = () => server.close(() => process.exit(0));
 process.on("SIGINT", shutdown);

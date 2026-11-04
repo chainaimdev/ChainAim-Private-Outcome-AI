@@ -10,9 +10,9 @@ import { createWebApp } from "./app.ts";
 import { loadConfig } from "./config.ts";
 
 function createFetch(): (request: Request) => Response | Promise<Response> {
-  let paywallUrl: string;
+  let config: ReturnType<typeof loadConfig>;
   try {
-    paywallUrl = loadConfig(process.env).paywallUrl;
+    config = loadConfig(process.env);
   } catch (e) {
     // A missing or bad PAYWALL_URL answers every request with the reason instead of crashing the function.
     const message = (e as Error).message;
@@ -20,7 +20,9 @@ function createFetch(): (request: Request) => Response | Promise<Response> {
     return () => Response.json({ error: { message: `This deployment is not configured: ${message}` } }, { status: 500 });
   }
   const app = createWebApp({
-    paywallUrl,
+    paywallUrl: config.paywallUrl,
+    // The CSP and /api/wallets follow NEAR_WALLET; near-wallet.js itself is a static file.
+    ...(config.nearWallet ? { nearWallet: config.nearWallet } : {}),
     // Served as static files on Vercel, never by this function.
     maskModule: "",
     pageFile: new URL("../public/index.html", import.meta.url),

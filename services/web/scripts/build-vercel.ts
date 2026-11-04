@@ -7,7 +7,8 @@
  */
 import { copyFileSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { SECURITY_HEADERS } from "../src/app.ts";
+import { securityHeaders } from "../src/app.ts";
+import { nearWalletFrom } from "../src/config.ts";
 import { browserMaskModule } from "../src/mask.ts";
 
 const root = new URL("../", import.meta.url);
@@ -17,13 +18,16 @@ const MAX_DURATION_S = 300;
 
 const path = (url: URL) => fileURLToPath(url);
 
-export async function buildVercel(outDir: URL = new URL(".vercel/output/", root)): Promise<void> {
+/** env: NEAR_WALLET, read at build time, sets the static files' CSP and ships near-wallet.js; the functions read it again at run time. */
+export async function buildVercel(outDir: URL = new URL(".vercel/output/", root), env: NodeJS.ProcessEnv = process.env): Promise<void> {
+  const nearWallet = nearWalletFrom(env);
   rmSync(outDir, { recursive: true, force: true });
   const staticDir = new URL("static/", outDir);
   mkdirSync(staticDir, { recursive: true });
   copyFileSync(new URL("public/index.html", root), new URL("index.html", staticDir));
   copyFileSync(new URL("public/cookies.html", root), new URL("cookies.html", staticDir));
   copyFileSync(new URL("public/wallet.js", root), new URL("wallet.js", staticDir));
+  if (nearWallet) copyFileSync(new URL("public/near-wallet.js", root), new URL("near-wallet.js", staticDir));
   writeFileSync(new URL("client-mask.js", staticDir), browserMaskModule());
 
   const { build } = await import("esbuild");
@@ -47,7 +51,7 @@ export async function buildVercel(outDir: URL = new URL(".vercel/output/", root)
     writeFileSync(new URL(".vc-config.json", dir), JSON.stringify(vc, null, 2));
   }
 
-  const config = { version: 3, routes: [{ src: "/(.*)", headers: SECURITY_HEADERS, continue: true }, { handle: "filesystem" }] };
+  const config = { version: 3, routes: [{ src: "/(.*)", headers: securityHeaders(nearWallet), continue: true }, { handle: "filesystem" }] };
   writeFileSync(new URL("config.json", outDir), JSON.stringify(config, null, 2));
   console.log(`[build-vercel] wrote ${path(outDir)}`);
 }

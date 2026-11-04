@@ -7,6 +7,7 @@
 import { readFile } from "node:fs/promises";
 import { Hono } from "hono";
 import { NETWORKS } from "./balance.ts";
+import { NEAR_WALLETS, type NearWalletId } from "./near-wallets.ts";
 import { MAX_MASKED_CHARS, registerRelay } from "./relay.ts";
 import { networkInfo, networkName, readQuote, type Quote } from "./wallets.ts";
 
@@ -14,17 +15,34 @@ export { MAX_MASKED_CHARS };
 
 const CHAT = "/v1/chat/completions";
 const SCAN = "/v1/privacy/scan";
-const CSP =
-  "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self' data:; " +
-  // The browser reads balances and payment details from the public XRP Ledger servers, over WebSocket.
-  `connect-src 'self' ${Object.values(NETWORKS).map((n) => new URL(n.wsUrl).origin).join(" ")}; ` +
-  "frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
-/** Sent on every response; scripts/build-vercel.ts gives Vercel's static files the same set. */
-export const SECURITY_HEADERS: Record<string, string> = {
-  "content-security-policy": CSP,
-  "x-content-type-options": "nosniff",
-  "referrer-policy": "no-referrer",
-};
+/**
+ * The page's CSP. With no NEAR wallet it is the Crossmark-only policy, unchanged.
+ * With one, connect-src gains exactly that wallet's hosts and frame-src is
+ * stated with them (it fell back to default-src 'self' before); nothing else
+ * changes. src/near-wallets.ts lists the hosts, docs/NEAR-GATES.md says why.
+ */
+function csp(nearWallet?: NearWalletId): string {
+  const near = nearWallet ? NEAR_WALLETS[nearWallet] : undefined;
+  return (
+    "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self' data:; " +
+    // The browser reads balances and payment details from the public XRP Ledger servers, over WebSocket.
+    `connect-src 'self' ${Object.values(NETWORKS).map((n) => new URL(n.wsUrl).origin).join(" ")}${near ? ` ${near.connectSrc.join(" ")}` : ""}; ` +
+    (near ? `frame-src 'self' ${near.frameSrc.join(" ")}; ` : "") +
+    "frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
+  );
+}
+
+/** The headers sent on every response; scripts/build-vercel.ts gives Vercel's static files the same set. */
+export function securityHeaders(nearWallet?: NearWalletId): Record<string, string> {
+  return {
+    "content-security-policy": csp(nearWallet),
+    "x-content-type-options": "nosniff",
+    "referrer-policy": "no-referrer",
+  };
+}
+
+/** The headers with no NEAR wallet: Crossmark and RLUSD only. */
+export const SECURITY_HEADERS: Record<string, string> = securityHeaders();
 
 export type Deps = {
   paywallUrl: string;
@@ -36,6 +54,10 @@ export type Deps = {
   cookiesFile: URL;
   /** public/wallet.js: the Crossmark and x402 browser bundle (npm run build:wallet). */
   walletFile: URL;
+  /** NEAR_WALLET: the NEAR wallet the page may run. Unset: no NEAR button and the Crossmark-only CSP. */
+  nearWallet?: NearWalletId;
+  /** public/near-wallet.js (npm run build:near-wallet), served only when nearWallet is set. */
+  nearWalletFile?: URL;
   fetcher?: typeof fetch;
   now?: () => number;
   /** Status, sizes and timing only. Never text, placeholders, the map or the payment. */
@@ -67,10 +89,11 @@ export function createWebApp(deps: Deps): Hono {
   });
 
   const app = new Hono();
+  const headers = deps.nearWallet ? securityHeaders(deps.nearWallet) : SECURITY_HEADERS;
 
   app.use("*", async (c, next) => {
     await next();
-    for (const [name, value] of Object.entries(SECURITY_HEADERS)) c.header(name, value);
+    for (const [name, value] of Object.entries(headers)) c.header(name, value);
   });
 
   app.get("/", async (c) => c.html(await readFile(deps.pageFile, "utf8")));
@@ -82,6 +105,14 @@ export function createWebApp(deps: Deps): Hono {
     if (js === undefined) return c.json({ error: { message: "public/wallet.js is not built. Run npm run build:wallet." } }, 404);
     return c.body(js, 200, { "content-type": "text/javascript; charset=utf-8", "cache-control": "no-cache" });
   });
+  if (deps.nearWallet) {
+    const file = deps.nearWalletFile ?? new URL("../public/near-wallet.js", import.meta.url);
+    app.get("/near-wallet.js", async (c) => {
+      const js = await readFile(file, "utf8").catch(() => undefined);
+      if (js === undefined) return c.json({ error: { message: "public/near-wallet.js is not built. Run npm run build:near-wallet." } }, 404);
+      return c.body(js, 200, { "content-type": "text/javascript; charset=utf-8", "cache-control": "no-cache" });
+    });
+  }
 
   app.get("/api/wallets", async (c) => {
     const q = await quote().catch(() => undefined);
@@ -95,6 +126,9 @@ export function createWebApp(deps: Deps): Hono {
       issuer: q?.quote.issuer ?? null,
       payTo: q ? { address: q.quote.payTo } : null,
       prices: { chat: q?.priced ? q.quote.price : null },
+      // Only when the paywall also offers USDC on NEAR (PAY_RAILS=xrpl,near); the amount is whole USDC base units.
+      // wallet: the NEAR wallet this page may run (NEAR_WALLET); without it the page shows no NEAR button.
+      ...(q?.quote.near ? { near: { ...q.quote.near, priced: q.priced, ...(deps.nearWallet ? { wallet: deps.nearWallet, walletName: NEAR_WALLETS[deps.nearWallet].name } : {}) } } : {}),
     });
   });
 

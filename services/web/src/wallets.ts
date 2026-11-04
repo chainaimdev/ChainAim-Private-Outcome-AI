@@ -5,7 +5,13 @@
  */
 import { NETWORKS } from "./balance.ts";
 
-export type Quote = { payTo: string; network: string; asset: string; issuer: string; price: number };
+/**
+ * The paywall's NEAR USDC offer, when it has one (PAY_RAILS=xrpl,near): network
+ * near:testnet or near:mainnet, the USDC contract, the pay-to account, and the
+ * price in whole base units (the contract's decimals say what one unit is).
+ */
+export type NearQuote = { network: string; asset: string; payTo: string; amount: string };
+export type Quote = { payTo: string; network: string; asset: string; issuer: string; price: number; near?: NearQuote };
 export type NetworkName = "testnet" | "mainnet" | "unknown";
 
 export function networkName(caip2: string): NetworkName {
@@ -24,13 +30,20 @@ export async function readQuote(paywallUrl: string, route: string, fetcher: type
   });
   const header = r.headers.get("payment-required");
   if (r.status !== 402 || !header) throw new Error(`the paywall did not quote a price (HTTP ${r.status})`);
-  const accepts = (JSON.parse(Buffer.from(header, "base64").toString("utf8")) as { accepts?: Record<string, unknown>[] }).accepts?.[0];
+  const offers = (JSON.parse(Buffer.from(header, "base64").toString("utf8")) as { accepts?: Record<string, unknown>[] }).accepts ?? [];
+  // With several rails the RLUSD offer is the one on an xrpl: network, wherever it is in the list.
+  const accepts = offers.find((a) => typeof a?.network === "string" && a.network.startsWith("xrpl:")) ?? offers[0];
   const issuer = (accepts?.extra as { issuer?: unknown } | null | undefined)?.issuer;
   if (!accepts || typeof accepts.payTo !== "string" || typeof accepts.network !== "string" || typeof accepts.asset !== "string" || typeof issuer !== "string" || !Number.isFinite(Number(accepts.amount))) {
     throw new Error("the paywall's quote is not in the expected shape");
   }
+  const n = offers.find((a) => typeof a?.network === "string" && a.network.startsWith("near:"));
+  const near =
+    n && typeof n.asset === "string" && typeof n.payTo === "string" && typeof n.amount === "string" && /^[1-9]\d*$/.test(n.amount)
+      ? { near: { network: n.network as string, asset: n.asset, payTo: n.payTo, amount: n.amount } }
+      : {};
   // An RLUSD amount is already a decimal: "0.01" is one cent. It is not a count of micro-units, so it is not divided.
-  return { payTo: accepts.payTo, network: accepts.network, asset: accepts.asset, issuer, price: Number(accepts.amount) };
+  return { payTo: accepts.payTo, network: accepts.network, asset: accepts.asset, issuer, price: Number(accepts.amount), ...near };
 }
 
 /** The CAIP-2 id and the public XRP Ledger server for a known network. */

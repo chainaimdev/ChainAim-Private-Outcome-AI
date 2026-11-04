@@ -10,6 +10,7 @@
   "scripts": {
     "start": "node src/main.ts",
     "build:wallet": "node scripts/build-wallet.ts",
+    "build:near-wallet": "node scripts/build-near-wallet.ts",
     "build:vercel": "node scripts/build-vercel.ts",
     "test": "node --test --test-force-exit \"test/*.test.ts\""
   },
@@ -19,6 +20,11 @@
   },
   "devDependencies": {
     "@crossmarkio/sdk": "0.4.0",
+    "@hot-labs/near-connect": "0.12.0",
+    "@near-js/crypto": "2.5.1",
+    "@near-js/signers": "2.5.1",
+    "@near-js/transactions": "2.5.1",
+    "@x402/near": "2.29.0",
     "esbuild": "0.28.2",
     "x402-xrpl": "0.3.3",
     "xrpl": "4.7.0"

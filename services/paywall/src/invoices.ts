@@ -65,6 +65,45 @@ export class InvoiceBook {
   }
 }
 
+/**
+ * Payments seen once. A NEAR signed delegate (the x402 NEAR exact scheme) does
+ * not name the invoice it pays: the delegate's ft_transfer carries no memo. A
+ * payer whose call was refused (never settled) could otherwise present the
+ * same signed delegate again under a new invoice and reach the gateway again
+ * without paying. Each delegate is therefore claimed here by its hash, the
+ * same key @x402/near uses for its duplicate-settlement cache (spec section 10),
+ * and is refused the second time, whatever the outcome of the first.
+ *
+ * An entry is kept for ttlMs, well past the delegate's own validity window
+ * (max_block_height, about one block per second), after which it can no
+ * longer land on chain. The count is bounded like the invoice book's.
+ */
+export class SeenPayments {
+  private readonly seen = new Map<string, number>(); // key -> expiry; insertion order is time order
+  private readonly ttlMs: number;
+  private readonly now: () => number;
+  private readonly max: number;
+
+  constructor(ttlMs: number, now: () => number = Date.now, max: number = MAX_OPEN_INVOICES) {
+    this.ttlMs = ttlMs;
+    this.now = now;
+    this.max = max;
+  }
+
+  /** True the first time a key is presented; false for every later time while it is kept. */
+  first(key: string): boolean {
+    const t = this.now();
+    for (const [k, expiry] of this.seen) {
+      if (expiry > t) break;
+      this.seen.delete(k);
+    }
+    if (this.seen.has(key)) return false;
+    this.seen.set(key, t + this.ttlMs);
+    while (this.seen.size > this.max) this.seen.delete(this.seen.keys().next().value as string);
+    return true;
+  }
+}
+
 /** The invoice id a PAYMENT-SIGNATURE header says it pays (accepted.extra.invoiceId), or undefined when it names none. */
 export function invoiceIdOf(paymentHeader: string | undefined): string | undefined {
   if (!paymentHeader) return undefined;

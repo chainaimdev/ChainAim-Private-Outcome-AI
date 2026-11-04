@@ -14,10 +14,13 @@
  * --endpoint          scan (default), mask or chat
  * --calls             calls per tenant, 1 to 1000 (default 10); with --duration-sec an extra cap, up to 1000000
  * --interval-ms       pause after each of a tenant's calls (default 2000)
- * --max-spend         the most RLUSD one tenant may spend in this run (default 0.2); ends every mode
+ * --max-spend         the most RLUSD (or USDC with --rail near) one tenant may spend in this run (default 0.2); ends every mode
  * --max-tokens        longest chat answer, 1 to 1024 (default 256)
  * --out               folder for the run's records (default: rig/out at the repository root)
  * --dry-run           check every tenant's seed and masking, show the price, pay nothing
+ * --rail              xrpl (default: RLUSD, each tenant's seed) or near (USDC on NEAR: each tenant.json's
+ *                     "near": {"accountId", "keyEnv"}, key from keyEnv + _TESTNET or _MAINNET); the
+ *                     paywall must offer that rail (PAY_RAILS)
  * Loop mode (live ops):
  * --forever           no call limit: run until Ctrl+C or --max-spend (not with --calls or --duration-sec)
  * --duration-sec N    start no new call after N seconds (1 to 604800)
@@ -41,7 +44,8 @@ import { appendFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
-import { ENDPOINTS, checkDistinct, loadTenants, prepareRequest, runTenant, type CallRecord, type Endpoint, type RunOptions, type TenantSummary } from "./rig-core.ts";
+import { ENDPOINTS, checkDistinct, isNearBuyer, loadTenants, payerOf, prepareRequest, runTenant, type CallRecord, type Endpoint, type RigBuyer, type RunOptions, type Tenant, type TenantSummary } from "./rig-core.ts";
+import { nearBuyer } from "./near.ts";
 import { Tracer } from "./trace.ts";
 import { account, decimalUnits, SetupError, seedBuyer, withLedger } from "./xrpl.ts";
 
@@ -59,6 +63,7 @@ const { values } = parseArgs({
     "max-tokens": { type: "string", default: "256" },
     out: { type: "string", default: join(REPO, "rig", "out") },
     "dry-run": { type: "boolean", default: false },
+    rail: { type: "string", default: "xrpl" },
     forever: { type: "boolean", default: false },
     "duration-sec": { type: "string" },
     "rate-per-min": { type: "string" },
@@ -91,6 +96,10 @@ const base = values.url?.replace(/\/+$/, "");
 if (!base || !/^https?:\/\//.test(base) || !URL.canParse(base)) fail("--url is required and must be the paywall's http(s) address, e.g. http://127.0.0.1:8080");
 const endpoint = values.endpoint as Endpoint;
 if (!Object.hasOwn(ENDPOINTS, endpoint)) fail("--endpoint must be scan, mask or chat");
+const rail = values.rail;
+if (rail !== "xrpl" && rail !== "near") fail("--rail must be xrpl or near");
+/** What the spending ceiling and the records are counted in. */
+const coin = rail === "near" ? "USDC" : "RLUSD";
 
 // Loop mode: which flags may go together.
 if (values.forever && values.calls !== undefined) fail("--forever and --calls cannot be used together: --forever has no call limit");
@@ -125,11 +134,15 @@ if (values["trace-url"] !== undefined) {
   tracer = new Tracer({ url: traceUrl, key, timeoutMs: whole("trace-timeout-ms", values["trace-timeout-ms"], 100, 30_000), maxInflight: whole("trace-max-inflight", values["trace-max-inflight"], 1, 1000) });
 }
 
-let prepared;
+let prepared: { tenant: Tenant; buyer: RigBuyer }[];
 try {
   if (decimalUnits(options.maxSpend) <= 0n) throw new SetupError("--max-spend must be above 0");
   const tenants = loadTenants(values.tenants, values.only?.split(",").map((s) => s.trim()).filter(Boolean));
-  prepared = tenants.map((tenant) => ({ tenant, buyer: seedBuyer(account(process.env, { seedPrefix: tenant.seedPrefix })) }));
+  prepared = tenants.map((tenant): { tenant: Tenant; buyer: RigBuyer } => {
+    if (rail === "xrpl") return { tenant, buyer: seedBuyer(account(process.env, { seedPrefix: tenant.seedPrefix })) };
+    if (!tenant.near) throw new SetupError(`${tenant.id}/tenant.json has no "near": {"accountId", "keyEnv"}, which --rail near needs`);
+    return { tenant, buyer: nearBuyer(process.env, { accountId: tenant.near.accountId, keyPrefix: tenant.near.keyEnv }) };
+  });
   checkDistinct(prepared);
   // Every text is masked and checked now, so a bad query file stops the run before anything is paid.
   for (const { tenant } of prepared) {
@@ -148,7 +161,7 @@ try {
 }
 
 const url = `${base}${ENDPOINTS[endpoint]}`;
-for (const { tenant, buyer } of prepared) console.log(`tenant ${tenant.id} (${tenant.name}): payer ${buyer.signer.classicAddress} on ${buyer.network}, ${tenant.queries.length} queries`);
+for (const { tenant, buyer } of prepared) console.log(`tenant ${tenant.id} (${tenant.name}): payer ${payerOf(buyer)} on ${buyer.network}, ${tenant.queries.length} queries`);
 const pacing = ratePerMin !== undefined ? `${ratePerMin} calls/min per tenant` : `${options.intervalMs} ms between calls`;
 const limit = values.forever ? "until Ctrl+C or --max-spend" : `${calls === null ? "no call limit" : `${calls} calls`}${durationSec !== undefined ? `, at most ${durationSec} s` : ""}`;
 console.log(`mode: ${limit}; ${pacing}${jitter > 0 ? `, jitter ${jitter}` : ""}; traces ${tracer ? `to ${values["trace-url"]}` : "off"}`);
@@ -162,9 +175,11 @@ if (values["dry-run"]) {
     console.error(`HTTP ${r.status} from ${url}: no price was asked: ${(await r.text()).slice(0, 300)}`);
     process.exitCode = 1;
   } else {
-    const required = JSON.parse(Buffer.from(header, "base64").toString("utf8")) as { accepts: { amount: string; network: string; payTo: string }[] };
-    for (const a of required.accepts) console.log(`price ${a.amount} RLUSD on ${a.network} to ${a.payTo}`);
-    console.log(`dry run: ${prepared.length} tenants x ${calls === null ? "unlimited" : calls} calls would spend at most ${options.maxSpend} RLUSD each; nothing was paid`);
+    const required = JSON.parse(Buffer.from(header, "base64").toString("utf8")) as { accepts: { amount: string; asset: string; network: string; payTo: string }[] };
+    // A NEAR amount is whole USDC base units; an RLUSD amount is already a decimal.
+    for (const a of required.accepts) console.log(a.network.startsWith("near:") ? `price ${a.amount} base units of ${a.asset} on ${a.network} to ${a.payTo}` : `price ${a.amount} RLUSD on ${a.network} to ${a.payTo}`);
+    if (!required.accepts.some((a) => a.network === prepared[0].buyer.network)) console.error(`the paywall offers no ${rail} price on ${prepared[0].buyer.network}: check its PAY_RAILS`);
+    console.log(`dry run: ${prepared.length} tenants x ${calls === null ? "unlimited" : calls} calls would spend at most ${options.maxSpend} ${coin} each; nothing was paid`);
     process.exitCode = 0;
   }
 } else {
@@ -193,17 +208,21 @@ async function run(): Promise<void> {
   // One ledger connection per tenant for the whole run, closed when the tenant is done.
   const summaries: TenantSummary[] = await Promise.all(
     prepared.map(({ tenant, buyer }) =>
-      withLedger(buyer.wsUrl, (ledger) => runTenant(tenant, buyer, runOptions, { write, ledger, signal: stop.signal, ...(tracer ? { tracer } : {}) })).catch((e: unknown): TenantSummary => {
+      // NEAR needs no open connection: each read is one HTTPS JSON-RPC POST.
+      (isNearBuyer(buyer)
+        ? runTenant(tenant, buyer, runOptions, { write, signal: stop.signal, ...(tracer ? { tracer } : {}) })
+        : withLedger(buyer.wsUrl, (ledger) => runTenant(tenant, buyer, runOptions, { write, ledger, signal: stop.signal, ...(tracer ? { tracer } : {}) }))
+      ).catch((e: unknown): TenantSummary => {
         const message = e instanceof Error ? e.message : String(e);
-        write({ ts: new Date().toISOString(), tenant: tenant.id, payer: buyer.signer.classicAddress, call: 0, endpoint, result: "stopped", latencyMs: 0, error: message });
-        return { tenant: tenant.id, payer: buyer.signer.classicAddress, settled: 0, notSettled: 0, refused: 0, errors: 0, spent: "0", stoppedBy: message };
+        write({ ts: new Date().toISOString(), tenant: tenant.id, payer: payerOf(buyer), call: 0, endpoint, result: "stopped", latencyMs: 0, error: message });
+        return { tenant: tenant.id, payer: payerOf(buyer), settled: 0, notSettled: 0, refused: 0, errors: 0, spent: "0", stoppedBy: message };
       }),
     ),
   );
   process.off("SIGINT", onSigint);
 
   for (const s of summaries) {
-    console.log(`${s.tenant} ${s.payer}: settled ${s.settled}, not settled ${s.notSettled}, refused ${s.refused}, errors ${s.errors}, spent ${s.spent} RLUSD${s.stoppedBy ? `; stopped: ${s.stoppedBy}` : s.ended ? `; ended: ${s.ended}` : ""}`);
+    console.log(`${s.tenant} ${s.payer}: settled ${s.settled}, not settled ${s.notSettled}, refused ${s.refused}, errors ${s.errors}, spent ${s.spent} ${coin}${s.stoppedBy ? `; stopped: ${s.stoppedBy}` : s.ended ? `; ended: ${s.ended}` : ""}`);
   }
   const total = summaries.reduce((n, s) => n + s.settled, 0);
   const attempted = summaries.reduce((n, s) => n + s.settled + s.notSettled + s.refused + s.errors, 0);

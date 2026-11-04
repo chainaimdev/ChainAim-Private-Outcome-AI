@@ -336,6 +336,8 @@ footer.fine { margin-top: 30px; padding-top: 16px; border-top: 1px solid var(--r
           <span class="muted" id="modelInfo">Every Send uses the model picked here until you pick another.</span>
           <label class="paybox"><input type="checkbox" id="payMode"> Pay with Crossmark (x402, RLUSD on XRPL TestNet)</label>
           <span class="muted" id="payInfo">Off: Send goes straight to the gateway with the test key, and nothing is paid.</span>
+          <label class="paybox" id="nearBox" hidden><input type="checkbox" id="payNear"> Pay with USDC · NEAR (x402, NEAR TestNet)</label>
+          <span class="muted" id="nearInfo" hidden></span>
           <div class="row-actions">
             <button id="send" data-busy="Waiting for the model's answer">Send ($0.01)</button>
             <button class="ghost" id="newConv" type="button">New conversation</button>
@@ -1130,7 +1132,62 @@ async function refreshPayer() {
     payInfo(`On: each Send pays ${paidNet.price} RLUSD on ${paidNet.name} from ${payer}${bal} to ${paidNet.payTo}.`);
   } catch (e) { payInfo(e.message, true); }
 }
-$("payMode").onchange = refreshPayer;
+$("payMode").onchange = () => { if ($("payMode").checked && $("payNear").checked) { $("payNear").checked = false; refreshNearPayer(); } refreshPayer(); };
+
+/* ---------- Paid chat: "Pay with USDC · NEAR" ---------- */
+// The web page's NEAR bundle (services/web, nearPayAndChat), served at /near-wallet.js only when the console runs with
+// --near-wallet, and loaded only when this box is ticked. The NEAR wallet signs each payment; this page and its server
+// hold no key. Paid Sends go to the same /paid/chat as Crossmark's, relayed to the PAYWALL without the gateway key.
+let nearMod = null, nearQuote = null, nearPayer = null;
+async function nearWallet() { return nearMod ??= await import("/near-wallet.js"); }
+async function nearPaidQuote() {
+  const r = await fetch("/paid/near");
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error ?? `The paywall's NEAR price could not be read (HTTP ${r.status}).`);
+  return j;
+}
+const nearExplorer = (q) => `https://${q?.network === "near:mainnet" ? "" : "testnet."}nearblocks.io`;
+const nearPrice = (q) => (q.price !== null ? `${q.price} USDC` : `${q.amount} USDC base units`);
+function nearInfo(text, isErr = false) { const p = $("nearInfo"); p.textContent = text; p.className = isErr ? "err" : "muted"; }
+async function refreshNearPayer() {
+  if (!$("payNear").checked) { nearInfo("Off."); return; }
+  try {
+    const w = await nearWallet();
+    nearQuote = await nearPaidQuote();
+    const saved = w.nearSavedAccount();
+    nearPayer = saved && saved.caip2 === nearQuote.network && saved.wallet === nearQuote.wallet ? saved.accountId : null;
+    nearInfo(nearPayer
+      ? `On: each Send pays ${nearPrice(nearQuote)} on ${nearQuote.network} from ${nearPayer} to ${nearQuote.payTo}.`
+      : `On: each Send pays ${nearPrice(nearQuote)} on ${nearQuote.network} to ${nearQuote.payTo}. The first Send connects ${nearQuote.walletName}.`);
+  } catch (e) { nearInfo(e.message, true); }
+}
+$("payNear").onchange = () => { if ($("payNear").checked && $("payMode").checked) { $("payMode").checked = false; refreshPayer(); } refreshNearPayer(); };
+// The box shows only when the console was started with --near-wallet (the route then answers instead of 404).
+fetch("/paid/near").then((r) => { if (r.status !== 404) { $("nearBox").hidden = false; $("nearInfo").hidden = false; nearInfo("Off."); } }).catch(() => {});
+
+/** One NEAR paid Send: the same shape as paidChat, or null when this press only connected the NEAR wallet. */
+async function nearPaidChat(body) {
+  const w = await nearWallet();
+  nearQuote = await nearPaidQuote();
+  const quote = { network: nearQuote.network, asset: nearQuote.asset, payTo: nearQuote.payTo, amount: nearQuote.amount };
+  if (!nearPayer) {
+    nearPayer = await w.nearConnect(nearQuote.wallet, nearQuote.network);
+    await refreshNearPayer();
+    alert(`${nearQuote.walletName} is connected. Press Send again to pay: it will ask you to approve the payment.`);
+    return null;
+  }
+  nearInfo(`Approve the payment in ${nearQuote.walletName}…`);
+  const a = await w.nearPayAndChat(nearPayer, nearQuote.wallet, quote, body, "/paid/chat", () => nearInfo("Payment signed, waiting for the answer…"));
+  refreshNearPayer();
+  if (a.error) return { status: a.status, headers: {}, body: { error: { message: a.error } }, transaction: a.transaction ?? null, rail: "near" };
+  return {
+    status: 200,
+    headers: { ...(a.model ? { "x-chainaim-model": a.model } : {}), ...(a.dataClass ? { "x-chainaim-data-class": a.dataClass } : {}) },
+    body: { choices: [{ message: { content: a.answer } }] },
+    transaction: a.payment.transaction,
+    rail: "near",
+  };
+}
 
 /** One paid Send: the same shape as call("/gateway/chat") plus the receipt, or null when this press only connected Crossmark. */
 async function paidChat(body) {
@@ -1169,8 +1226,8 @@ $("send").onclick = () => busy($("send"), async () => {
   if (total > room) { updateSize(); return alert(`This question would send ${total.toLocaleString()} characters; ${pickedModel ?? "the model"} takes about ${room.toLocaleString()}. Remove data, untick earlier answers, use Pick files, or pick a model with more room.`); }
   // chainaim_restore: false asks the gateway to leave the placeholders in the answer; it never reaches the model.
   const chatBody = { ...(pickedModel ? { model: pickedModel } : {}), messages: buildMessages(question), ...(KEEP_PLACEHOLDERS ? { chainaim_restore: false } : {}) };
-  const r = $("payMode").checked ? await paidChat(chatBody) : await call("/gateway/chat", chatBody);
-  if (!r) return; // this press only connected Crossmark
+  const r = $("payMode").checked ? await paidChat(chatBody) : $("payNear").checked ? await nearPaidChat(chatBody) : await call("/gateway/chat", chatBody);
+  if (!r) return; // this press only connected Crossmark (or the NEAR wallet)
   await new Promise((ok) => setTimeout(ok, 400));
   const after = (await call("/leaving")).filter((s) => s.at > last);
   const out = $("chatOut"); out.replaceChildren();
@@ -1202,7 +1259,10 @@ $("send").onclick = () => busy($("send"), async () => {
     updateSize();
   }
   // A paid Send shows its receipt, also when the answer failed after the payment settled.
-  if (r.transaction) out.append(block(el("span", { className: "blabel", textContent: "Payment" }),
+  if (r.transaction && r.rail === "near") out.append(block(el("span", { className: "blabel", textContent: "Payment" }),
+    el("p", {}, `Paid ${nearQuote ? nearPrice(nearQuote) : "USDC"} on ${nearQuote?.network ?? "NEAR"} · receipt `,
+      el("a", { href: `${nearExplorer(nearQuote)}/txns/${r.transaction}`, target: "_blank", rel: "noopener", textContent: `${r.transaction.slice(0, 8)}…${r.transaction.slice(-6)} ↗` }))));
+  else if (r.transaction) out.append(block(el("span", { className: "blabel", textContent: "Payment" }),
     el("p", {}, `Paid ${paidNet?.price ?? ""} RLUSD on ${paidNet?.name ?? "the XRP Ledger"} · receipt `,
       el("a", { href: `${explorer(paidNet)}/transactions/${r.transaction}`, target: "_blank", rel: "noopener", textContent: `${r.transaction.slice(0, 8)}…${r.transaction.slice(-6)} ↗` }))));
   const model = after.filter((s) => s.kind === "model");

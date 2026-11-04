@@ -28,15 +28,40 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { detect, maskText } from "./client-mask.ts";
+import { isNearAccountId } from "../src/config.ts";
 import { traceEvent, type Tracer } from "./trace.ts";
-import { decimalUnits, payAndFetch, SetupError, unitsToDecimal, type Buyer, type PayOptions, type PayStep, type StepInfo } from "./xrpl.ts";
+import { payAndFetchNear, type NearBuyer } from "./near.ts";
+import { decimalUnits, payAndFetch, SetupError, unitsToDecimal, type Buyer, type Paid, type PayOptions, type PayStep, type StepInfo } from "./xrpl.ts";
+
+/**
+ * A tenant pays on one rail per run (rig.ts --rail): an XRPL Buyer (RLUSD) or
+ * a NearBuyer (USDC on NEAR). Both prices are dollar stablecoin decimals, so
+ * the spending ceiling and the records read the same on either rail.
+ */
+export type RigBuyer = Buyer | NearBuyer;
+
+export function isNearBuyer(buyer: RigBuyer): buyer is NearBuyer {
+  return "accountId" in buyer.signer;
+}
+
+/** The paying account: an XRPL address or a NEAR account id. */
+export function payerOf(buyer: RigBuyer): string {
+  return isNearBuyer(buyer) ? buyer.signer.accountId : buyer.signer.classicAddress;
+}
 
 export const ENDPOINTS = { scan: "/v1/privacy/scan", mask: "/v1/privacy/mask", chat: "/v1/chat/completions" } as const;
 export type Endpoint = keyof typeof ENDPOINTS;
 /** The gateway's limits: 48,000 characters of chat text; 20,000 for scan and mask. */
 const LIMITS: Record<Endpoint, number> = { chat: 48_000, scan: 20_000, mask: 20_000 };
 
-export type Tenant = { id: string; name: string; seedPrefix: string; queries: string[] };
+export type Tenant = {
+  id: string;
+  name: string;
+  seedPrefix: string;
+  queries: string[];
+  /** The tenant's NEAR account and the prefix of the variable holding its key (PREFIX_TESTNET), for --rail near. */
+  near?: { accountId: string; keyEnv: string };
+};
 
 function readJson(path: string): unknown {
   let raw: string;
@@ -70,7 +95,7 @@ export function loadTenants(dir: string, only?: readonly string[]): Tenant[] {
     names = names.filter((n) => only.includes(n));
   }
   const tenants = names.map((folder): Tenant => {
-    const t = readJson(join(dir, folder, "tenant.json")) as { id?: unknown; name?: unknown; seedPrefix?: unknown };
+    const t = readJson(join(dir, folder, "tenant.json")) as { id?: unknown; name?: unknown; seedPrefix?: unknown; near?: unknown };
     if (t.id !== folder) throw new SetupError(`${folder}/tenant.json: "id" must be "${folder}", the folder's name`);
     if (typeof t.name !== "string" || !t.name.trim()) throw new SetupError(`${folder}/tenant.json: "name" is required`);
     if (typeof t.seedPrefix !== "string" || !/^[A-Z][A-Z0-9_]*$/.test(t.seedPrefix)) {
@@ -80,19 +105,29 @@ export function loadTenants(dir: string, only?: readonly string[]): Tenant[] {
     if (!Array.isArray(q) || q.length === 0 || !q.every((s) => typeof s === "string" && s.trim() !== "")) {
       throw new SetupError(`${folder}/queries.json must be a non-empty list of texts`);
     }
-    return { id: folder, name: t.name, seedPrefix: t.seedPrefix, queries: q as string[] };
+    let near: Tenant["near"];
+    if (t.near !== undefined) {
+      const n = t.near as { accountId?: unknown; keyEnv?: unknown } | null;
+      if (typeof n?.accountId !== "string" || !isNearAccountId(n.accountId)) throw new SetupError(`${folder}/tenant.json: "near.accountId" must be a NEAR account id such as t01.chainaim.testnet`);
+      if (typeof n.keyEnv !== "string" || !/^[A-Z][A-Z0-9_]*$/.test(n.keyEnv)) {
+        throw new SetupError(`${folder}/tenant.json: "near.keyEnv" must be a variable name prefix such as NEAR_KEY_T01 (capital letters, digits, _)`);
+      }
+      near = { accountId: n.accountId, keyEnv: n.keyEnv };
+    }
+    return { id: folder, name: t.name, seedPrefix: t.seedPrefix, queries: q as string[], ...(near ? { near } : {}) };
   });
   if (tenants.length === 0) throw new SetupError(`no tenants in ${dir}: each tenant is a folder with tenant.json and queries.json`);
   return tenants;
 }
 
 /** Two tenants sharing one wallet would race for its transaction numbers. */
-export function checkDistinct(buyers: readonly { tenant: Tenant; buyer: Buyer }[]): void {
+export function checkDistinct(buyers: readonly { tenant: Tenant; buyer: RigBuyer }[]): void {
   const seen = new Map<string, string>();
   for (const { tenant, buyer } of buyers) {
-    const other = seen.get(buyer.signer.classicAddress);
-    if (other) throw new SetupError(`tenants ${other} and ${tenant.id} use the same account ${buyer.signer.classicAddress}; give each its own seed`);
-    seen.set(buyer.signer.classicAddress, tenant.id);
+    const payer = payerOf(buyer);
+    const other = seen.get(payer);
+    if (other) throw new SetupError(`tenants ${other} and ${tenant.id} use the same account ${payer}; give each its own ${isNearBuyer(buyer) ? "NEAR account" : "seed"}`);
+    seen.set(payer, tenant.id);
   }
 }
 
@@ -125,7 +160,7 @@ export type RunOptions = {
   jitter?: number;
   /** Absolute time (deps.now clock) after which no new call starts. */
   deadline?: number;
-  /** The most RLUSD one tenant may spend in this run. */
+  /** The most one tenant may spend in this run, in the rail's dollar stablecoin (RLUSD or NEAR USDC). */
   maxSpend: string;
   /** Longest chat answer. */
   maxTokens: number;
@@ -202,15 +237,16 @@ export function pauseBeforeNext(options: Pick<RunOptions, "intervalMs" | "ratePe
  * funded, wrong network, a signer problem) stops this tenant; any other error
  * is recorded and the next call goes ahead.
  */
-export async function runTenant(tenant: Tenant, buyer: Buyer, options: RunOptions, deps: TenantDeps): Promise<TenantSummary> {
+export async function runTenant(tenant: Tenant, buyer: RigBuyer, options: RunOptions, deps: TenantDeps): Promise<TenantSummary> {
   const sleep = deps.sleep ?? realSleep;
   const now = deps.now ?? Date.now;
   const random = deps.random ?? Math.random;
   const budget = decimalUnits(options.maxSpend);
   let spent = 0n;
-  const summary: TenantSummary = { tenant: tenant.id, payer: buyer.signer.classicAddress, settled: 0, notSettled: 0, refused: 0, errors: 0, spent: "0" };
+  const payer = payerOf(buyer);
+  const summary: TenantSummary = { tenant: tenant.id, payer, settled: 0, notSettled: 0, refused: 0, errors: 0, spent: "0" };
   const url = `${options.url}${ENDPOINTS[options.endpoint]}`;
-  const who = { tenant: tenant.id, payer: buyer.signer.classicAddress };
+  const who = { tenant: tenant.id, payer };
   const pastDeadline = (): boolean => options.deadline !== undefined && now() >= options.deadline;
   let lastStart = now();
 
@@ -230,7 +266,7 @@ export async function runTenant(tenant: Tenant, buyer: Buyer, options: RunOption
     }
     const started = now();
     lastStart = started;
-    const base = { tenant: tenant.id, payer: buyer.signer.classicAddress, call, endpoint: options.endpoint };
+    const base = { tenant: tenant.id, payer, call, endpoint: options.endpoint };
     const record = (fields: Omit<CallRecord, keyof typeof base | "ts" | "latencyMs">): CallRecord => ({ ts: new Date().toISOString(), ...base, ...fields, latencyMs: now() - started });
 
     let prepared: Prepared;
@@ -245,11 +281,11 @@ export async function runTenant(tenant: Tenant, buyer: Buyer, options: RunOption
 
     try {
       const tracer = deps.tracer;
-      const paid = await payAndFetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: prepared.bodyText }, buyer, {
-        ledger: deps.ledger,
-        maxAmount: unitsToDecimal(budget - spent),
-        ...(tracer ? { onStep: (step: PayStep, info: StepInfo) => tracer.send(traceEvent(step, info, who, now() - started)) } : {}),
-      });
+      const init = { method: "POST", headers: { "content-type": "application/json" }, body: prepared.bodyText };
+      const onStep = tracer ? { onStep: (step: PayStep, info: StepInfo) => tracer.send(traceEvent(step, info, who, now() - started)) } : {};
+      const paid: Paid = isNearBuyer(buyer)
+        ? await payAndFetchNear(url, init, buyer, { maxAmount: unitsToDecimal(budget - spent), ...onStep })
+        : await payAndFetch(url, init, buyer, { ledger: deps.ledger, maxAmount: unitsToDecimal(budget - spent), ...onStep });
       // The body is read so the connection is released; it is never recorded.
       await paid.response.arrayBuffer();
       const settled = paid.response.ok && paid.receipt?.success === true && paid.amount !== undefined;

@@ -1,5 +1,26 @@
 # STATE
 
+## 2026-11-04 — NEAR USDC rail (spec: `DESIGN/design-plan - private-ai-NEAR`)
+
+**Status:** paywall, buyer scripts, rig, web NEAR wallet (Intear Wallet, via near-connect) and docs done and tested (paywall against the NEAR JSON-RPC protocol double; web pay flow with real ed25519-signed delegates). No live TestNet run yet, and the page has not been run in a real browser (owner: MANUAL_SETUP.md, 2026-11-04, "Web NEAR wallet").
+
+| Design item | Status |
+|---|---|
+| §4 gates | Answered in `docs/NEAR-GATES.md`. G1 → Design A (`@x402/near` 2.29.0). Pages marked "not loaded" there should be read before MainNet. |
+| §5.1 config | `PAY_RAILS`, `NEAR_*` in `services/paywall/src/config.ts`. Unset = XRPL only, no NEAR variable read. `NEAR_CAIP2_*` and `NEAR_TX_MAX_AGE_BLOCKS` not added (G4, G6 make them unnecessary). |
+| §5.2 paywall | `src/near/{rail,facilitator,rpc,usdc}.ts`; `app.ts` registers each rail; `routes.ts` one offer per rail, one invoice per quote. NEAR libraries load only when the near rail is on. Start-up reads `ft_metadata` and payTo's storage registration. `payment_settle_failed` line for NEAR. |
+| §5.3 web | `src/near-payment.ts` (shared with scripts), `wallets.ts`, `/api/wallets` `near` (+ `wallet` with `NEAR_WALLET`). Wallet: `src/near-wallets.ts` (allowed wallets and exact hosts), `src/near-pay.ts` (pay flow), `src/near-wallet-entry.ts` → `public/near-wallet.js` (own bundle, loaded on demand), page "Pay with" chooser, CSP widened only with `NEAR_WALLET=intear-wallet`, cookie policy. `wallet.js` body unchanged (banner hash only). `near-balance.ts` not added: the page reads no NEAR balance, so no RPC host enters the CSP; the paywall refuses short funds with a 402. |
+| §5.4 scripts | `near-signer.ts` (the TEE seam), `near.ts` (`payAndFetchNear`), `near-pay.ts`, `near-storage.ts`, `rig.ts --rail near` with tenant.json `"near"`. |
+| §9 acceptance | 1: XRPL-only tests unchanged (221/221) and `@x402/*` 2.27→2.29 upgrade passes them. 2, 4, 5: proven against the double, not on TestNet. 3: paywall side proven; browser side tested in Node, not yet in a browser. 6: the live paid call from the page is the owner's (MANUAL_SETUP.md). 7: done. |
+
+**Web wallet (decided 2026-11-04):** the owner approved widening the CSP with limits. Testnet wallets declaring `signDelegateActions` in near-connect's manifest: meteor-wallet, intear-wallet, ledger, near-cli (table and source in docs/NEAR-GATES.md). Chosen: Intear Wallet. CSP adds only `https://raw.githubusercontent.com` and `https://wallet.intear.tech` to connect-src and `frame-src 'self' https://wallet.intear.tech`, only with `NEAR_WALLET=intear-wallet`. **Open risk, live only:** Intear sets the delegate's `max_block_height`; the paywall refuses a window longer than 600 blocks.
+
+**Test console NEAR (2026-11-04):** "Pay with USDC · NEAR" in test-console/console behind `--near-wallet intear-wallet` (+ `--near-wallet-bundle`), using services/web's `near-wallet.js` (new export `nearPayAndChat`, a thin call of the same `payNearChat`). The NEAR payment goes through the unchanged `/paid/chat` relay. Tested in `scripts/test/console-near.test.ts` (5). **Not done as asked:** "the console's CSP gains what services/web adds" — the console page sends no CSP at all (only its `/view/` pages have one), so there was nothing to widen; it still sends none, with or without the flag, pinned by the test. Whether the console should get a full CSP is the owner's decision. Live check: MANUAL_SETUP.md.
+
+**Deviation from the design:** the buyer signs a NEP-366 SignedDelegate (relayer pays gas), not a full transaction with a `memo`, because that is the official x402 NEAR scheme. The invoice binding the memo would have given is replaced by claiming each delegate once by its hash (`SeenPayments`), tested.
+
+---
+
 **Spec:** `architecture-xrpl-migration.md` (Algorand/USDC → XRPL/RLUSD)
 **Updated:** 2026-10-13
 **Current stage:** Stages 0, 1, 3, 4, 5 and 6 are done in code and tests. Stage 2 (accounts) and the real-payment proof in Stage 3 are the owner's. Stage 7 (MainNet) is not started.

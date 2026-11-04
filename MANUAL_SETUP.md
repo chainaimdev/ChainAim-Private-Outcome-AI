@@ -196,3 +196,44 @@ New secrets file (outside the repo, written by the script, never typed by hand):
 5. Expected on http://127.0.0.1:8800 Live Ops: the RLUSD Seller Wallet row and a TUSD row ("TUSD · XRPL devnet · buyers pay chainaim") both rising every few seconds; buyer cards for RLUSD (testnet) and TUSD (devnet) with balances falling; the ledger tape filling with RLUSD and TUSD rows; "buyers watched 3 RLUSD · 3 TUSD". The stream window prints one line per payment (`x402 settled`, `direct settled`, `tusd settled`, `buy`, `mint`, `pause` with the reason).
 Network: on the wired LAN (Sophos re-signs *.t54.ai) x402 cannot settle; with `-Mode auto` (default) the RLUSD lanes pay direct instead and try x402 again every 60 s. On the hotspot they pay x402.
 
+
+## 2026-11-04 — NEAR USDC rail (DESIGN "design-plan - private-ai-NEAR"; owner; steps given one at a time in chat)
+Nothing changes while `PAY_RAILS` is unset: the paywall stays RLUSD-only and reads no NEAR variable.
+Dependencies changed in `services/paywall` (run `npm ci` there): `@x402/core`, `@x402/hono`, `@x402/extensions`, `@x402/xrpl` 2.27.0 → 2.29.0 (required by `@x402/near`), and new `@x402/near` 2.29.0, `@near-js/{crypto,providers,signers,transactions,utils}` 2.5.1, `borsh` 1.0.0. Rebuild the paywall image (`npm ci --omit=dev` picks them up).
+Environment variables (names in `.env.example`; values in your private env file, never in the repo):
+- Paywall: `PAY_RAILS` (`near` or `xrpl,near`), `NEAR_NETWORK`, `NEAR_PAY_TO_<NET>`, `NEAR_USDC_CONTRACT_<NET>`, `NEAR_USDC_DECIMALS_<NET>`, `NEAR_RPC_URL_<NET>` (+ optional `NEAR_RPC_FALLBACK_URL_<NET>`), and either `NEAR_FACILITATOR_URL_<NET>` or `NEAR_RELAYER_ACCOUNT_<NET>` + `NEAR_RELAYER_KEY_<NET>` (secret), optional `NEAR_MAX_GAS`.
+- Buyer scripts: `NEAR_BUYER_ACCOUNT_<NET>`, `NEAR_BUYER_KEY_<NET>` (secret); rig tenants: `NEAR_KEY_T0N_<NET>` (secret) and `"near": {"accountId": "...", "keyEnv": "NEAR_KEY_T0N"}` in `rig/tenants/t0N/tenant.json`.
+Third-party services: NEAR TestNet RPC (FastNEAR public by default, or your QuickNode NEAR TestNet HTTPS endpoint); Circle TestNet USDC on NEAR (faucet: faucet.circle.com).
+Steps:
+1. Tests: `services\paywall` `npm ci`, `npm test` (258: 221 before + 37 NEAR); `services\web` `npm test` (129: 105 + 7 + 17 for the web NEAR wallet).
+2. TestNet accounts (wallet.near.org / MyNearWallet / `near-cli-rs`), each with a full-access key you export as `ed25519:...`:
+   the pay-to account, a relayer account (holds some TestNet NEAR for gas, must differ from pay-to), and a buyer account.
+3. Buyer gets TestNet USDC from faucet.circle.com (network: NEAR Testnet). The buyer needs no NEAR to pay; it needs a little NEAR for step 4.
+4. Register the pay-to account with the USDC contract once: `node scripts/near-storage.ts --account <payTo> --dry-run`, then without `--dry-run`.
+5. Start the paywall with `PAY_RAILS=near` (or `xrpl,near`). The start line shows `rails=... near=testnet nearPayTo=... usdc=...`; it stops with a clear message if the contract's decimals or the pay-to registration are wrong.
+6. One paid call: `node scripts/near-pay.ts --dry-run http://127.0.0.1:8080/v1/privacy/scan`, then `node scripts/near-pay.ts http://127.0.0.1:8080/v1/chat/completions --body-file ask.json --max-amount 0.05`. Check the transaction on testnet.nearblocks.io and the `payment_settled` line (network `near:testnet`, asset = USDC contract, payer, transaction, invoiceId with the sink on).
+7. Rig on NEAR: add the `"near"` entry to each tenant, fund each with USDC, then `node scripts/rig.ts --url http://127.0.0.1:8080 --rail near --calls 2`.
+Web NEAR wallet (decided 2026-11-04: Intear Wallet; CSP changes in docs/NEAR-GATES.md, "Web wallet and CSP"):
+- Dependencies added in `services/web` (run `npm ci` there; dev only, bundled into `public/near-wallet.js`): `@hot-labs/near-connect` 0.12.0, `@x402/near` 2.29.0, `@near-js/{crypto,signers,transactions}` 2.5.1. Rebuild after a change: `npm run build:near-wallet` (and `npm run build:wallet`, whose banner hash covers package.json).
+- Environment variable (web service, and the Vercel project if it is deployed there; set it before `npm run build:vercel` too): `NEAR_WALLET=intear-wallet`.
+- Third-party services the visitor's browser then contacts, only after choosing "USDC · NEAR" and pressing Connect: raw.githubusercontent.com (near-connect's wallet list) and wallet.intear.tech (Intear Wallet).
+- Live check (the acceptance test; not done yet): one paid call from the page on TestNet.
+  1. Paywall running with `PAY_RAILS=xrpl,near` and steps 2–5 above done; web started with `PAYWALL_URL` and `NEAR_WALLET=intear-wallet` (`services\web` `npm start`).
+  2. Make an Intear Wallet TestNet account at wallet.intear.tech and get it TestNet USDC from faucet.circle.com (network: NEAR Testnet).
+  3. Open the page, set "Pay with" to "USDC · NEAR", press "Connect Intear Wallet", sign in. The buyer chip shows the account.
+  4. Mask the example and press Execute; approve the payment in Intear. The answer shows "Paid $… USDC · receipt", linking to testnet.nearblocks.io.
+  5. Record here: the date, the account, the transaction hash, and the paywall's `payment_settled` line. If the paywall refuses with a validity-window error, record the reason it gave: Intear's `max_block_height` is longer than 600 blocks, and the page cannot pay with Intear until that is resolved.
+  6. In the browser's developer console, check there is no "Content Security Policy" error while connecting and paying, and note any here.
+
+## 2026-11-04 — Test console: pay in USDC on NEAR (owner, Windows PowerShell, from the repository folder)
+The console (test-console/console, port 8730) gets a "Pay with USDC · NEAR" box next to "Pay with Crossmark", using services/web's NEAR bundle. Off unless the console is started with the flag; nothing changes for Crossmark.
+- Flags (no environment variables): `--near-wallet intear-wallet` (only allowed value), optional `--near-wallet-bundle PATH` (default `services\web\public\near-wallet.js`; build it with `npm --prefix services/web run build:near-wallet`).
+- The console page sends no Content-Security-Policy of its own (it never did), so no CSP change was made for it; see STATE.md.
+- Third-party services the browser then contacts, only after ticking the box and pressing Send to connect: raw.githubusercontent.com (near-connect's wallet list) and wallet.intear.tech (Intear Wallet).
+Live check (not done yet): one paid console chat on TestNet.
+1. Paywall running with `PAY_RAILS=xrpl,near` and the NEAR rail steps above done (pay-to registered, relayer funded).
+2. Start the console with the flag: `node test-console\console\server.ts --near-wallet intear-wallet` (or add `--near-wallet intear-wallet` to the command in `test-console\start-ui.ps1` / `start.cmd` for that run). The start line ends `NEAR wallet: intear-wallet`.
+3. An Intear Wallet TestNet account with TestNet USDC (faucet.circle.com, network NEAR Testnet), as in the web check.
+4. Open http://127.0.0.1:8730, tick "Pay with USDC · NEAR" (it unticks Crossmark). The line under it shows the price, network and pay-to account.
+5. Press Send: Intear Wallet connects; press Send again and approve the payment in Intear. The answer shows "Paid … USDC on near:testnet · receipt", linking to testnet.nearblocks.io.
+6. Record here: the date, the account, the transaction hash, the paywall's `payment_settled` line, and the console's `paid-chat` log line (status and `withPayment` only). Check the browser console for "Content Security Policy" errors, and note any. If the paywall refuses Intear's validity window (longer than 600 blocks), record its reason.

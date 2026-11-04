@@ -44,6 +44,12 @@
  *   --wallet-bundle PATH  the browser payment bundle (default ../../services/web/public/wallet.js;
  *                         build it with npm --prefix services/web run build:wallet)
  *   --paid-timeout-sec N  how long a paid chat may take, quote, settle and answer together (default 240)
+ *   Paid chat in USDC on NEAR ("Pay with USDC · NEAR" box, shown only with --near-wallet): the same, with the web
+ *   page's NEAR bundle (services/web, nearPayAndChat) and the visitor's NEAR wallet; it goes through the same /paid/chat.
+ *   --near-wallet ID      the NEAR wallet the page may run (only intear-wallet; services/web/src/near-wallets.ts).
+ *                         Unset: no NEAR box and no /near-wallet.js. This page sends no CSP of its own either way.
+ *   --near-wallet-bundle PATH  the NEAR browser bundle (default ../../services/web/public/near-wallet.js;
+ *                         build it with npm --prefix services/web run build:near-wallet)
  *
  *   Pages are served at /view/<id> with a sandbox Content-Security-Policy: their scripts run in an opaque
  *   origin and connect-src is 'none', so model-written HTML cannot call this console, the gateway or any
@@ -60,6 +66,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { NETWORKS } from "../../services/web/src/balance.ts";
+import { NEAR_WALLETS, isNearWalletId } from "../../services/web/src/near-wallets.ts";
 import { analystClient, crossAsk, gatewayChat } from "../../packages/crossask/src/index.ts";
 
 const { values: flags } = parseArgs({
@@ -82,6 +89,8 @@ const { values: flags } = parseArgs({
     "view-script-src": { type: "string", default: "https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://unpkg.com" },
     "wallet-bundle": { type: "string", default: fileURLToPath(new URL("../../services/web/public/wallet.js", import.meta.url)) },
     "paid-timeout-sec": { type: "string", default: "240" },
+    "near-wallet": { type: "string" },
+    "near-wallet-bundle": { type: "string", default: fileURLToPath(new URL("../../services/web/public/near-wallet.js", import.meta.url)) },
     "crossask-timeout-sec": { type: "string", default: "300" },
     "crossask-sql-retries": { type: "string", default: "1" },
     "crossask-answer-rows": { type: "string", default: "50" },
@@ -98,6 +107,9 @@ const VIEW_MAX_BYTES = positiveInt("view-max-bytes");
 const VIEW_SOURCES = flags["view-script-src"]!.split(/\s+/).filter(Boolean);
 const PAID_TIMEOUT_MS = positiveInt("paid-timeout-sec") * 1000;
 const WALLET_BUNDLE = flags["wallet-bundle"]!;
+const NEAR_WALLET = flags["near-wallet"];
+if (NEAR_WALLET !== undefined && !isNearWalletId(NEAR_WALLET)) throw new Error(`--near-wallet must be one of ${Object.keys(NEAR_WALLETS).join(", ")}, got ${NEAR_WALLET}`);
+const NEAR_WALLET_BUNDLE = flags["near-wallet-bundle"]!;
 const CROSSASK_TIMEOUT_MS = positiveInt("crossask-timeout-sec") * 1000;
 const CROSSASK_RETRIES = positiveInt("crossask-sql-retries", 0);
 const CROSSASK_ROWS = positiveInt("crossask-answer-rows");
@@ -495,6 +507,31 @@ createServer(async (req, res) => {
       res.end(js);
       return;
     }
+    // The web page's NEAR bundle (services/web/public/near-wallet.js), only when the console was started with --near-wallet.
+    if (api === "near-wallet.js" && req.method === "GET") {
+      if (!NEAR_WALLET) return json(res, 404, { error: "the NEAR wallet is off: start the console with --near-wallet intear-wallet" });
+      let js: Buffer;
+      try { js = readFileSync(NEAR_WALLET_BUNDLE); } catch { return json(res, 404, { error: `the NEAR wallet bundle is not at ${NEAR_WALLET_BUNDLE}: run npm --prefix services/web run build:near-wallet` }); }
+      res.writeHead(200, { "content-type": "text/javascript; charset=utf-8", "cache-control": "no-cache", "x-content-type-options": "nosniff" });
+      res.end(js);
+      return;
+    }
+    // What a NEAR paid chat pays, from the paywall's own chat quote: its near: offer, and the dollar price from its xrpl: offer when it has one.
+    if (api === "paid" && name === "near" && req.method === "GET") {
+      if (!hostOk(req)) return dataJson(res, 403, { error: `open the console as http://127.0.0.1:${PORT}` });
+      if (!NEAR_WALLET) return json(res, 404, { error: "the NEAR wallet is off: start the console with --near-wallet intear-wallet" });
+      const r = await fetch(PAYWALL + ROUTES.chat, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ messages: [{ role: "user", content: "hi" }] }), signal: AbortSignal.timeout(8000) });
+      const header = r.headers.get("payment-required");
+      if (r.status !== 402 || !header) return json(res, 503, { error: `the paywall did not quote a chat price (HTTP ${r.status}): ${(await r.text()).slice(0, 200)}` });
+      const accepts = (JSON.parse(Buffer.from(header, "base64").toString("utf8")).accepts ?? []) as Record<string, any>[];
+      const n = accepts.find((a) => a?.scheme === "exact" && (a.network === "near:testnet" || a.network === "near:mainnet"));
+      if (!n || typeof n.asset !== "string" || typeof n.payTo !== "string" || typeof n.amount !== "string" || !/^[1-9]\d*$/.test(n.amount)) {
+        return json(res, 503, { error: "the paywall does not offer USDC on NEAR: start it with PAY_RAILS=xrpl,near (or near)" });
+      }
+      const x = accepts.find((a) => typeof a?.network === "string" && a.network.startsWith("xrpl:"));
+      json(res, 200, { network: n.network, asset: n.asset, payTo: n.payTo, amount: n.amount, price: x && Number.isFinite(Number(x.amount)) ? Number(x.amount) : null, wallet: NEAR_WALLET, walletName: NEAR_WALLETS[NEAR_WALLET].name });
+      return;
+    }
     // What the paid chat pays on, from the paywall's own chat quote, with the public ledger server for that network.
     if (api === "paid" && name === "network" && req.method === "GET") {
       if (!hostOk(req)) return dataJson(res, 403, { error: `open the console as http://127.0.0.1:${PORT}` });
@@ -561,7 +598,7 @@ createServer(async (req, res) => {
     json(res, 502, { error: (e as Error).message });
   }
 }).listen(PORT, "127.0.0.1", async () => {
-  console.log(`[test-console] http://127.0.0.1:${PORT}  default model: ${DEFAULT_MODEL}`);
+  console.log(`[test-console] http://127.0.0.1:${PORT}  default model: ${DEFAULT_MODEL}${NEAR_WALLET ? `  NEAR wallet: ${NEAR_WALLET}` : ""}`);
   const { config, error } = readDataConfig();
   if (!config) console.log(`[test-console] ${error}`);
   else console.log(`[test-console] data folders: ${config.allowedRoots.join(", ")}; default ${config.defaultFolder}${(await isFolder(config.defaultFolder)) ? "" : "  (NOT FOUND: create it)"}`);

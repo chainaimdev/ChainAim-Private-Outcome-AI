@@ -4,7 +4,8 @@
  * PRICE_CHAT). Every example here is synthetic.
  */
 import { declareDiscoveryExtension } from "@x402/extensions/bazaar";
-import type { PaywallConfig, Priced } from "./config.ts";
+import { xrplOf, type PaywallConfig, type Priced } from "./config.ts";
+import { usdcPrices } from "./near/usdc.ts";
 
 export type PaidRoute = { key: string; path: string; priced: Priced; description: string; discovery: Record<string, unknown> };
 
@@ -113,17 +114,33 @@ export const PAID_ROUTES: readonly PaidRoute[] = [
 
 /** An RLUSD amount as the XRP Ledger writes it: a decimal string, the currency code, and the issuer and invoice in extra. */
 export type RlusdPrice = { amount: string; asset: string; extra: { issuer: string; invoiceId: string } };
+/** A USDC amount on NEAR: a whole number of base units, the NEP-141 contract id, and the invoice in extra. */
+export type NearUsdcPrice = { amount: string; asset: string; extra: { invoiceId: string } };
+
+type RequestLike = { paymentHeader?: string };
+
+export type XrplAccept = {
+  scheme: "exact";
+  /** Called for every request, because each quoted price has its own invoice. */
+  price: (request: RequestLike) => RlusdPrice;
+  network: `${string}:${string}`;
+  payTo: string;
+  maxTimeoutSeconds: number;
+  extra: { sourceTag: number };
+};
+
+/** The NEAR offer carries no scheme extra: @x402/near keeps the relayer facilitator-side (x402 NEAR exact spec, section 3). */
+export type NearAccept = {
+  scheme: "exact";
+  price: (request: RequestLike) => NearUsdcPrice;
+  network: `${string}:${string}`;
+  payTo: string;
+  maxTimeoutSeconds: number;
+};
 
 export type RouteEntry = {
-  accepts: {
-    scheme: "exact";
-    /** Called for every request, because each quoted price has its own invoice. */
-    price: (request: { paymentHeader?: string }) => RlusdPrice;
-    network: string;
-    payTo: string;
-    maxTimeoutSeconds: number;
-    extra: { sourceTag: number };
-  }[];
+  /** One offer per enabled rail, in PAY_RAILS order; all of one quote carry the same invoice. */
+  accepts: (XrplAccept | NearAccept)[];
   description: string;
   mimeType: "application/json";
   resource?: string;
@@ -131,31 +148,62 @@ export type RouteEntry = {
 };
 
 /**
- * The route table for paymentMiddleware: one exact RLUSD price per route (from
- * the configuration), the invoice the payment must commit to, and the Bazaar
+ * The route table for paymentMiddleware: one exact price per route and enabled
+ * rail (RLUSD on the XRP Ledger, USDC on NEAR; amounts from the configuration),
+ * the invoice the payment must commit to, and the Bazaar
  * metadata. invoiceFor gives the invoice id for a request from its payment
  * header (undefined when the request carries no payment).
  */
 export function routesConfig(config: PaywallConfig, invoiceFor: (paymentHeader: string | undefined) => string): Record<string, RouteEntry> {
+  // With more than one rail, every offer of one quote names the same invoice: the middleware prices all offers
+  // with the same request object, so the first offer's invoice is kept for it. Claiming that invoice once
+  // (app.ts onBeforeVerify) means one call cannot be paid on two rails. With one rail, nothing changes.
+  const shared = new WeakMap<object, string>();
+  const invoice =
+    config.rails.length > 1
+      ? (request: RequestLike): string => {
+          const known = shared.get(request);
+          if (known !== undefined) return known;
+          const id = invoiceFor(request.paymentHeader);
+          shared.set(request, id);
+          return id;
+        }
+      : (request: RequestLike): string => invoiceFor(request.paymentHeader);
+  const xrpl = config.rails.includes("xrpl") ? xrplOf(config) : undefined;
+  const near = config.near;
+  const nearPrices = near ? usdcPrices(config.prices, near) : undefined;
   return Object.fromEntries(
     PAID_ROUTES.map((r): [string, RouteEntry] => [
       r.key,
       {
-        accepts: [
-          {
-            scheme: "exact",
-            // "$0.01" is 0.01 RLUSD: the issued-currency amount is the decimal itself, never a count of micro-units.
-            price: (request) => ({
-              amount: config.prices[r.priced].slice(1),
-              asset: config.currencyCode,
-              extra: { issuer: config.issuer, invoiceId: invoiceFor(request.paymentHeader) },
-            }),
-            network: config.network,
-            payTo: config.payTo,
-            maxTimeoutSeconds: config.maxTimeoutSeconds,
-            extra: { sourceTag: config.sourceTag },
-          },
-        ],
+        accepts: config.rails.map((rail): XrplAccept | NearAccept => {
+          if (rail === "near" && near && nearPrices) {
+            return {
+              scheme: "exact",
+              // "$0.01" with 6 decimals is "10000": NEP-141 amounts are whole base units.
+              price: (request) => ({ amount: nearPrices[r.priced], asset: near.usdcContract, extra: { invoiceId: invoice(request) } }),
+              network: near.network,
+              payTo: near.payTo,
+              maxTimeoutSeconds: config.maxTimeoutSeconds,
+            };
+          }
+          if (rail === "xrpl" && xrpl) {
+            return {
+              scheme: "exact",
+              // "$0.01" is 0.01 RLUSD: the issued-currency amount is the decimal itself, never a count of micro-units.
+              price: (request) => ({
+                amount: config.prices[r.priced].slice(1),
+                asset: xrpl.currencyCode,
+                extra: { issuer: xrpl.issuer, invoiceId: invoice(request) },
+              }),
+              network: xrpl.network,
+              payTo: xrpl.payTo,
+              maxTimeoutSeconds: config.maxTimeoutSeconds,
+              extra: { sourceTag: xrpl.sourceTag },
+            };
+          }
+          throw new Error(`the ${rail} rail is enabled but not configured`);
+        }),
         description: r.description,
         mimeType: "application/json",
         ...(config.publicBaseUrl ? { resource: `${config.publicBaseUrl}${r.path}` } : {}),

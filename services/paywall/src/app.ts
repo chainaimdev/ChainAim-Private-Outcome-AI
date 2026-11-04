@@ -15,10 +15,11 @@ import { Hono, type Context } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { paymentMiddleware, x402ResourceServer } from "@x402/hono";
 import { ExactXrplScheme } from "@x402/xrpl/exact/server";
-import { HTTPFacilitatorClient } from "@x402/core/server";
+import { HTTPFacilitatorClient, type FacilitatorClient } from "@x402/core/server";
 import { bazaarResourceServerExtension } from "@x402/extensions/bazaar";
-import type { PaywallConfig } from "./config.ts";
-import { InvoiceBook } from "./invoices.ts";
+import { xrplOf, type PaywallConfig } from "./config.ts";
+import { InvoiceBook, SeenPayments } from "./invoices.ts";
+import type { NearRail } from "./near/rail.ts";
 import { PAID_ROUTES, routesConfig } from "./routes.ts";
 import { createSink, type PaymentSink } from "./sink.ts";
 
@@ -36,7 +37,32 @@ export type PaywallDeps = {
   clock?: () => number;
   /** The payment log sink; built from config.paymentLog by default, none when that is unset. */
   sink?: PaymentSink;
+  /**
+   * The NEAR rail (src/near/rail.ts, loadNearRail), required when config.near is
+   * set. It is loaded before the app is built, so an XRPL-only paywall never
+   * loads @x402/near or @near-js.
+   */
+  nearRail?: NearRail;
 };
+
+/**
+ * The resource server with one scheme per enabled rail. XRPL only (PAY_RAILS
+ * unset) is built exactly as before rails existed: one t54 facilitator client.
+ * With NEAR too, the server gets one facilitator client per rail and picks by
+ * network.
+ */
+function resourceServer(config: PaywallConfig, nearRail: NearRail | undefined): x402ResourceServer {
+  const xrpl = config.rails.includes("xrpl") ? xrplOf(config) : undefined;
+  const near = config.near;
+  if (xrpl && !near) return new x402ResourceServer(new HTTPFacilitatorClient({ url: xrpl.facilitatorUrl })).register(xrpl.network, new ExactXrplScheme());
+  const clients: FacilitatorClient[] = [];
+  if (xrpl) clients.push(new HTTPFacilitatorClient({ url: xrpl.facilitatorUrl }));
+  if (near && nearRail) clients.push(nearRail.facilitator);
+  const server = new x402ResourceServer(clients);
+  if (xrpl) server.register(xrpl.network, new ExactXrplScheme());
+  if (near && nearRail) server.register(near.network, nearRail.scheme);
+  return server;
+}
 
 /**
  * Marks taken during one request when the phase log is on (P14). The payment
@@ -104,17 +130,47 @@ export function createPaywall(config: PaywallConfig, deps: PaywallDeps = {}): Ho
   const sink = deps.sink ?? (config.paymentLog ? createSink(config.paymentLog) : undefined);
   /** The current request's marks, only when the phase log is on. */
   const mark = (): PhaseMarks | undefined => (phaseLog ? marks.getStore() : undefined);
-  const server = new x402ResourceServer(new HTTPFacilitatorClient({ url: config.facilitatorUrl })).register(config.network, new ExactXrplScheme());
+  const nearRail = deps.nearRail;
+  if (config.near && !nearRail) throw new Error("the near rail is enabled (PAY_RAILS) but not loaded: pass deps.nearRail from loadNearRail(config.near)");
+  const server = resourceServer(config, nearRail);
   server.registerExtension(bazaarResourceServerExtension as never);
   // A payment is accepted once: a refused call is never settled, so nothing else stops a replay from draining the free-model quota.
   const invoices = new InvoiceBook(config.maxTimeoutSeconds * 1000, deps.now, deps.maxOpenInvoices);
+  // NEAR only: a signed delegate names no invoice, so it is also claimed by its hash (invoices.ts, SeenPayments).
+  const delegates = nearRail ? new SeenPayments(config.maxTimeoutSeconds * 4000, deps.now, deps.maxOpenInvoices) : undefined;
   server.onBeforeVerify(async (ctx) => {
     const m = mark();
     if (m) m.verifyAt = clock();
     const invoiceId = (ctx.requirements.extra as { invoiceId?: unknown } | undefined)?.invoiceId;
+    const delegate = delegates && nearRail?.isNearNetwork(ctx.requirements.network) ? nearRail.delegateKey(ctx.paymentPayload.payload) : undefined;
+    if (delegate !== undefined && !delegates!.first(delegate)) {
+      return { abort: true, reason: "payment_already_used", message: "this payment was already presented; sign a new one" };
+    }
     if (typeof invoiceId === "string" && invoices.claim(invoiceId)) return;
     return { abort: true, reason: "payment_already_used", message: "this payment was already presented; sign a new one" };
   });
+  // NEAR only: a call that was served but whose transfer did not settle is reported once, with ids and the reason, never a body.
+  if (nearRail) {
+    server.onSettleFailure(async (ctx) => {
+      if (!nearRail.isNearNetwork(ctx.requirements.network)) return;
+      const request = (ctx.transportContext as { request?: { method?: string; path?: string } } | undefined)?.request;
+      const invoiceId = (ctx.requirements.extra as { invoiceId?: unknown } | undefined)?.invoiceId;
+      const failed = ctx.error as { errorReason?: unknown; transaction?: unknown } | undefined;
+      log(
+        JSON.stringify({
+          ts: new Date().toISOString(),
+          event: "payment_settle_failed",
+          route: `${request?.method ?? "?"} ${request?.path ?? "?"}`,
+          amount: ctx.requirements.amount,
+          asset: ctx.requirements.asset,
+          network: ctx.requirements.network,
+          ...(typeof invoiceId === "string" ? { invoiceId } : {}),
+          ...(typeof failed?.transaction === "string" && failed.transaction !== "" ? { transaction: failed.transaction } : {}),
+          reason: typeof failed?.errorReason === "string" ? failed.errorReason : (ctx.error?.message ?? "unknown").slice(0, 200),
+        }),
+      );
+    });
+  }
   // Payment log: one line per settled payment; never a decision id or a body.
   // With the payment log sink on (PAYMENT_LOG_URL / PAYMENT_LOG_FILE) the line also carries the invoice id,
   // ledger-watch's join key to the ledger payment and the buyer's trace, and is handed on without being awaited.

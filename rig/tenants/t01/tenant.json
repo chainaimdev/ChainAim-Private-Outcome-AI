@@ -3,5 +3,6 @@
   "name": "Jupiter Knitting (synthetic test tenant)",
   "seedPrefix": "XRPL_SEED_T01",
   "address": "rNyKVsrK82yU4v5WBxfAjq3Nk7Ls9oVF8U",
-  "devnetAddress": "rhTZmuLvkaUac6jvqJm6ThCCF8BdmY64B7"
+  "devnetAddress": "rhTZmuLvkaUac6jvqJm6ThCCF8BdmY64B7",
+  "near": { "accountId": "chainaim-buyer-seller.testnet", "keyEnv": "NEAR_BUYER_KEY" }
 }

@@ -39,6 +39,7 @@
   .chip .bal.low { color: var(--warn); }
   .chip button, .chip a.go { border: 1px solid var(--line); background: transparent; color: var(--muted); border-radius: 999px; padding: 2px 9px; cursor: pointer; font-size: .75rem; text-decoration: none; }
   .chip button:hover, .chip a.go:hover { color: var(--brand); border-color: var(--brand); }
+  .chip select { font: inherit; font-size: .75rem; border: 1px solid var(--line); background: transparent; color: inherit; border-radius: 999px; padding: 2px 6px; cursor: pointer; }
 
   main { max-width: 820px; margin: 0 auto; padding: 8px 20px 56px; }
   .hero { text-align: center; padding: 34px 0 26px; }
@@ -171,7 +172,7 @@
       <p><strong>Limited availability.</strong> It will be available for a limited time only. It may be rate limited, and it may change, break, or be shut down at any time without notice.</p>
       <p><strong>AI answers.</strong> Answers come from AI language models. They can be wrong, incomplete, out of date, or biased. They are not medical, legal, financial, or other professional advice. Check anything important yourself before acting on it.</p>
       <p><strong>Privacy.</strong> Masking is best-effort and can miss personal information. Don't send anything you can't afford to have exposed. Masked prompts are passed on to third-party model providers, whose own terms and data practices apply and are outside our control.</p>
-      <p><strong>Payments.</strong> Payments are made in RLUSD on the XRP Ledger through x402. Blockchain transactions are final. You are responsible for your own wallet and keys.</p>
+      <p><strong>Payments.</strong> Payments are made in RLUSD on the XRP Ledger through x402, or in USDC on NEAR where this page offers it. Blockchain transactions are final. You are responsible for your own wallet and keys.</p>
       <p><strong>Where you can use it.</strong> The application has only been tested in India. Laws on AI, data protection, and crypto-assets differ from place to place, so use your own discretion about whether it's permitted where you are. ChainAim and its research lab take no responsibility for use in any other jurisdiction.</p>
       <p><strong>No warranty.</strong> The service is provided "as is" and "as available", with no warranties of any kind. To the fullest extent the law allows, ChainAim and its research lab are not liable for any loss or damage arising from its use.</p>
     </div>
@@ -200,9 +201,20 @@ let wallets = null; // from /api/wallets: network, caip2, wsUrl, asset, issuer, 
 let buyer = null;   // { address, rlusd, xrp, trustLineOpen } once Crossmark is connected
 const net = () => (wallets?.caip2 ? { name: wallets.network, caip2: wallets.caip2, wsUrl: wallets.wsUrl, asset: wallets.asset, issuer: wallets.issuer } : null);
 let current = null; // { masked, map } for the message on screen
+let rail = "xrpl";    // "near" when the visitor picks USDC on NEAR, offered only when /api/wallets names a NEAR wallet
+let nearBuyer = null; // { accountId } once the NEAR wallet is connected
+let nearModule = null;
+const nearOn = () => Boolean(wallets?.near?.wallet);
+const nearName = () => wallets?.near?.walletName ?? "the NEAR wallet";
+/** /near-wallet.js is loaded only when the visitor picks USDC on NEAR. */
+const nearWallet = async () => (nearModule ??= await import("/near-wallet.js"));
+const nearQuote = () => ({ network: wallets.near.network, asset: wallets.near.asset, payTo: wallets.near.payTo, amount: wallets.near.amount });
+const nearTestnet = () => wallets?.near?.network === "near:testnet";
+const nearExplorer = () => `https://${nearTestnet() ? "testnet." : ""}nearblocks.io`;
 
 /* ---------- wallets, top right ---------- */
 const explorerBase = () => `https://${wallets?.network === "mainnet" ? "livenet" : "testnet"}.xrpl.org`;
+const txUrl = (tx) => (rail === "near" ? `${nearExplorer()}/txns/${tx}` : `${explorerBase()}/transactions/${tx}`);
 
 async function copy(text, button) {
   try { await navigator.clipboard.writeText(text); button.textContent = "Copied"; }
@@ -236,11 +248,64 @@ function buyerChip() {
   return c;
 }
 
+function nearChip(label, accountId) {
+  const c = el("div", { className: "chip" }, el("span", { className: "lab", textContent: label }));
+  if (!accountId) { c.append(el("span", { className: "addr", textContent: "not available" })); return c; }
+  const copyBtn = el("button", { type: "button", textContent: "Copy", title: `Copy the ${label} account` });
+  copyBtn.onclick = () => copy(accountId, copyBtn);
+  c.append(el("span", { className: "addr", textContent: accountId.length > 24 ? short(accountId) : accountId, title: accountId }), copyBtn);
+  c.append(el("a", { className: "go", href: `${nearExplorer()}/address/${accountId}`, target: "_blank", rel: "noopener", textContent: "↗", title: "Open on the NEAR explorer" }));
+  return c;
+}
+
+function nearBuyerChip() {
+  if (!nearBuyer) {
+    const b = el("button", { type: "button", className: "connect", textContent: `Connect ${nearName()}`, title: "Pay in USDC on NEAR from your own wallet" });
+    b.onclick = () => doNearConnect().catch((e) => showError(e.message));
+    return el("div", { className: "chip" }, el("span", { className: "lab", textContent: "Buyer" }), b);
+  }
+  const c = nearChip("Buyer", nearBuyer.accountId);
+  const off = el("button", { type: "button", textContent: "Disconnect", title: "Forget this NEAR account on this page" });
+  off.onclick = async () => { nearBuyer = null; renderWallets(); try { await (await nearWallet()).nearDisconnect(); } catch (e) { showError(e.message); } };
+  c.append(off);
+  return c;
+}
+
+function railChip() {
+  const s = el("select", { title: "Pay with" }, el("option", { value: "xrpl", textContent: "RLUSD · XRP Ledger" }), el("option", { value: "near", textContent: "USDC · NEAR" }));
+  s.setAttribute("aria-label", "Pay with");
+  s.value = rail;
+  s.disabled = $("execBtn").disabled;
+  s.onchange = async () => {
+    rail = s.value;
+    clearStatus();
+    if (rail === "near") await refreshNearBuyer().catch((e) => showError(e.message));
+    renderWallets();
+  };
+  return el("div", { className: "chip" }, el("span", { className: "lab", textContent: "Pay with" }), s);
+}
+
+async function refreshNearBuyer() {
+  if (!nearOn()) { nearBuyer = null; return; }
+  const saved = (await nearWallet()).nearSavedAccount();
+  nearBuyer = saved && saved.caip2 === wallets.near.network && saved.wallet === wallets.near.wallet ? { accountId: saved.accountId } : null;
+}
+
+async function doNearConnect() {
+  if (!nearOn()) throw new Error("The payment service does not offer USDC on NEAR right now. Try again in a moment.");
+  clearStatus();
+  nearBuyer = { accountId: await (await nearWallet()).nearConnect(wallets.near.wallet, wallets.near.network) };
+  renderWallets();
+}
+
 function renderWallets() {
   const box = $("wallets");
   box.replaceChildren();
   if (!wallets) return;
-  box.append(buyerChip(), chip("Pay to", wallets.payTo?.address));
+  if (!nearOn()) rail = "xrpl";
+  if (nearOn()) box.append(railChip());
+  if (rail === "near") box.append(nearBuyerChip(), nearChip("Pay to", wallets.near.payTo));
+  else box.append(buyerChip(), chip("Pay to", wallets.payTo?.address));
   const price = wallets.prices?.chat;
   $("execBtn").textContent = price ? `Execute · $${price}` : "Execute";
 }
@@ -264,6 +329,7 @@ async function refreshBuyer() {
 async function loadWallets() {
   try { wallets = await (await fetch("/api/wallets")).json(); } catch { wallets = null; }
   await refreshBuyer();
+  if (rail === "near") await refreshNearBuyer().catch(() => { nearBuyer = null; });
   renderWallets();
 }
 
@@ -345,8 +411,9 @@ const clearStatus = () => $("status").replaceChildren();
 function showBusy(text) { $("status").replaceChildren(el("div", { className: "busy" }, el("span", { className: "spin" }), text)); }
 function showError(message, status, transaction) {
   const box = el("div", { className: "error", role: "alert" }, message);
-  if (transaction) box.append(" ", el("a", { href: `${explorerBase()}/transactions/${transaction}`, target: "_blank", rel: "noopener", textContent: "See the payment receipt ↗" }));
-  if (wallets?.network === "testnet" && (status === 402 || /RLUSD/.test(message))) box.append(" ", el("a", { href: "https://tryrlusd.com/", target: "_blank", rel: "noopener", textContent: "Get TestNet RLUSD" }));
+  if (transaction) box.append(" ", el("a", { href: txUrl(transaction), target: "_blank", rel: "noopener", textContent: "See the payment receipt ↗" }));
+  if (rail === "near") { if (nearTestnet() && (status === 402 || /USDC/.test(message))) box.append(" ", el("a", { href: "https://faucet.circle.com/", target: "_blank", rel: "noopener", textContent: "Get TestNet USDC" })); }
+  else if (wallets?.network === "testnet" && (status === 402 || /RLUSD/.test(message))) box.append(" ", el("a", { href: "https://tryrlusd.com/", target: "_blank", rel: "noopener", textContent: "Get TestNet RLUSD" }));
   if (/Crossmark was not found/.test(message)) box.append(" ", el("a", { href: "https://crossmark.io", target: "_blank", rel: "noopener", textContent: "Get Crossmark" }));
   $("status").replaceChildren(box);
 }
@@ -377,6 +444,7 @@ async function doExecute() {
   if (!current) return;
   $("execBtn").disabled = true;
   try {
+    if (rail === "near") { await executeNear(); return; }
     if (!buyer) {
       showBusy("Connect your Crossmark wallet…");
       await doConnect();
@@ -402,6 +470,22 @@ async function doExecute() {
   }
 }
 
+async function executeNear() {
+  if (!nearBuyer) {
+    showBusy(`Connect ${nearName()}…`);
+    await doNearConnect();
+    // A second press keeps connecting and paying as two separate approvals.
+    clearStatus();
+    $("status").append(el("div", {}, "Connected. Press Execute again to pay."));
+    return;
+  }
+  showBusy(`Approve the payment in ${nearName()}…`);
+  const a = await (await nearWallet()).nearPayAndAsk(nearBuyer.accountId, wallets.near.wallet, nearQuote(), current.masked, undefined, () => showBusy("Payment signed, waiting for the answer…"));
+  if (a.error) { showError(a.error, a.status, a.transaction); return; }
+  clearStatus();
+  showAnswer(a);
+}
+
 function showAnswer(j) {
   const restored = restore(j.answer, current.map);
   const view = $("answerView");
@@ -414,8 +498,8 @@ function showAnswer(j) {
   const receipt = $("receipt");
   receipt.replaceChildren();
   const price = wallets?.prices?.chat;
-  receipt.append(price ? `Paid ${price} RLUSD · ` : "Paid · ");
-  if (j.payment?.transaction) receipt.append("receipt ", el("a", { href: `${explorerBase()}/transactions/${j.payment.transaction}`, target: "_blank", rel: "noopener" }, el("code", { textContent: `${j.payment.transaction.slice(0, 8)}…${j.payment.transaction.slice(-6)}` }), " ↗"));
+  receipt.append(price ? `Paid ${price} ${rail === "near" ? "USDC" : "RLUSD"} · ` : "Paid · ");
+  if (j.payment?.transaction) receipt.append("receipt ", el("a", { href: txUrl(j.payment.transaction), target: "_blank", rel: "noopener" }, el("code", { textContent: `${j.payment.transaction.slice(0, 8)}…${j.payment.transaction.slice(-6)}` }), " ↗"));
   else receipt.append("the receipt was not returned");
   receipt.hidden = false;
   $("answerPane").hidden = false;

@@ -1,0 +1,175 @@
+# ARCHITECTURE — chainiam-private-ai: add NEAR USDC payments next to RLUSD
+
+Target repo: `C:\SATHYA\CHAINAIM3003\mcp-servers\chainiam-private-ai`
+Status of this document: design. Sections marked **VERIFIED** were read from the code or official docs. Sections marked **GATE** must be verified by the implementer before code is written (see §4).
+
+---
+
+## 0. Rules for the implementer (read first, non-negotiable)
+
+1. **No mocks, stubs or fake data in any runtime path.** Test doubles (fake RPC servers, fake wallets) are allowed **only under `test/`**, following the existing pattern (liveops `test/rippled-double.ts`).
+2. **No placeholder values at runtime.** An unknown value (contract id, CAIP-2 id, URL) is a required env var. Startup must fail with a clear message if it is missing — the same way `services/chain-query/src/adapters/near.ts` already refuses `<PLACEHOLDER>` values.
+3. **Read before editing.** Open every file listed in §6 before changing it. Do not change behaviour the existing tests cover; `npm test` in `services/paywall` and `services/web` must stay green.
+4. **The RLUSD/XRPL lane must behave byte-for-byte as today when `PAY_RAILS` is unset.**
+5. **Every GATE in §4 must be resolved from the official source named there.** If a source cannot be loaded or is ambiguous, STOP and report — do not guess.
+6. Secrets (keys, QuickNode URLs with tokens) come only from env / the user's `$SECRETS` folder. Never commit, print or log them.
+7. Money is a decimal or integer **string** handled with `bigint`, never floating point (existing pattern: `decimalUnits` in `scripts/xrpl.ts`).
+8. Behaviour is configured by env vars / CLI flags with safe defaults, not hard-coded.
+
+---
+
+## 1. Goal and scope
+
+**Goal:** a paid chat call can be paid either in RLUSD on the XRP Ledger (today) or in USDC on NEAR (new), chosen by `.env`. The masked-chat behaviour, gateway and models are unchanged.
+
+**In scope:** paywall (verify + settle NEAR USDC), web page (NEAR wallet option), buyer scripts/rig (NEAR signer), payment log line for NEAR.
+
+**Out of scope (later step):** TEE custody wallets (OutLayer). The signer interface in §5.4 is designed so the TEE signer replaces the dev signer with no change to payment code.
+
+---
+
+## 2. Current system — VERIFIED from code
+
+| Part | File | What it does today |
+|---|---|---|
+| Paywall | `services/paywall/src/app.ts` | Hono app. `x402ResourceServer(new HTTPFacilitatorClient({url: config.facilitatorUrl})).register(config.network, new ExactXrplScheme())`. Body limit and capacity guard run **before** payment middleware; the middleware **settles only responses below 400**, so refusals are free. Payment headers are never forwarded to the gateway. |
+| Replay guard | `services/paywall/src/invoices.ts` | `InvoiceBook`: every quote has an invoice id; `onBeforeVerify` claims it once (`payment_already_used`). Chain-neutral. |
+| Payment log | `app.ts` `onAfterSettle` | One JSON line `{ts, event:"payment_settled", route, amount, asset, network, payer, transaction, invoiceId?, phases?}` → stdout and optional sink (`PAYMENT_LOG_URL` / `PAYMENT_LOG_FILE`). This line is what the admin UI consumes. |
+| Config | `services/paywall/src/config.ts` | `XRPL_NETWORK` picks testnet/mainnet; only the chosen network's `_TESTNET`/`_MAINNET` vars are read. Defaults: t54 facilitator, RLUSD issuer (testnet), SourceTag, prices `$0.01`. |
+| Web | `services/web/src/*` | Crossmark extension signs an XRPL Payment (`crossmark-signer.ts`, `xrpl-payment.ts`, `wallet-entry.ts`); server holds no key; bundle `public/wallet.js` built by `npm run build:wallet`. |
+| Buyer scripts | `services/paywall/scripts/signer.ts`, `xrpl.ts`, `pay.ts`, `rig.ts` | `XrplSigner {classicAddress, sign(tx)}`; `payAndFetch` reads the 402, picks `accepts.find(a => a.scheme==="exact" && a.network===buyer.network)`, signs, verifies the signed tx, resends with `PAYMENT-SIGNATURE`. |
+| NEAR RPC pattern | `services/chain-query/src/adapters/near.ts` | Read-only NEAR JSON-RPC, **one JSON-RPC object per POST** (nearcore rejects batches), primary + fallback URLs. Reuse this pattern. |
+
+Note: `routes.ts` and `sink.ts` were **not** read during design — read them first.
+
+---
+
+## 3. Target architecture
+
+```
+                         PAY_RAILS = xrpl | near | xrpl,near   (default: xrpl)
+                                         │
+  Browser (Crossmark)  ──RLUSD──┐        ▼
+  Browser (NEAR wallet) ─USDC───┤   ┌──────────────── paywall ────────────────┐
+  Agents (scripts/rig) ─either──┘   │ bodyLimit → capacity guard → payment     │
+                                    │   402 quote: accepts[] = one entry per   │
+                                    │   enabled rail (same invoiceId)          │
+                                    │   verify: XRPL → t54 facilitator (as is) │
+                                    │           NEAR → rail per GATE G1        │
+                                    │   proxy → gateway (unchanged)            │
+                                    │   settle only if status < 400            │
+                                    │   onAfterSettle → payment_settled line   │
+                                    └──────────────────────┬──────────────────┘
+                                                           │ PAYMENT_LOG_URL
+                                                           ▼
+                                             chainaim-adminUI-NEAR (near-watch)
+```
+
+### 3.1 One quote, several rails
+The 402 `accepts` list carries one entry per enabled rail, all bound to the **same invoice id**. Buyers already pick the entry matching their network (verified in `payAndFetch`). Claiming the invoice once (existing `onBeforeVerify`) means a payer cannot pay on both rails for one call.
+
+### 3.2 NEAR settlement — two possible designs, chosen by GATE G1
+
+**Design A — an x402 NEAR scheme package exists** (`@x402/*` or the x402 spec lists a NEAR network). Register it next to `ExactXrplScheme` exactly as XRPL is registered. Use its facilitator if one exists for NEAR testnet.
+
+**Design B — no x402 NEAR scheme exists.** Implement a `SchemeNetworkServer`-compatible NEAR "exact" scheme inside the paywall (verify + settle locally, no third-party facilitator). The interface to implement is whatever `@x402/core` expects for `register()` — read its types; do not invent one. Semantics must match XRPL's:
+
+1. **Quote:** `{scheme:"exact", network:<NEAR CAIP-2 per G4>, asset:<USDC contract id>, amount:<integer string in USDC base units>, payTo:<NEAR_PAY_TO>, maxTimeoutSeconds, extra:{invoiceId}}`.
+2. **Buyer** builds and **signs but does not submit** one NEAR transaction: `receiver_id = USDC contract`, one `FunctionCall` action `ft_transfer` with args `{receiver_id: payTo, amount, memo: invoiceId}`, deposit and gas per GATE G3. Sends the signed transaction (base64 Borsh) in `PAYMENT-SIGNATURE` payload.
+3. **Verify (before serving):** decode the signed transaction; check signer id, receiver = configured USDC contract, exactly one action, method `ft_transfer`, `receiver_id == payTo`, `amount == quote amount`, `memo == invoiceId`, deposit/gas within limits, signature valid for the signer's public key, and the signer's key is an access key of the signer account (RPC `view_access_key`). Check the transaction's `block_hash` is still recent enough to be accepted (GATE G6). Check the payer's USDC balance ≥ amount (`ft_balance_of`, view call).
+4. **Serve:** proxy to gateway (unchanged).
+5. **Settle (only if status < 400):** submit with `send_tx` (RPC) and wait for final execution; read outcome with `tx` / `EXPERIMENTAL_tx_status`; settlement succeeds only if the `ft_transfer` receipt succeeded. Return the tx hash in the `PAYMENT-RESPONSE` header, same shape as XRPL.
+6. If settle fails after serving, log `payment_settle_failed` with invoiceId and hash (no body), and alert — same risk profile as today's facilitator path.
+
+Design B is a real implementation, not a mock: it uses the live NEAR RPC for every check.
+
+---
+
+## 4. GATES — verify before coding (official sources only)
+
+| Gate | Question | Where to verify | Blocks |
+|---|---|---|---|
+| G1 | Does an x402 scheme/package/facilitator for NEAR exist? | npm registry for `@x402/*`; the x402 spec / repo; `@x402/core` types | Design A vs B |
+| G2 | NEAR **testnet** USDC contract id and decimals | https://docs.near.org/integrations/fungible-tokens and the issuer's official docs | `NEAR_USDC_CONTRACT_TESTNET` value (set by user in env) |
+| G3 | `ft_transfer` rules: required 1 yoctoNEAR deposit, gas, `memo` field, storage registration (`storage_deposit`) for the receiver | https://docs.near.org/primitives/ft/standard , https://docs.near.org/integrations/fungible-tokens , https://docs.near.org/smart-contracts/security/one_yocto.md | buyer tx shape, pay-to setup |
+| G4 | NEAR CAIP-2 network identifier for testnet/mainnet | CAIP namespaces registry (ChainAgnostic) | `network` field in quote and log |
+| G5 | Browser wallet connector library and API | https://docs.near.org/tools/near-connect.md , https://docs.near.org/web3-apps/tutorials/wallet-login.md | `web/src/near-wallet.ts` |
+| G6 | JS library to build/sign/serialize transactions and the transaction validity window for `block_hash` | https://docs.near.org/tools/near-api.md , https://docs.near.org/protocol/transactions/transaction-anatomy.md | signer + verify step 3 |
+| G7 | RPC methods: `send_tx`, `tx`, `EXPERIMENTAL_tx_status`, `view_access_key`, `call_function` | https://docs.near.org/api/rpc/transactions.md , https://docs.near.org/api/rpc/contracts.md | verify/settle |
+
+Already **VERIFIED** during design (no need to re-check, but cite in code comments):
+- NEAR JSON-RPC is HTTP POST, one request per call, batches rejected with HTTP 400 (docs.near.org/api/rpc/providers).
+- QuickNode serves NEAR testnet + mainnet over HTTPS and WSS, archival; supports `send_tx`, `tx`, `EXPERIMENTAL_tx_status` (quicknode.com/docs/near).
+- Function-call access keys **cannot attach NEAR deposits** (docs.near.org/protocol/accounts-contracts/access-keys) → the dev signer uses a full-access key of a dedicated test account.
+
+---
+
+## 5. Components and changes
+
+### 5.1 Configuration — `services/paywall/src/config.ts` (CHANGE)
+| Var | Rule |
+|---|---|
+| `PAY_RAILS` | `xrpl` (default) \| `near` \| `xrpl,near`. Unknown value → startup error. |
+| `NEAR_NETWORK` | `testnet` (default) \| `mainnet`; only read when `near` enabled |
+| `NEAR_PAY_TO_<NET>` | NEAR account id; validated with the account-id rules (docs.near.org/protocol/accounts-contracts/account-id) |
+| `NEAR_USDC_CONTRACT_<NET>` | required, no default (G2) |
+| `NEAR_USDC_DECIMALS_<NET>` | required unless read from the contract's `ft_metadata` at startup (preferred: read and cross-check) |
+| `NEAR_RPC_URL_<NET>`, `NEAR_RPC_FALLBACK_URL_<NET>` | QuickNode HTTPS primary, public fallback; token-bearing URLs are redacted in logs |
+| `NEAR_CAIP2_<NET>` | required until G4 fixes a default |
+| `NEAR_MAX_GAS`, `NEAR_TX_MAX_AGE_BLOCKS` | limits for verify (G3/G6) |
+| `PRICE_*` | unchanged; the USD price is converted to USDC base units with integer math |
+When `near` is not enabled, none of the `NEAR_*` vars are read or required.
+
+### 5.2 Paywall — `src/app.ts` (CHANGE), `src/routes.ts` (CHANGE), `src/near/*` (NEW)
+- `app.ts`: register each enabled rail with the resource server; keep XRPL registration identical.
+- `routes.ts`: build one `accepts` entry per enabled rail per route (read file first).
+- `src/near/rpc.ts`: JSON-RPC client (pattern from `chain-query/adapters/near.ts`), primary + fallback, timeout flag.
+- `src/near/scheme.ts`: Design A adapter or Design B scheme (§3.2).
+- `src/near/verify.ts`: pure checks on the decoded transaction + RPC checks; each refusal has a stable reason code.
+- `src/near/usdc.ts`: price conversion, `ft_metadata` read and cross-check.
+- `sink.ts`: no change expected; NEAR line uses the same fields (`network` = NEAR CAIP-2, `asset` = USDC contract id, `payer` = account id, `transaction` = tx hash, `invoiceId`).
+
+### 5.3 Web — `services/web` (CHANGE + NEW)
+- `src/near-wallet.ts` (NEW): connect / sign via the connector chosen in G5. Keys stay in the user's wallet; only the account id is stored in `localStorage` (same rule as Crossmark).
+- `src/near-payment.ts` (NEW): build the `ft_transfer` transaction from the NEAR `accepts` entry (shared builder with scripts, §5.4).
+- `src/near-balance.ts` (NEW): USDC balance (`ft_balance_of`) and storage-registration status.
+- `src/wallet-entry.ts`, `src/wallets.ts` (CHANGE): read all offers from the 402; show "Connect Crossmark" and/or "Connect NEAR wallet" depending on offered rails.
+- `public/index.html` (CHANGE), `public/wallet.js` rebuilt with `npm run build:wallet`; the existing bundle-freshness test must pass.
+
+### 5.4 Buyer scripts / rig — `services/paywall/scripts` (NEW + CHANGE)
+- `near-signer.ts` (NEW): `NearSigner { accountId, publicKey, signTransaction(tx) }`. Dev implementation loads a key from env `NEAR_BUYER_KEY_<NET>` or per-tenant `NEAR_KEY_T01_<NET>` (names from `tenant.json`). The key is never printed or logged. **This interface is the seam where the TEE signer is added later.**
+- `near.ts` (NEW): network/account/RPC from env; `payAndFetchNear` mirroring `payAndFetch` (quote → prepare → sign → check signed tx matches what was prepared → resend → read receipt), including `--max-amount` refusal before signing.
+- `near-pay.ts` (NEW): one paid call CLI.
+- `near-storage.ts` (NEW): register an account with the USDC contract if required (G3).
+- `rig.ts` (CHANGE): `--rail xrpl|near` (default `xrpl`), per-tenant NEAR account from `tenant.json` `"near": {"accountId", "keyEnv"}`.
+
+---
+
+## 6. Files to read before editing
+`services/paywall/src/{app,config,routes,sink,invoices,main,env}.ts`, `services/paywall/scripts/{signer,xrpl,pay,rig,rig-core}.ts`, `services/web/src/{wallet-entry,wallets,pay,balance,crossmark-signer,xrpl-payment}.ts`, `services/web/scripts/build-wallet.ts`, `services/chain-query/src/adapters/{near,rpc}.ts`, all existing tests in those packages.
+
+---
+
+## 7. Tests
+- **Unit (test/ only):** a NEAR JSON-RPC protocol double (like `rippled-double.ts`) that serves `view_access_key`, `call_function`, `send_tx`, `tx`; signed transactions in tests are produced by the **real** signing library with throwaway keys.
+- **Config tests:** every `PAY_RAILS` value; missing NEAR vars only fail when `near` is enabled; XRPL-only output identical to before.
+- **Live testnet acceptance (real accounts, no doubles):** see §9.
+
+---
+
+## 8. Security
+- Keys only from env; redaction for token-bearing URLs; no request text, answer or key in logs (existing rule).
+- Replay: invoice claimed once across all rails.
+- Verify rejects any extra action, wrong receiver, wrong amount, missing memo, stale `block_hash`, or a signer key not on the account.
+- Settlement only after a successful response (< 400), same as XRPL.
+
+---
+
+## 9. Acceptance criteria (definition of done)
+1. `PAY_RAILS` unset → all existing tests pass; a live RLUSD call behaves exactly as before.
+2. `PAY_RAILS=near` on testnet → a paid chat call from `scripts/near-pay.ts` with a real funded testnet account returns the answer; the USDC transfer is visible on chain; the `payment_settled` line has NEAR network, USDC contract, payer, tx hash, invoiceId.
+3. `PAY_RAILS=xrpl,near` → the 402 lists both offers; Crossmark pays RLUSD and a NEAR wallet pays USDC on the same route.
+4. A refused call (gateway 4xx/5xx) produces **no** on-chain NEAR transfer.
+5. Reusing a signed NEAR payment returns `payment_already_used`.
+6. The web page connects a NEAR testnet wallet and completes one paid call.
+7. Every GATE answer is recorded in `docs/NEAR-GATES.md` with its source URL.
