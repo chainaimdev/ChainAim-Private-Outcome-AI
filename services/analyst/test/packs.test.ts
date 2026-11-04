@@ -14,7 +14,7 @@ const child = (id: string, ext: string, extra: Partial<DomainPack> = {}): Domain
 
 test("finance-generic is the default and keeps the analyst's vocabulary and proposal order unchanged", () => {
   assert.equal(DEFAULT_PACK, "finance-generic");
-  assert.deepEqual(BUILT_IN_PACKS.map((p) => p.id), ["finance-generic", "finance/rcm", "finance/rcm/dental"]);
+  assert.deepEqual(BUILT_IN_PACKS.map((p) => p.id), ["finance-generic", "finance/rcm", "finance/rcm/dental", "finance/rcm/chiro"]);
   const f = registry().resolve("finance-generic");
   assert.deepEqual(f.kinds, ["production", "billing", "income", "collections", "deposits", "ledger", "tax", "adjustments", "other"]);
   assert.deepEqual(f.flowOrder, ["production", "billing", "income", "collections", "deposits", "ledger", "tax"]);

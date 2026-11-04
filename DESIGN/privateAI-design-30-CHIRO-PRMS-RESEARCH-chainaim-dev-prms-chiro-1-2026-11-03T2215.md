@@ -1,6 +1,6 @@
 # privateAI-design-30 — US Chiropractic practice-management example (chainaim-dev-prms-chiro-1): research and design
 
-Status: RESEARCH / PROPOSAL. Nothing built. Every file layout below is UNVERIFIED until the owner supplies
+Status: RESEARCH / PROPOSAL; CHIRO-1a built 2026-11-03 (§11). Every file layout below is UNVERIFIED until the owner supplies
 anonymized real exports (same rule as the dental pack: `{ value, verified, basis }`, nothing guessed).
 
 ## 0. What I read in this repo first (basis)
@@ -221,3 +221,22 @@ Repeat step 1 on `chiro-2-jane` to show the same findings from a different PRMS.
 - CARC list: https://x12.org/codes/claim-adjustment-reason-codes (via https://portal.ct.gov/-/media/ohs/health-it-advisory-council/apcd-advisory-group/data-submission-guide-workgroup/meeting-materials/6-30-22/carc-codes_final.pdf)
 - PI liens/MedPay/PIP: https://www.chiroeco.com/?p=142581 ; https://corporate.findlaw.com/litigation-disputes/the-dc-lien-in-lean-times.html
 - Prepaid plan rules: https://regulations.justia.com/states/north-dakota/title-17/article-17-03/chapter-17-03-01/section-17-03-01-05 ; https://codes.ohio.gov/ohio-administrative-code/rule-4734-9-11 ; https://www.law.cornell.edu/regulations/minnesota/Minn-R-2500-6060
+
+## 11. Build status
+### CHIRO-1a (2026-11-03) — independent of §10 answers
+| Item | Where | Basis |
+|---|---|---|
+| ERA 835 parser (pure) | `services/analyst/src/sources/remit/x12-835-parse.ts` | AultCare 5010 835 Companion Guide v1.6 (2025-01-23): BPR01-16, TRN01-03, CLP01-07, NM1*QC, DTM 232/233/405/472, SVC01-05, CAS01-19 (six triplets; positive amount reduces payment), AMT*B6. CMS 835 TI Companion Guide 3.0 (005010X221A1): SVC06, LQ*HE, PLB03 codes, CO/OA/PR/PI. Amerigroup 835 guide: PLB up to six adjustments. **Unverified** (TR3 knowledge, reported as checks only): REF*6R, BPR02 = sum(CLP04) - sum(PLB). |
+| Source adapter `remit/x12-835` | `.../sources/remit/x12-835.ts` | Loads claims + `__payments`, `__lines`, `__adjustments`, `__plb`. Names (NM1) never loaded. |
+| CLI | `services/analyst/scripts/era-to-csv.ts --in <file.835> [--out <dir>] [--prefix] [--tables] [--allow-unbalanced] [--json]` | exit 0 ok / 1 check failed (files written) / 2 usage |
+| finance/rcm kinds | coverage, remittance, ar_aging | design-30 §3, §6.1 |
+| finance/rcm/chiro pack | `.../domain-packs/finance/rcm/chiro/pack.ts` | kinds processor, pi_case, prepay_plan; prefixes from §8.3. No `reconcile`/`sourceConfigs` until layouts are verified. |
+
+Checks the parser reports per file: service lines balance (SVC02 - line CAS = SVC03), claims balance (CLP03 - all CAS = CLP04),
+PR adjustments = CLP05 (payer practice), BPR02 = sum(CLP04) - sum(PLB), SE01 count, SE02 = ST02, every segment parsed.
+
+Known limit: `reconcile.ts` allows one file per layout per folder, so a Set keeps all payments in one interchange file (one ST per payment).
+
+### Next (CHIRO-1b), needs §10 answers 2, 4, 5, 6, 8
+Generator canonical model (`tools/chiro-synth`), 835 writer verified by this parser, chiro reconcile.json (ERA TRN vs bank trace),
+ChiroTouch/Jane layout adapters (after header lines from real exports), datasets.json entries chiro-ct / chiro-jane, scenario tests.

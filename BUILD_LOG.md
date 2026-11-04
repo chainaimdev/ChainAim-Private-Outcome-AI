@@ -694,3 +694,19 @@ Built in the AI's workspace on a snapshot of the owner's repo (main = e8626e8, v
   14/14 model inputs unmasked.
 - Owner PC 2026-11-03 02:30, local/deepseek-r1-8b, NEG-ALL, 5 questions: 5/5 verified and correct, 8.8-29.5 s each (generic-evidence baseline:
   5/5 "verified" but 2/5 correct, 32 s-2 min). Linux workspace: analyst 160/160, crossask 8/8 (golden unchanged), check-deps OK.
+
+## 2026-11-03 — CHIRO-1a (chainaim-dev-prms-chiro-1): ERA 835 parser, finance/rcm kinds, finance/rcm/chiro pack skeleton
+- Details: DESIGN/privateAI-design-30 §11. Parts that do not depend on the owner's §10 answers (design-30 §6.1-6.3).
+- services/analyst/src/sources/remit/x12-835-parse.ts (pure: delimiters from ISA, payments/claims/lines/CAS/PLB, cents without
+  floats, balancing checks, NM1 names never kept) + remit/x12-835.ts (source adapter: claim table + __payments, __lines,
+  __adjustments, __plb) registered in sources/index.ts; scripts/era-to-csv.ts (--in --out --prefix --tables --allow-unbalanced --json).
+- finance/rcm: kinds coverage, remittance, ar_aging (hints appended after the existing ones); finance/rcm/chiro: kinds processor,
+  pi_case, prepay_plan + the owner's file prefixes; no reconcile/sourceConfigs until ChiroTouch/Jane layouts are verified.
+- Linux workspace 2026-11-03 (pure tests only; DuckDB there is the Windows build): test/x12-835.test.ts 11/11, test/era-to-csv.test.ts 4/4.
+  Name-hint sanity (registry only): dental SET-2 names unchanged (bank, deposit_detail, ledger, patient_list); 13 chiro names as expected.
+- To run on the PC: analyst npm test (adds x12-835-load.test.ts 2, chiro-pack.test.ts 4; packs.test.ts inventory now lists finance/rcm/chiro).
+- PC run 2026-11-03 23:04: analyst 185/186; the 1 failure was sources-financing.test.ts pinning "all 8" adapters (now 9 with
+  remit/x12-835). Inventory updated to the exact sorted id list (stricter than the count); detection assertions unchanged.
+- PC run 2026-11-03 23:06: analyst 186/186 (165 before + 21 CHIRO-1a), 0 skipped, routes golden identical, dental NEG/L5/L6-L7 unchanged.
+- PC run 2026-11-03 23:08: gateway + scripts 351/351 (unchanged).
+- PC run 2026-11-03 23:09: dental-test.ps1 -Kind sql -SkipSets: All steps passed (NEG-ALL 39/39 credits, 8/8 exceptions, file-checks none). CHIRO-1a ready for v1.2.2.

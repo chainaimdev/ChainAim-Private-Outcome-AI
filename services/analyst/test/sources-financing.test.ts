@@ -61,9 +61,10 @@ const CC_ROWS = ["M-SYN-1,01/15/2025 2:24 PM ET,SYNTHNAME ALPHA,\"$1,234.50 \",P
 const CH_ROWS = ["1/10/2025,REF-SYN-1,REF2-SYN-1,555-000-0001,SYNTHNAME GAMMA,1000.00,0.00,50.00,950.00", "1/11/2025,REF-SYN-2,REF2-SYN-2,555-000-0002,SYNTHNAME DELTA,500.00,100.00,20.00,380.00"];
 const HFD_ROW = (amount = "2850.00") => `1/05/2025,HFD-SYN-1,SYNTHNAME EPSILON,1/09/2025,9991,3000.00,A,PID-SYN-1,SYN-PLAN,5%,150.00,${amount},3000.00,SYN PRACTICE,9992,8881,0.00`;
 
-test("layout detection: each GLOBAL header picks exactly one adapter among all 8; unrelated headers pick none", async () => {
+test("layout detection: each GLOBAL header picks exactly one adapter among all 9; unrelated headers pick none", async () => {
   const r = new SourceRegistry(); for (const a of BUILT_IN_SOURCES) r.register(a);
-  assert.equal(r.list().length, 8);
+  assert.deepEqual(r.list(), ["bank/bofa", "financing/carecredit", "financing/cherry", "financing/hfd", "prms/curve-hero/deposit-detail",
+    "prms/curve-hero/ledger", "prms/curve-hero/patient-list", "prms/curve-hero/procedures", "remit/x12-835"]);
   const cases: [string, string][] = [[hdr(CARECREDIT_LAYOUT.headers, ",,,,,,,,,,,"), "financing/carecredit"], [hdr(CARECREDIT_LAYOUT.headers), "financing/carecredit"],
     [hdr(CHERRY_LAYOUT.headers), "financing/cherry"], [hdr(HFD_LAYOUT.headers), "financing/hfd"]];
   for (const [h, id] of cases) assert.deepEqual(r.detect(await firstLines(file("d.csv", [h]))).map((a) => a.id), [id], h);
