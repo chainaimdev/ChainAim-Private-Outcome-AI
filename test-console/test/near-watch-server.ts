@@ -3,14 +3,48 @@
  * started in this process from its own code on a free loopback port, with an in-memory store and its own Roads and
  * LiveOps, so the console's job feed (test-console/console/job-feed.ts, adminUI architecture-adminui-jobs.md ARCH-205)
  * posts to the parser and store that run in production. near-watch has no runtime dependencies (node:sqlite is built
- * in), so nothing is installed. Its checkout is the sibling folder ../chainaim-adminUI-NEAR, or NEAR_WATCH_DIR.
+ * in), so nothing is installed. Where its checkout is: locateNearWatch below (env, config/local/repos.json, sibling).
  */
-import { existsSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
-export const NEAR_WATCH_DIR = resolve(process.env.NEAR_WATCH_DIR ?? join(ROOT, "..", "chainaim-adminUI-NEAR", "services", "near-watch"));
+// ---- locate near-watch (privateAI-design-31 §4). Keep this block identical in scripts/test/near-watch-server.ts and
+// test-console/test/near-watch-server.ts (check-deps forbids one importing the other; scripts/test/near-watch-locate.test.ts
+// compares them). Order: 1. env NEAR_WATCH_DIR, 2. config/local/repos.json "nearWatchDir" (per PC, git-ignored; copy
+// config/local/repos.example.json), 3. the sibling folder ../chainaim-adminUI-NEAR. A relative path is resolved from this
+// repository's root, never from the current folder. Not found: the tests that need it are skipped with the reason, unless
+// REQUIRE_NEAR_WATCH=1 (then they fail with the same reason).
+export type NearWatchLocation = { dir: string; source: string; found: boolean };
+export function locateNearWatch(root: string = ROOT, env: Record<string, string | undefined> = process.env): NearWatchLocation {
+  const fromRoot = (p: string) => (isAbsolute(p) ? resolve(p) : resolve(root, p));
+  const fromEnv = env.NEAR_WATCH_DIR?.trim();
+  let dir: string, source: string;
+  if (fromEnv) { dir = fromRoot(fromEnv); source = "env NEAR_WATCH_DIR"; }
+  else {
+    const file = join(root, "config", "local", "repos.json");
+    let fromFile: string | undefined;
+    if (existsSync(file)) {
+      let cfg: { nearWatchDir?: unknown };
+      try { cfg = JSON.parse(readFileSync(file, "utf8").replace(/^﻿/, "")); } catch (e) { throw new Error(`config/local/repos.json is not valid JSON: ${(e as Error).message}`); }
+      if (cfg.nearWatchDir !== undefined && (typeof cfg.nearWatchDir !== "string" || !cfg.nearWatchDir.trim())) throw new Error("config/local/repos.json: nearWatchDir must be a non-empty path (absolute, or relative to the repository root)");
+      fromFile = typeof cfg.nearWatchDir === "string" ? cfg.nearWatchDir.trim() : undefined;
+    }
+    if (fromFile) { dir = fromRoot(fromFile); source = "config/local/repos.json nearWatchDir"; }
+    else { dir = resolve(root, "..", "chainaim-adminUI-NEAR", "services", "near-watch"); source = "default: the sibling folder ../chainaim-adminUI-NEAR"; }
+  }
+  return { dir, source, found: existsSync(join(dir, "src", "server.ts")) };
+}
+export const nearWatchMissing = (loc: NearWatchLocation): string =>
+  `near-watch is not at ${loc.dir} (from ${loc.source}): set "nearWatchDir" in config/local/repos.json (copy config/local/repos.example.json) or the env NEAR_WATCH_DIR`;
+/** node:test option for the tests that need near-watch: false (run) when found or REQUIRE_NEAR_WATCH=1, else the skip reason. */
+export function nearWatchSkip(loc: NearWatchLocation = NEAR_WATCH, env: Record<string, string | undefined> = process.env): string | false {
+  return loc.found || env.REQUIRE_NEAR_WATCH === "1" ? false : nearWatchMissing(loc);
+}
+export const NEAR_WATCH = locateNearWatch();
+export const NEAR_WATCH_DIR = NEAR_WATCH.dir;
+// ---- end locate near-watch
 export const INGEST_KEY = "job-feed-test-ingest-key-0123456789";
 const ADMIN_KEY = "job-feed-test-admin-key-0123456789ab";
 /** The token contract near-watch counts here: the recorded testnet USDC (it reads no chain in these tests). */
@@ -27,7 +61,7 @@ export type NearWatch = {
 };
 
 export async function startNearWatch(): Promise<NearWatch> {
-  if (!existsSync(join(NEAR_WATCH_DIR, "src", "server.ts"))) throw new Error(`near-watch is not at ${NEAR_WATCH_DIR}: check out chainaim-adminUI-NEAR beside this repo or set NEAR_WATCH_DIR`);
+  if (!NEAR_WATCH.found) throw new Error(nearWatchMissing(NEAR_WATCH));
   const mod = async (name: string) => import(pathToFileURL(join(NEAR_WATCH_DIR, "src", name)).href);
   const [{ Bus }, { LiveOps }, { Roads }, { WatchServer }, { Store }] = await Promise.all(["events.ts", "liveops.ts", "roads.ts", "server.ts", "store.ts"].map(mod));
   const network = "testnet";

@@ -817,3 +817,16 @@ Built in the AI's workspace on a snapshot of the owner's repo (main = e8626e8, v
   imports and flags + our run-log ones) resolved by keeping both. Their commit had removed the v1.3.1 section of this log
   (CHIRO-1b-1, NEAR TestNet setup, first live NEAR payment): kept.
 
+## 2026-11-05 — near-watch tests not tied to one folder layout (privateAI-design-31 §4); v1.3.3
+- scripts/test and test-console/test near-watch-server.ts: locateNearWatch (identical block, compared by a test): env NEAR_WATCH_DIR,
+  then config/local/repos.json nearWatchDir (per PC, git-ignored; config/local/repos.example.json committed), then the sibling
+  folder; relative paths resolve from the repository root. Not found -> the two ARCH-205 near-watch tests are skipped with the
+  reason; REQUIRE_NEAR_WATCH=1 -> they fail. scripts/test/near-watch-locate.test.ts (7). MANUAL_SETUP.md section, design-31 §4.
+- Owner PC: config/local/repos.json written (nearWatchDir ../../BLK-LIVEOPS/BLK-NEAR/chainaim-adminUI-NEAR/services/near-watch).
+- Workspace: locate tests 7/7; default run skips with the reason (exit 0), REQUIRE_NEAR_WATCH=1 exit 1.
+- Owner PC 12:30 (before this change, NEAR_WATCH_DIR set): console-paid-jobs + job-feed 30/30 against the real near-watch.
+- Owner PC 12:38 (NEAR_WATCH_DIR removed, config/local/repos.json only): near-watch-locate + console-paid-jobs + job-feed 37/37,
+  0 skipped (the near-watch tests ran against the real checkout).
+- Merge 30f39fa (origin acd434f, Nisha, tagged v1.3.2) committed 12:35. Tag v1.3.3 = this commit: CHIRO-1b-2 stages 1-2, console
+  notes + run log (design-31 §1-3), the merge, and this change.
+

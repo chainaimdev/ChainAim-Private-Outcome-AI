@@ -37,3 +37,14 @@ not be traced afterwards (only `dental-test.ps1` writes `sample-data/prms/_runs/
   derivations, model reply texts (synthetic data only). Pruning touches only `crossask-YYYY-MM-DD.jsonl` files in that folder.
 - Not logged (unchanged): paid chat text and payments; the dental reconcile / pack routes (their runs are re-computable).
 - Tests: `scripts/test/console-notes.test.ts`. Linux workspace: the real server.ts started with --run-log full and saved a run.
+
+## 4. Tests that need another repository: not tied to one folder layout (owner, 12:32)
+- The ARCH-205 tests (paid jobs -> adminUI-NEAR near-watch) found near-watch only beside this repo or by an env var resolved from
+  the current folder, and failed when it was elsewhere (owner PC: CHAINAIM-DEV\BLK-LIVEOPS\BLK-NEAR\chainaim-adminUI-NEAR).
+- Now `locateNearWatch` (identical block in scripts/test and test-console/test near-watch-server.ts, compared by a test because
+  check-deps forbids the import): env NEAR_WATCH_DIR, then config/local/repos.json `nearWatchDir` (per PC, git-ignored, like
+  ai-profile / chain-profile; repos.example.json committed), then the sibling folder. Relative paths resolve from the repository
+  root. Not found -> the two tests are skipped with the reason; REQUIRE_NEAR_WATCH=1 -> they fail (exit 1) with the same reason.
+- Absolute or relative: relative in repos.json when the team agrees one layout (same value on every PC); absolute for the env var.
+- Tests: scripts/test/near-watch-locate.test.ts (7). Workspace: default run skips with the reason (exit 0); strict run exit 1.
+

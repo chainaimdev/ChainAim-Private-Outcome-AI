@@ -272,3 +272,17 @@ Off unless switched on; with the flags off nothing changes.
 - **Console (M-C):** add `--job-feed-url http://127.0.0.1:8790/ingest/job` (with `--paid-jobs on`). Environment: `NEAR_WATCH_INGEST_KEY`, the same value near-watch uses, at least 24 characters. Load it from `C:\PRIV-AI-SECRETS\near-watch.env` into the console's window by name; never paste the value. Optional: `--job-feed-key-env NAME` (default NEAR_WATCH_INGEST_KEY), `--job-feed-timeout-ms` (5000), `--job-feed-max-inflight` (20), `--job-expiry-check-sec` (30). The start lines then add `job feed on: http://127.0.0.1:8790/ingest/job  key from NEAR_WATCH_INGEST_KEY  expiry check every 30 s`. A failed post prints one `"event":"job_feed_failed"` line (job id and reason only) and never fails the job.
 - **near-watch (M-W, adminUI repo):** stop the running near-watch and start it again from `chainaim-adminUI-NEAR\services\near-watch` with its usual flags plus `--watch relayer=relayer=chainaim-relayer-seller.testnet --gas-per-payment-near 0.000333`, e.g. `node --env-file=C:\PRIV-AI-SECRETS\near-watch.env src/main.ts --watch buyer1=buyer=chainaim-buyer-seller.testnet --watch relayer=relayer=chainaim-relayer-seller.testnet --gas-per-payment-near 0.000333`. (test-console\start-live.ps1 starts the XRPL ledger-watch, not near-watch.) This restart also picks up the 2026-11-04 read-ahead and late-match fixes.
 - **M-UI / ARCH-211:** one paid and one unpaid tab 03 job, then open http://127.0.0.1:8800/#jobs. Record in both BUILD_LOGs: paid quoted → paid → released, with Bedrock models, tokens, masking counts, breakdown, reconcile `matched`, and the tx equal to the receipt. The unpaid job turns `expired` after its TTL and lost compute rises by its cost. With the relayer watched, there is no `low_gas` at the current balance.
+
+## 2026-11-05 — Where the adminUI-NEAR checkout is, for the near-watch tests (privateAI-design-31 §4; owner)
+The ARCH-205 tests (scripts/test/console-paid-jobs.test.ts, test-console/test/job-feed.test.ts) start the real near-watch from
+the chainaim-adminUI-NEAR repository. They are not tied to one folder layout:
+1. Copy `config\local\repos.example.json` to `config\local\repos.json` (git-ignored, per PC) and set `nearWatchDir` to the
+   checkout's `services\near-watch` folder. A relative path is resolved from this repository's root (not the current folder);
+   an absolute path also works. On the owner PC: `"../../BLK-LIVEOPS/BLK-NEAR/chainaim-adminUI-NEAR/services/near-watch"`
+   (use / or \\ in JSON). Agree one layout with the team and the relative value is the same on every PC.
+2. Or, for one PowerShell window: `$env:NEAR_WATCH_DIR = "<absolute path to services\near-watch>"` (wins over the file).
+3. Neither set: the sibling folder `..\chainaim-adminUI-NEAR` is tried.
+Not found: those tests are skipped and the run says where it looked, from which setting, and how to fix it; the rest of the
+suite is unaffected. `$env:REQUIRE_NEAR_WATCH = "1"` makes them fail instead (release checks, CI). Keep the adminUI checkout
+current (`git pull` there) when the job-feed contract changes.
+

@@ -21,7 +21,7 @@ import { startStubPresidio, type StubPresidio } from "../stub-presidio.ts";
 import { validateCatalog } from "../../services/gateway/src/catalog.ts";
 import { startTestGateway, type TestGateway } from "../../services/gateway/test/helpers.ts";
 import { pricesFromCatalog, quoteJob, type Fees } from "../../packages/crossask/src/cost.ts";
-import { INGEST_KEY, startNearWatch } from "./near-watch-server.ts";
+import { INGEST_KEY, nearWatchSkip, startNearWatch } from "./near-watch-server.ts";
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const SERVER = join(ROOT, "test-console/console/server.ts");
@@ -339,7 +339,7 @@ describe("ARCH-113 nothing sensitive leaves through logs", () => {
 });
 
 describe("ARCH-205 (chainaim-adminUI-NEAR architecture-adminui-jobs.md) the job feed to near-watch", () => {
-  test("ARCH-205: with --job-feed-url the job's events reach the real near-watch once: quoted with its steps and breakdown, then released", async () => {
+  test("ARCH-205: with --job-feed-url the job's events reach the real near-watch once: quoted with its steps and breakdown, then released", { skip: nearWatchSkip() }, async () => {
     const nw = await startNearWatch();
     const port = await freePort(), iport = await freePort();
     const c = await start(consoleArgs(port, iport, { "job-feed-url": nw.ingestUrl }), consoleReady(port), { PAID_JOBS_KEY: JOBS_KEY, NEAR_WATCH_INGEST_KEY: INGEST_KEY }, "the console");

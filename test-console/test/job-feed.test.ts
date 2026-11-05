@@ -11,7 +11,7 @@ import { JobFeed, jobFeedConfig, jobSteps, quotedEvent, type JobFeedConfig } fro
 import { JobStore, internalHandler } from "../console/jobs.ts";
 import { quoteJob, type Fees } from "../../packages/crossask/src/cost.ts";
 import type { CrossAskResult } from "../../packages/crossask/src/index.ts";
-import { INGEST_KEY, startNearWatch, type NearWatch } from "./near-watch-server.ts";
+import { INGEST_KEY, nearWatchSkip, startNearWatch, type NearWatch } from "./near-watch-server.ts";
 
 const MARKER = "Zqxjobfeedmarker";
 const MODEL = "bedrock/nemotron-nano-3-30b";
@@ -91,7 +91,7 @@ describe("ARCH-205: the events", () => {
   });
 });
 
-describe("ARCH-205: against the real near-watch", () => {
+describe("ARCH-205: against the real near-watch", { skip: nearWatchSkip() }, () => {
   let nw: NearWatch;
   before(async () => { nw = await startNearWatch(); });
   after(async () => { await nw.close(); });

@@ -1,0 +1,4 @@
+{
+  "notes": "Per-PC paths to sibling repositories (privateAI-design-31 s4). Copy to config/local/repos.json (git-ignored: config/local/* in .gitignore, *.example.json committed) and edit. Read by the near-watch test helpers (scripts/test and test-console/test near-watch-server.ts): env NEAR_WATCH_DIR wins, then this file, then the sibling folder ../chainaim-adminUI-NEAR. A relative path is resolved from this repository's root (not the current folder), so the same value works from any window; an absolute path also works. Without near-watch the ARCH-205 tests are skipped with the reason; REQUIRE_NEAR_WATCH=1 makes them fail instead (release checks, CI).",
+  "nearWatchDir": "../../BLK-LIVEOPS/BLK-NEAR/chainaim-adminUI-NEAR/services/near-watch"
+}
