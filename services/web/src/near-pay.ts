@@ -55,17 +55,12 @@ function refusalReason(header: string | null): string | undefined {
 }
 
 /**
- * The page's paid chat call with any body the chat route accepts, paid in USDC
- * on NEAR from accountId. The body goes out unchanged, to ask the price and with the payment.
+ * The steps every NEAR paid call shares: ask the price, check the 402's NEAR
+ * offer against what the page showed, have the wallet sign, check the signed
+ * delegate, and ask again with the payment. Throws one plain sentence.
  */
-export async function payNearChat(deps: NearPayDeps, accountId: string, quote: NearPayQuote, body: Record<string, unknown>): Promise<Answer | Failure> {
+async function askAndPay(deps: NearPayDeps, accountId: string, quote: NearPayQuote, ask: (payment?: string) => Promise<Response>): Promise<{ r: Response; signed: boolean }> {
   let signed = false;
-  const ask = (payment?: string): Promise<Response> =>
-    deps.fetch(deps.chatUrl ?? "/api/chat", {
-      method: "POST",
-      headers: { "content-type": "application/json", ...(payment ? { "PAYMENT-SIGNATURE": payment } : {}) },
-      body: JSON.stringify(body),
-    });
   let r: Response;
   try {
     r = await ask();
@@ -107,11 +102,31 @@ export async function payNearChat(deps: NearPayDeps, accountId: string, quote: N
     if (m.endsWith("nothing was paid")) throw new Error(`${m.charAt(0).toUpperCase()}${m.slice(1)}.`);
     throw new Error(`The payment could not be made (${m.slice(0, 200)}). Nothing was paid.`);
   }
+  return { r, signed };
+}
+
+/** A refused payment (402 after paying) as the page's sentence: the paywall never sends a refused payment. */
+function refusedPayment(r: Response, quote: NearPayQuote): Failure {
+  const reason = refusalReason(r.headers.get("payment-required"));
+  const where = NETWORK_LABEL[quote.network];
+  return { error: `The payment was not accepted${reason ? ` (${reason})` : ""}. Check that your NEAR account holds enough USDC${where ? ` on ${where}` : ""}. You were not charged.`, status: 402 };
+}
+
+/**
+ * The page's paid chat call with any body the chat route accepts, paid in USDC
+ * on NEAR from accountId. The body goes out unchanged, to ask the price and with the payment.
+ */
+export async function payNearChat(deps: NearPayDeps, accountId: string, quote: NearPayQuote, body: Record<string, unknown>): Promise<Answer | Failure> {
+  const ask = (payment?: string): Promise<Response> =>
+    deps.fetch(deps.chatUrl ?? "/api/chat", {
+      method: "POST",
+      headers: { "content-type": "application/json", ...(payment ? { "PAYMENT-SIGNATURE": payment } : {}) },
+      body: JSON.stringify(body),
+    });
+  const { r, signed } = await askAndPay(deps, accountId, quote, ask);
   if (r.status === 402) {
-    const reason = refusalReason(r.headers.get("payment-required"));
-    const where = NETWORK_LABEL[quote.network];
     // A refused payment is never sent by the paywall: it sends only after the call was served.
-    return { error: `The payment was not accepted${reason ? ` (${reason})` : ""}. Check that your NEAR account holds enough USDC${where ? ` on ${where}` : ""}. You were not charged.`, status: 402 };
+    return refusedPayment(r, quote);
   }
   const settled = decodeReceipt(r.headers.get("payment-response"));
   const transaction = settled?.transaction ?? null;
@@ -127,4 +142,41 @@ export async function payNearChat(deps: NearPayDeps, accountId: string, quote: N
   if (!("error" in result)) return result;
   if (signed && r.status >= 500 && /not charged/i.test(result.error)) return { error: AFTER_APPROVAL, status: r.status, transaction };
   return transaction && !result.transaction ? { ...result, transaction } : result;
+}
+
+/** A released job: its result as the paywall sent it, and the settled transaction. */
+export type NearReleased = { result: unknown; transaction: string | null; network: string | null };
+
+/**
+ * The release of one paid job (test console tab 03): POST releaseUrl, pay
+ * exactly the quote the page showed, and read the JSON result the paywall
+ * releases once the payment has settled. Same signing, checks and money rules
+ * as payNearChat.
+ */
+export async function payNearRelease(deps: NearPayDeps, accountId: string, quote: NearPayQuote, releaseUrl: string): Promise<NearReleased | Failure> {
+  const ask = (payment?: string): Promise<Response> => deps.fetch(releaseUrl, { method: "POST", headers: payment ? { "PAYMENT-SIGNATURE": payment } : {} });
+  const { r, signed } = await askAndPay(deps, accountId, quote, ask);
+  if (r.status === 402) return refusedPayment(r, quote);
+  const settled = decodeReceipt(r.headers.get("payment-response"));
+  const transaction = settled?.transaction ?? null;
+  let text: string;
+  try {
+    text = await r.text();
+  } catch (e) {
+    console.error("[privacybuddy] reading the job result failed", { signed, status: r.status, error: e });
+    if (signed) return { error: AFTER_APPROVAL, status: 502, transaction };
+    throw new Error("The result could not be read. Nothing was paid.");
+  }
+  let body: unknown;
+  try {
+    body = JSON.parse(text);
+  } catch {
+    body = undefined;
+  }
+  if (r.status === 200 && body !== undefined && transaction) return { result: body, transaction, network: settled?.network ?? null };
+  if (r.status === 200) return { error: signed ? AFTER_APPROVAL : "The result could not be read. Nothing was paid.", status: 502, transaction };
+  const said = (body as { error?: { message?: unknown } } | undefined)?.error?.message;
+  const message = typeof said === "string" && said ? said.replace(/[\u0000-\u001f\u007f]/g, " ").slice(0, 300) : `The job could not be released (HTTP ${r.status}).`;
+  if (signed && r.status >= 500 && /not charged/i.test(message)) return { error: AFTER_APPROVAL, status: r.status, transaction };
+  return { error: message, status: r.status, ...(transaction ? { transaction } : {}) };
 }

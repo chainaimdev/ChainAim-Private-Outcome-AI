@@ -146,6 +146,22 @@ export type PaywallConfig = Partial<XrplConfig> & {
    * handed, fire-and-forget, to ledger-watch.
    */
   paymentLog?: PaymentLogConfig;
+  /**
+   * Paid jobs (architecture.md ARCH-106): present only with PAID_JOBS=on, so the configuration is otherwise exactly
+   * what it was. POST /internal/jobs takes jobs from the test console; POST /v1/jobs/:id/release is paid in NEAR USDC.
+   */
+  paidJobs?: PaidJobsConfig;
+};
+
+export type PaidJobsConfig = {
+  /** Shared with the console (x-jobs-key), at least 24 characters; never logged. */
+  key: string;
+  /** The console's internal listener, e.g. http://host.docker.internal:8731; the result is read from /internal/jobs/:id. */
+  resultUrl: string;
+  /** The longest a registered job may stay payable. */
+  ttlSec: number;
+  /** Most open jobs at once; registration beyond it is refused with 503. */
+  max: number;
 };
 
 /** The XRPL settings of a configuration that has the xrpl rail; throws on one that has not. */
@@ -330,6 +346,22 @@ export function loadConfig(env: Record<string, string | undefined>): PaywallConf
     throw new Error("PUBLIC_BASE_URL must be an https URL");
   }
   const prices = { scan: price("PRICE_SCAN"), mask: price("PRICE_MASK"), chat: price("PRICE_CHAT") };
+  const paidJobsValue = value("PAID_JOBS") ?? "off";
+  if (paidJobsValue !== "on" && paidJobsValue !== "off") throw new Error(`PAID_JOBS must be on or off, got ${paidJobsValue}`);
+  let paidJobs: PaidJobsConfig | undefined;
+  if (paidJobsValue === "on") {
+    if (!near) throw new Error("PAID_JOBS=on needs the NEAR rail: set PAY_RAILS=near or xrpl,near (paid jobs are paid in USDC on NEAR only)");
+    const jobsKey = value("PAID_JOBS_KEY");
+    // The key's value is never put in a message.
+    if (jobsKey === undefined || jobsKey.length < 24) throw new Error("PAID_JOBS_KEY is required with PAID_JOBS=on: the key shared with the test console, at least 24 characters");
+    const resultRaw = value("PAID_JOBS_RESULT_URL");
+    if (resultRaw === undefined) throw new Error("PAID_JOBS_RESULT_URL is required with PAID_JOBS=on: the console's internal listener, e.g. http://host.docker.internal:8731");
+    const ttlSec = integer("PAID_JOBS_TTL_SEC", 900);
+    if (ttlSec < 60 || ttlSec > 86_400) throw new Error("PAID_JOBS_TTL_SEC must be from 60 to 86400");
+    const max = integer("PAID_JOBS_MAX", 1000);
+    if (max < 1 || max > 100_000) throw new Error("PAID_JOBS_MAX must be from 1 to 100000");
+    paidJobs = { key: jobsKey, resultUrl: url("PAID_JOBS_RESULT_URL", resultRaw), ttlSec, max };
+  }
   if (near) {
     for (const [name, p] of Object.entries(prices)) {
       try {
@@ -354,5 +386,6 @@ export function loadConfig(env: Record<string, string | undefined>): PaywallConf
     ...(paymentLog ? { paymentLog } : {}),
     rails,
     ...(near ? { near } : {}),
+    ...(paidJobs ? { paidJobs } : {}),
   };
 }

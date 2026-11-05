@@ -101,6 +101,8 @@ export type TestGatewayOptions = {
   residual?: ResidualPolicy;
   /** Extra chat options (restoreLenient, placeholderInstruction). */
   chatExtra?: Partial<Pick<ChatOptions, "restoreLenient" | "placeholderInstruction" | "autoZones" | "phiZones">>;
+  /** --expose-entity-counts (ARCH-202); default off, as in production. */
+  exposeEntityCounts?: boolean;
 };
 
 export type TestGateway = {
@@ -148,7 +150,7 @@ export async function startTestGateway(o: TestGatewayOptions): Promise<TestGatew
       ledger: new Ledger(ledgerDir),
       chat: { maxOutputTokens: 1024, maxAttempts: 3, attemptTimeoutMs: o.attemptTimeoutMs ?? 2000, healthFlagThreshold: 0.5, ...(o.residual ? { residual: o.residual } : {}), ...(o.chatExtra ?? {}) },
     },
-    { maxBodyBytes: 1 << 20, gatewayKey: o.gatewayKey },
+    { maxBodyBytes: 1 << 20, gatewayKey: o.gatewayKey, ...(o.exposeEntityCounts ? { exposeEntityCounts: true } : {}) },
   );
   const url = await listen(server);
   return { url, server, presidio, pool, quota, deny, ledgerDir, close: () => closeServer(server) };

@@ -16,7 +16,9 @@
     "--auto-zones",
     "local",
     "--phi-zones",
-    "local"
+    "local",
+    "--expose-entity-counts",
+    "on"
   ],
   "testTimeoutSec": 600,
   "doneMessage": "Local + OpenRouter + Bedrock are on in one gateway. Name a model to use it: local/qwen2.5-3b, hosted/nemotron-nano-reasoning, bedrock/nemotron-nano-3-30b (chainaim/auto stays local). Console: node test-console\\console\\server.ts --models-file config\\local-models.cpu-all.json"

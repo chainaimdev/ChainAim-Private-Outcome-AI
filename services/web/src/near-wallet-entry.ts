@@ -14,11 +14,11 @@
 import { NearConnector } from "@hot-labs/near-connect";
 import { decodeSignedDelegateB64 } from "@x402/near";
 import type { Answer, Failure } from "./answer.ts";
-import { payNearChat, type NearPayQuote } from "./near-pay.ts";
+import { payNearChat, payNearRelease, type NearPayDeps, type NearPayQuote, type NearReleased } from "./near-pay.ts";
 import { NEAR_WALLET_MANIFEST, NEAR_WALLETS, isNearWalletId, pickNearWallet, type NearWalletId } from "./near-wallets.ts";
 import { within } from "./pay.ts";
 
-export type { NearPayQuote };
+export type { NearPayQuote, NearReleased };
 
 const KEY = "privacybuddy.near";
 /** A wallet window the visitor never answers would wait for ever, so connecting has a time limit. */
@@ -132,25 +132,32 @@ export function nearPayAndAsk(accountId: string, walletId: string, quote: NearPa
  * payment, signing and money rules as nearPayAndAsk.
  */
 export async function nearPayAndChat(accountId: string, walletId: string, quote: NearPayQuote, body: Record<string, unknown>, chatUrl: string, onSigned?: () => void): Promise<Answer | Failure> {
+  return payNearChat({ ...(await walletDeps(accountId, walletId, quote)), onSigned, chatUrl }, accountId, quote, body);
+}
+
+/**
+ * The test console's paid job release (tab 03, architecture.md ARCH-111/112): POST releaseUrl, which relays to the
+ * paywall's /v1/jobs/<id>/release; pays exactly the quoted total and returns the released JSON result. Same payment,
+ * signing and money rules as nearPayAndChat.
+ */
+export async function nearPayAndRelease(accountId: string, walletId: string, quote: NearPayQuote, releaseUrl: string, onSigned?: () => void): Promise<NearReleased | Failure> {
+  return payNearRelease({ ...(await walletDeps(accountId, walletId, quote)), onSigned }, accountId, quote, releaseUrl);
+}
+
+/** The connected wallet as payNearChat / payNearRelease use it: it signs, and does not send, one delegate. */
+async function walletDeps(accountId: string, walletId: string, quote: NearPayQuote): Promise<NearPayDeps> {
   const id = walletOf(walletId);
   const network = networkOf(quote.network);
   const c = await connector(id, quote.network);
   const wallet = await c.wallet(id);
-  return payNearChat(
-    {
-      async signDelegate(request) {
-        const out = await wallet.signDelegateActions({ network, signerId: accountId, delegateActions: [request] });
-        const list = out?.signedDelegateActions;
-        if (!Array.isArray(list) || list.length !== 1) throw new Error("the NEAR wallet did not return exactly one signed payment; nothing was paid");
-        return list[0];
-      },
-      decode: decodeSignedDelegateB64,
-      fetch: (input, init) => fetch(input, init),
-      onSigned,
-      chatUrl,
+  return {
+    async signDelegate(request) {
+      const out = await wallet.signDelegateActions({ network, signerId: accountId, delegateActions: [request] });
+      const list = out?.signedDelegateActions;
+      if (!Array.isArray(list) || list.length !== 1) throw new Error("the NEAR wallet did not return exactly one signed payment; nothing was paid");
+      return list[0];
     },
-    accountId,
-    quote,
-    body,
-  );
+    decode: decodeSignedDelegateB64,
+    fetch: (input, init) => fetch(input, init),
+  };
 }

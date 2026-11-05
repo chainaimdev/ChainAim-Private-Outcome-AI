@@ -22,13 +22,49 @@ import { deriveFigure } from "./derive.ts";
 export function answerEvidence(question: string, table: string): string { return `Question: ${question}\n${table}`; }
 
 export type Msg = { role: "system" | "user" | "assistant"; content: string };
-export type ChatReply = { text: string; model?: string; zone?: string };
+/** usage (ARCH-102): the provider's token counts for this call, from the gateway reply; undefined when the reply has none. */
+/**
+ * entityCounts / residual (adminUI ARCH-204): what the gateway masked in this call, kinds and counts only, from its
+ * x-chainaim-entity-counts / x-chainaim-residual headers (sent only with the gateway's --expose-entity-counts on);
+ * absent when the header is absent or malformed.
+ */
+export type ChatReply = {
+  text: string; model?: string; zone?: string; usage?: { promptTokens: number; completionTokens: number };
+  entityCounts?: Record<string, number>; residual?: "pass" | "refused";
+};
 export type CrossAskDeps = {
   /** POST to the analyst route; resolves with the JSON body, throws Error(message) on a non-2xx answer. */
   analyst: (route: "relations" | "sql", body: Record<string, unknown>) => Promise<any>;
   /** One chat completion through the gateway (or the paywall). */
   chat: (messages: Msg[], model: string) => Promise<ChatReply>;
+  /** Monotonic milliseconds (e.g. performance.now). Given: the result carries timings (ARCH-204); absent: it does not. */
+  clock?: () => number;
 };
+/**
+ * Whole milliseconds per step (adminUI ARCH-204): the analyst's relations, every query model call, every SQL run, the
+ * answer model call (absent when no answer model was called, e.g. phrase "none"). callsMs: one entry per `served`
+ * reply, same order. files: tables the analyst loaded.
+ */
+export type CrossAskTimings = { relationsMs: number; queryMs: number; sqlMs: number; answerMs?: number; callsMs: number[]; files: number };
+
+const ENTITY_KIND = /^[A-Za-z][A-Za-z0-9_]{0,63}$/;
+/** x-chainaim-entity-counts: a JSON object of entity kind -> non-negative integer, or undefined. */
+function parseEntityCounts(header: string | null): Record<string, number> | undefined {
+  if (!header || header.length > 4096) return undefined;
+  let v: unknown;
+  try { v = JSON.parse(header); } catch { return undefined; }
+  if (typeof v !== "object" || v === null || Array.isArray(v)) return undefined;
+  const out: Record<string, number> = {};
+  for (const [k, n] of Object.entries(v)) {
+    if (!ENTITY_KIND.test(k) || typeof n !== "number" || !Number.isSafeInteger(n) || n < 0) return undefined;
+    out[k] = n;
+  }
+  return out;
+}
+/** x-chainaim-residual: pass | refused, or undefined. */
+function parseResidual(header: string | null): "pass" | "refused" | undefined {
+  return header === "pass" || header === "refused" ? header : undefined;
+}
 export type CrossAskInput = { folder: string; question: string; model: string; /** Model for the worded answer (default: model). A local one keeps the result rows on this PC. */ answerModel?: string; phrase: "llm" | "none"; sqlRetries: number; answerMaxRows: number; sql?: string };
 export type Attempt = { sql: string; error?: string };
 /**
@@ -62,6 +98,8 @@ export type CrossAskResult = {
   /** Problems with the result that the number check cannot see (e.g. a join that multiplies rows). */
   warnings: string[];
   error?: string;
+  /** Only when deps.clock is given (ARCH-204). */
+  timings?: CrossAskTimings;
 };
 
 export const SQL_SYSTEM = [
@@ -102,23 +140,34 @@ export function resultText(r: { columns: string[]; rows: Record<string, unknown>
 
 export async function crossAsk(input: CrossAskInput, deps: CrossAskDeps): Promise<CrossAskResult> {
   if (typeof input.question !== "string" || !input.question.trim()) throw new Error("question is required");
-  const rel = await deps.analyst("relations", { folder: input.folder });
+  // Step timings (ARCH-204), only with deps.clock: whole ms, added up per step even when a call fails.
+  const clock = deps.clock;
+  const t: CrossAskTimings | undefined = clock ? { relationsMs: 0, queryMs: 0, sqlMs: 0, callsMs: [], files: 0 } : undefined;
+  let lastMs = 0;
+  const timed = async <T>(fn: () => Promise<T>, add: (ms: number) => void): Promise<T> => {
+    if (!clock) return fn();
+    const s = clock();
+    try { return await fn(); } finally { lastMs = Math.round(clock() - s); add(lastMs); }
+  };
+  const rel = await timed(() => deps.analyst("relations", { folder: input.folder }), (ms) => { t!.relationsMs += ms; });
   const out: CrossAskResult = { question: input.question, schema: rel.schema, relations: rel.relations, attempts: [], sql: null, result: null, answer: null, unverified: [], served: [], sentToModel: [], warnings: [], derivations: {} };
+  if (t) { t.files = Array.isArray(rel.tables) ? rel.tables.length : 0; out.timings = t; }
   const messages: Msg[] = [{ role: "system", content: SQL_SYSTEM }, { role: "user", content: `${rel.schema}\n\nQuestion: ${input.question.trim()}` }];
   let sql: string | null = input.sql?.trim() || null;
   for (let attempt = 0; attempt <= input.sqlRetries; attempt++) {
     if (!input.sql) {
       out.sentToModel.push({ step: attempt ? "query (retry)" : "query", chars: messages.reduce((n, m) => n + m.content.length, 0), hasData: false });
       let reply: ChatReply;
-      try { reply = await deps.chat(messages, input.model); }
+      try { reply = await timed(() => deps.chat(messages, input.model), (ms) => { t!.queryMs += ms; }); }
       catch (e) { out.error = `the model that writes the query (${input.model}) failed: ${(e as Error).message}`; return out; }
       out.served.push(reply);
+      t?.callsMs.push(lastMs);
       sql = extractSql(reply.text);
       if (!sql) { out.attempts.push({ sql: "", error: "the model did not reply with a query" }); messages.push({ role: "assistant", content: reply.text }, { role: "user", content: "Reply with one SELECT statement in a ```sql block only." }); continue; }
       messages.push({ role: "assistant", content: "```sql\n" + sql + "\n```" });
     }
     try {
-      const r = await deps.analyst("sql", { folder: input.folder, sql });
+      const r = await timed(() => deps.analyst("sql", { folder: input.folder, sql }), (ms) => { t!.sqlMs += ms; });
       out.sql = sql; out.result = { columns: r.columns, rows: r.rows, truncated: r.truncated };
       const fan = fanOutJoins(sql!, rel.relations ?? []);
       out.warnings = fan.map((w) => `join: ${w}`);
@@ -155,9 +204,10 @@ export async function crossAsk(input: CrossAskInput, deps: CrossAskDeps): Promis
     out.sentToModel.push({ step: "answer", chars: ask.reduce((n, m) => n + m.content.length, 0), hasData: true });
     // The result is already computed here; a failed answer step keeps it and says why, instead of losing it.
     let reply: ChatReply;
-    try { reply = await deps.chat(ask, input.answerModel || input.model); }
+    try { reply = await timed(() => deps.chat(ask, input.answerModel || input.model), (ms) => { t!.answerMs = ms; }); }
     catch (e) { out.error = `the result is below, but the worded answer failed: ${(e as Error).message}`; return out; }
     out.served.push(reply);
+    t?.callsMs.push(lastMs);
     out.answer = reply.text.trim();
     out.unverified = verifyAnswer(out.answer, answerEvidence(input.question, table)).notFound;
     for (const f of out.unverified) { const d = deriveFigure(f, out.result); if (d) out.derivations[f] = d; }
@@ -199,8 +249,16 @@ export function gatewayChat(opts: { url: string; key: string; timeoutMs: number;
       });
     } catch (e) { throw new Error((e as Error).name === "TimeoutError" ? `gateway: no answer within ${opts.timeoutMs} ms` : `the gateway is not reachable at ${base}: start the stack (test-console\\stack.ps1)`); }
     if (!r.ok) throw new Error(`gateway: ${await errorOf(r)}`);
-    const j = await r.json() as { choices?: { message?: { content?: string } }[] };
-    return { text: String(j.choices?.[0]?.message?.content ?? ""), model: r.headers.get("x-chainaim-model") ?? undefined, zone: r.headers.get("x-chainaim-zone") ?? undefined };
+    const j = await r.json() as { choices?: { message?: { content?: string } }[]; usage?: { prompt_tokens?: unknown; completion_tokens?: unknown } };
+    const reply: ChatReply = { text: String(j.choices?.[0]?.message?.content ?? ""), model: r.headers.get("x-chainaim-model") ?? undefined, zone: r.headers.get("x-chainaim-zone") ?? undefined };
+    const count = (v: unknown) => typeof v === "number" && Number.isInteger(v) && v >= 0;
+    if (count(j.usage?.prompt_tokens) && count(j.usage?.completion_tokens)) reply.usage = { promptTokens: j.usage!.prompt_tokens as number, completionTokens: j.usage!.completion_tokens as number };
+    // ARCH-204: only when the gateway sent them (--expose-entity-counts on); a malformed header leaves the field out.
+    const entityCounts = parseEntityCounts(r.headers.get("x-chainaim-entity-counts"));
+    if (entityCounts) reply.entityCounts = entityCounts;
+    const residual = parseResidual(r.headers.get("x-chainaim-residual"));
+    if (residual) reply.residual = residual;
+    return reply;
   };
 }
 

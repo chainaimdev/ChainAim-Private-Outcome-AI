@@ -155,7 +155,7 @@ describe("public/near-wallet.js", () => {
     const js = readFileSync(NEAR_BUNDLE, "utf8");
     const start = js.lastIndexOf("export{");
     const names = js.slice(start + "export{".length, js.indexOf("}", start)).split(",").map((e) => e.trim().split(" as ").pop()!).sort();
-    assert.deepEqual(names, ["nearConnect", "nearDisconnect", "nearPayAndAsk", "nearPayAndChat", "nearSavedAccount"]);
+    assert.deepEqual(names, ["nearConnect", "nearDisconnect", "nearPayAndAsk", "nearPayAndChat", "nearPayAndRelease", "nearSavedAccount"]); // nearPayAndRelease: tab 03 paid jobs (architecture.md ARCH-111)
     assert.ok(js.includes(NEAR_WALLET_MANIFEST));
     // near-connect's executor fetch, its own manifest loader (not called: the page passes the entry), the page's manifest fetch, and /api/chat.
     assert.equal(js.match(/[^.\w]fetch\(/g)?.length, 4);

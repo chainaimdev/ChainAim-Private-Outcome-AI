@@ -1,0 +1,1355 @@
+{
+  "xrpl": {
+    "POST /v1/privacy/scan": {
+      "accepts": [
+        {
+          "scheme": "exact",
+          "price": {
+            "amount": "0.01",
+            "asset": "524C555344000000000000000000000000000000",
+            "extra": {
+              "issuer": "rQhWct2fv4Vc4KRjRgMrxa8xPN9Zx9iLKV",
+              "invoiceId": "INV-1"
+            }
+          },
+          "network": "xrpl:1",
+          "payTo": "rwaugYNb1VYhPVhV3oEa77Pa9itayatbJd",
+          "maxTimeoutSeconds": 600,
+          "extra": {
+            "sourceTag": 804681468
+          }
+        }
+      ],
+      "description": "Finds personal, health and card data in text and returns entity types, positions and the data class. No model is called.",
+      "mimeType": "application/json",
+      "extensions": {
+        "bazaar": {
+          "info": {
+            "input": {
+              "type": "http",
+              "bodyType": "json",
+              "body": {
+                "text": "Patient Jane Roe, MRN 991122, was diagnosed with diabetes."
+              }
+            },
+            "output": {
+              "type": "json",
+              "example": {
+                "decisionId": "7d0c2a1e-5b7f-4c1e-9a53-2f6f0b8e41aa",
+                "dataClass": "PHI",
+                "found": [
+                  "PHI",
+                  "PII"
+                ],
+                "entities": [
+                  {
+                    "type": "PERSON",
+                    "start": 8,
+                    "end": 16,
+                    "score": 0.85
+                  },
+                  {
+                    "type": "MEDICAL_RECORD",
+                    "start": 22,
+                    "end": 28,
+                    "score": 0.45
+                  },
+                  {
+                    "type": "HEALTH_TERM",
+                    "start": 34,
+                    "end": 43,
+                    "score": 1
+                  },
+                  {
+                    "type": "HEALTH_TERM",
+                    "start": 49,
+                    "end": 57,
+                    "score": 1
+                  }
+                ],
+                "counts": {
+                  "PERSON": 1,
+                  "MEDICAL_RECORD": 1,
+                  "HEALTH_TERM": 2
+                },
+                "policy": {
+                  "dataCollection": "deny",
+                  "cardDataRemoved": false
+                }
+              }
+            }
+          },
+          "schema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {
+              "input": {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "http"
+                  },
+                  "method": {
+                    "type": "string",
+                    "enum": [
+                      "POST",
+                      "PUT",
+                      "PATCH"
+                    ]
+                  },
+                  "bodyType": {
+                    "type": "string",
+                    "enum": [
+                      "json",
+                      "form-data",
+                      "text"
+                    ]
+                  },
+                  "body": {
+                    "type": "object",
+                    "properties": {
+                      "text": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 20000,
+                        "description": "Text to scan, 1 to 20,000 characters"
+                      }
+                    },
+                    "required": [
+                      "text"
+                    ]
+                  }
+                },
+                "required": [
+                  "type",
+                  "method",
+                  "bodyType",
+                  "body"
+                ],
+                "additionalProperties": false
+              },
+              "output": {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string"
+                  },
+                  "example": {
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "type"
+                ]
+              }
+            },
+            "required": [
+              "input"
+            ]
+          }
+        }
+      }
+    },
+    "POST /v1/privacy/mask": {
+      "accepts": [
+        {
+          "scheme": "exact",
+          "price": {
+            "amount": "0.01",
+            "asset": "524C555344000000000000000000000000000000",
+            "extra": {
+              "issuer": "rQhWct2fv4Vc4KRjRgMrxa8xPN9Zx9iLKV",
+              "invoiceId": "INV-1"
+            }
+          },
+          "network": "xrpl:1",
+          "payTo": "rwaugYNb1VYhPVhV3oEa77Pa9itayatbJd",
+          "maxTimeoutSeconds": 600,
+          "extra": {
+            "sourceTag": 804681468
+          }
+        }
+      ],
+      "description": "Replaces personal and health identifiers with numbered placeholders and removes card numbers. Returns the masked text and the map to restore it.",
+      "mimeType": "application/json",
+      "extensions": {
+        "bazaar": {
+          "info": {
+            "input": {
+              "type": "http",
+              "bodyType": "json",
+              "body": {
+                "text": "Patient Jane Roe, MRN 991122, was diagnosed with diabetes."
+              }
+            },
+            "output": {
+              "type": "json",
+              "example": {
+                "decisionId": "0b9e5f3c-2d41-4a8e-b6c7-91d2e8f4a310",
+                "dataClass": "PHI",
+                "found": [
+                  "PHI",
+                  "PII"
+                ],
+                "maskedText": "Patient <PERSON_1>, MRN <MEDICAL_RECORD_1>, was diagnosed with diabetes.",
+                "map": {
+                  "<PERSON_1>": "Jane Roe",
+                  "<MEDICAL_RECORD_1>": "991122"
+                },
+                "counts": {
+                  "PERSON": 1,
+                  "MEDICAL_RECORD": 1,
+                  "HEALTH_TERM": 2
+                },
+                "cardsRemoved": 0
+              }
+            }
+          },
+          "schema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {
+              "input": {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "http"
+                  },
+                  "method": {
+                    "type": "string",
+                    "enum": [
+                      "POST",
+                      "PUT",
+                      "PATCH"
+                    ]
+                  },
+                  "bodyType": {
+                    "type": "string",
+                    "enum": [
+                      "json",
+                      "form-data",
+                      "text"
+                    ]
+                  },
+                  "body": {
+                    "type": "object",
+                    "properties": {
+                      "text": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 20000,
+                        "description": "Text to mask, 1 to 20,000 characters"
+                      }
+                    },
+                    "required": [
+                      "text"
+                    ]
+                  }
+                },
+                "required": [
+                  "type",
+                  "method",
+                  "bodyType",
+                  "body"
+                ],
+                "additionalProperties": false
+              },
+              "output": {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string"
+                  },
+                  "example": {
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "type"
+                ]
+              }
+            },
+            "required": [
+              "input"
+            ]
+          }
+        }
+      }
+    },
+    "POST /v1/chat/completions": {
+      "accepts": [
+        {
+          "scheme": "exact",
+          "price": {
+            "amount": "0.01",
+            "asset": "524C555344000000000000000000000000000000",
+            "extra": {
+              "issuer": "rQhWct2fv4Vc4KRjRgMrxa8xPN9Zx9iLKV",
+              "invoiceId": "INV-1"
+            }
+          },
+          "network": "xrpl:1",
+          "payTo": "rwaugYNb1VYhPVhV3oEa77Pa9itayatbJd",
+          "maxTimeoutSeconds": 600,
+          "extra": {
+            "sourceTag": 804681468
+          }
+        }
+      ],
+      "description": "OpenAI-compatible private chat. Masks the conversation, routes it with Jev across free models under a data policy set by what it contains, and restores the answer.",
+      "mimeType": "application/json",
+      "extensions": {
+        "bazaar": {
+          "info": {
+            "input": {
+              "type": "http",
+              "bodyType": "json",
+              "body": {
+                "model": "chainaim/auto",
+                "messages": [
+                  {
+                    "role": "user",
+                    "content": "Write a two-line reminder to Jane Roe (jane.roe@example.com) about Friday's 10:00 meeting."
+                  }
+                ],
+                "max_tokens": 200
+              }
+            },
+            "output": {
+              "type": "json",
+              "example": {
+                "id": "gen-1790000000-example",
+                "object": "chat.completion",
+                "model": "qwen/qwen3.8-27b:free",
+                "choices": [
+                  {
+                    "index": 0,
+                    "message": {
+                      "role": "assistant",
+                      "content": "Hi Jane Roe, a reminder that we meet on Friday at 10:00. Reply to jane.roe@example.com if that time doesn't work."
+                    },
+                    "finish_reason": "stop"
+                  }
+                ]
+              }
+            }
+          },
+          "schema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {
+              "input": {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "http"
+                  },
+                  "method": {
+                    "type": "string",
+                    "enum": [
+                      "POST",
+                      "PUT",
+                      "PATCH"
+                    ]
+                  },
+                  "bodyType": {
+                    "type": "string",
+                    "enum": [
+                      "json",
+                      "form-data",
+                      "text"
+                    ]
+                  },
+                  "body": {
+                    "type": "object",
+                    "properties": {
+                      "messages": {
+                        "type": "array",
+                        "minItems": 1,
+                        "description": "OpenAI chat messages; text only, at most 48,000 characters in total",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "role": {
+                              "type": "string"
+                            },
+                            "content": {
+                              "description": "a string, or an array of text parts"
+                            }
+                          },
+                          "required": [
+                            "role"
+                          ]
+                        }
+                      },
+                      "model": {
+                        "type": "string",
+                        "description": "chainaim/auto, or a free model id from GET /v1/models"
+                      },
+                      "max_tokens": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 1024
+                      },
+                      "stream": {
+                        "type": "boolean"
+                      },
+                      "tools": {
+                        "type": "array"
+                      },
+                      "response_format": {
+                        "type": "object"
+                      }
+                    },
+                    "required": [
+                      "messages"
+                    ]
+                  }
+                },
+                "required": [
+                  "type",
+                  "method",
+                  "bodyType",
+                  "body"
+                ],
+                "additionalProperties": false
+              },
+              "output": {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string"
+                  },
+                  "example": {
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "type"
+                ]
+              }
+            },
+            "required": [
+              "input"
+            ]
+          }
+        }
+      }
+    }
+  },
+  "near": {
+    "POST /v1/privacy/scan": {
+      "accepts": [
+        {
+          "scheme": "exact",
+          "price": {
+            "amount": "10000",
+            "asset": "usdc.chainaim-test.testnet",
+            "extra": {
+              "invoiceId": "INV-1"
+            }
+          },
+          "network": "near:testnet",
+          "payTo": "merchant.chainaim-test.testnet",
+          "maxTimeoutSeconds": 600
+        }
+      ],
+      "description": "Finds personal, health and card data in text and returns entity types, positions and the data class. No model is called.",
+      "mimeType": "application/json",
+      "extensions": {
+        "bazaar": {
+          "info": {
+            "input": {
+              "type": "http",
+              "bodyType": "json",
+              "body": {
+                "text": "Patient Jane Roe, MRN 991122, was diagnosed with diabetes."
+              }
+            },
+            "output": {
+              "type": "json",
+              "example": {
+                "decisionId": "7d0c2a1e-5b7f-4c1e-9a53-2f6f0b8e41aa",
+                "dataClass": "PHI",
+                "found": [
+                  "PHI",
+                  "PII"
+                ],
+                "entities": [
+                  {
+                    "type": "PERSON",
+                    "start": 8,
+                    "end": 16,
+                    "score": 0.85
+                  },
+                  {
+                    "type": "MEDICAL_RECORD",
+                    "start": 22,
+                    "end": 28,
+                    "score": 0.45
+                  },
+                  {
+                    "type": "HEALTH_TERM",
+                    "start": 34,
+                    "end": 43,
+                    "score": 1
+                  },
+                  {
+                    "type": "HEALTH_TERM",
+                    "start": 49,
+                    "end": 57,
+                    "score": 1
+                  }
+                ],
+                "counts": {
+                  "PERSON": 1,
+                  "MEDICAL_RECORD": 1,
+                  "HEALTH_TERM": 2
+                },
+                "policy": {
+                  "dataCollection": "deny",
+                  "cardDataRemoved": false
+                }
+              }
+            }
+          },
+          "schema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {
+              "input": {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "http"
+                  },
+                  "method": {
+                    "type": "string",
+                    "enum": [
+                      "POST",
+                      "PUT",
+                      "PATCH"
+                    ]
+                  },
+                  "bodyType": {
+                    "type": "string",
+                    "enum": [
+                      "json",
+                      "form-data",
+                      "text"
+                    ]
+                  },
+                  "body": {
+                    "type": "object",
+                    "properties": {
+                      "text": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 20000,
+                        "description": "Text to scan, 1 to 20,000 characters"
+                      }
+                    },
+                    "required": [
+                      "text"
+                    ]
+                  }
+                },
+                "required": [
+                  "type",
+                  "method",
+                  "bodyType",
+                  "body"
+                ],
+                "additionalProperties": false
+              },
+              "output": {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string"
+                  },
+                  "example": {
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "type"
+                ]
+              }
+            },
+            "required": [
+              "input"
+            ]
+          }
+        }
+      }
+    },
+    "POST /v1/privacy/mask": {
+      "accepts": [
+        {
+          "scheme": "exact",
+          "price": {
+            "amount": "10000",
+            "asset": "usdc.chainaim-test.testnet",
+            "extra": {
+              "invoiceId": "INV-1"
+            }
+          },
+          "network": "near:testnet",
+          "payTo": "merchant.chainaim-test.testnet",
+          "maxTimeoutSeconds": 600
+        }
+      ],
+      "description": "Replaces personal and health identifiers with numbered placeholders and removes card numbers. Returns the masked text and the map to restore it.",
+      "mimeType": "application/json",
+      "extensions": {
+        "bazaar": {
+          "info": {
+            "input": {
+              "type": "http",
+              "bodyType": "json",
+              "body": {
+                "text": "Patient Jane Roe, MRN 991122, was diagnosed with diabetes."
+              }
+            },
+            "output": {
+              "type": "json",
+              "example": {
+                "decisionId": "0b9e5f3c-2d41-4a8e-b6c7-91d2e8f4a310",
+                "dataClass": "PHI",
+                "found": [
+                  "PHI",
+                  "PII"
+                ],
+                "maskedText": "Patient <PERSON_1>, MRN <MEDICAL_RECORD_1>, was diagnosed with diabetes.",
+                "map": {
+                  "<PERSON_1>": "Jane Roe",
+                  "<MEDICAL_RECORD_1>": "991122"
+                },
+                "counts": {
+                  "PERSON": 1,
+                  "MEDICAL_RECORD": 1,
+                  "HEALTH_TERM": 2
+                },
+                "cardsRemoved": 0
+              }
+            }
+          },
+          "schema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {
+              "input": {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "http"
+                  },
+                  "method": {
+                    "type": "string",
+                    "enum": [
+                      "POST",
+                      "PUT",
+                      "PATCH"
+                    ]
+                  },
+                  "bodyType": {
+                    "type": "string",
+                    "enum": [
+                      "json",
+                      "form-data",
+                      "text"
+                    ]
+                  },
+                  "body": {
+                    "type": "object",
+                    "properties": {
+                      "text": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 20000,
+                        "description": "Text to mask, 1 to 20,000 characters"
+                      }
+                    },
+                    "required": [
+                      "text"
+                    ]
+                  }
+                },
+                "required": [
+                  "type",
+                  "method",
+                  "bodyType",
+                  "body"
+                ],
+                "additionalProperties": false
+              },
+              "output": {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string"
+                  },
+                  "example": {
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "type"
+                ]
+              }
+            },
+            "required": [
+              "input"
+            ]
+          }
+        }
+      }
+    },
+    "POST /v1/chat/completions": {
+      "accepts": [
+        {
+          "scheme": "exact",
+          "price": {
+            "amount": "10000",
+            "asset": "usdc.chainaim-test.testnet",
+            "extra": {
+              "invoiceId": "INV-1"
+            }
+          },
+          "network": "near:testnet",
+          "payTo": "merchant.chainaim-test.testnet",
+          "maxTimeoutSeconds": 600
+        }
+      ],
+      "description": "OpenAI-compatible private chat. Masks the conversation, routes it with Jev across free models under a data policy set by what it contains, and restores the answer.",
+      "mimeType": "application/json",
+      "extensions": {
+        "bazaar": {
+          "info": {
+            "input": {
+              "type": "http",
+              "bodyType": "json",
+              "body": {
+                "model": "chainaim/auto",
+                "messages": [
+                  {
+                    "role": "user",
+                    "content": "Write a two-line reminder to Jane Roe (jane.roe@example.com) about Friday's 10:00 meeting."
+                  }
+                ],
+                "max_tokens": 200
+              }
+            },
+            "output": {
+              "type": "json",
+              "example": {
+                "id": "gen-1790000000-example",
+                "object": "chat.completion",
+                "model": "qwen/qwen3.8-27b:free",
+                "choices": [
+                  {
+                    "index": 0,
+                    "message": {
+                      "role": "assistant",
+                      "content": "Hi Jane Roe, a reminder that we meet on Friday at 10:00. Reply to jane.roe@example.com if that time doesn't work."
+                    },
+                    "finish_reason": "stop"
+                  }
+                ]
+              }
+            }
+          },
+          "schema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {
+              "input": {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "http"
+                  },
+                  "method": {
+                    "type": "string",
+                    "enum": [
+                      "POST",
+                      "PUT",
+                      "PATCH"
+                    ]
+                  },
+                  "bodyType": {
+                    "type": "string",
+                    "enum": [
+                      "json",
+                      "form-data",
+                      "text"
+                    ]
+                  },
+                  "body": {
+                    "type": "object",
+                    "properties": {
+                      "messages": {
+                        "type": "array",
+                        "minItems": 1,
+                        "description": "OpenAI chat messages; text only, at most 48,000 characters in total",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "role": {
+                              "type": "string"
+                            },
+                            "content": {
+                              "description": "a string, or an array of text parts"
+                            }
+                          },
+                          "required": [
+                            "role"
+                          ]
+                        }
+                      },
+                      "model": {
+                        "type": "string",
+                        "description": "chainaim/auto, or a free model id from GET /v1/models"
+                      },
+                      "max_tokens": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 1024
+                      },
+                      "stream": {
+                        "type": "boolean"
+                      },
+                      "tools": {
+                        "type": "array"
+                      },
+                      "response_format": {
+                        "type": "object"
+                      }
+                    },
+                    "required": [
+                      "messages"
+                    ]
+                  }
+                },
+                "required": [
+                  "type",
+                  "method",
+                  "bodyType",
+                  "body"
+                ],
+                "additionalProperties": false
+              },
+              "output": {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string"
+                  },
+                  "example": {
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "type"
+                ]
+              }
+            },
+            "required": [
+              "input"
+            ]
+          }
+        }
+      }
+    }
+  },
+  "xrpl,near": {
+    "POST /v1/privacy/scan": {
+      "accepts": [
+        {
+          "scheme": "exact",
+          "price": {
+            "amount": "0.01",
+            "asset": "524C555344000000000000000000000000000000",
+            "extra": {
+              "issuer": "rQhWct2fv4Vc4KRjRgMrxa8xPN9Zx9iLKV",
+              "invoiceId": "INV-1"
+            }
+          },
+          "network": "xrpl:1",
+          "payTo": "rwaugYNb1VYhPVhV3oEa77Pa9itayatbJd",
+          "maxTimeoutSeconds": 600,
+          "extra": {
+            "sourceTag": 804681468
+          }
+        },
+        {
+          "scheme": "exact",
+          "price": {
+            "amount": "10000",
+            "asset": "usdc.chainaim-test.testnet",
+            "extra": {
+              "invoiceId": "INV-1"
+            }
+          },
+          "network": "near:testnet",
+          "payTo": "merchant.chainaim-test.testnet",
+          "maxTimeoutSeconds": 600
+        }
+      ],
+      "description": "Finds personal, health and card data in text and returns entity types, positions and the data class. No model is called.",
+      "mimeType": "application/json",
+      "resource": "https://pay.example.com/v1/privacy/scan",
+      "extensions": {
+        "bazaar": {
+          "info": {
+            "input": {
+              "type": "http",
+              "bodyType": "json",
+              "body": {
+                "text": "Patient Jane Roe, MRN 991122, was diagnosed with diabetes."
+              }
+            },
+            "output": {
+              "type": "json",
+              "example": {
+                "decisionId": "7d0c2a1e-5b7f-4c1e-9a53-2f6f0b8e41aa",
+                "dataClass": "PHI",
+                "found": [
+                  "PHI",
+                  "PII"
+                ],
+                "entities": [
+                  {
+                    "type": "PERSON",
+                    "start": 8,
+                    "end": 16,
+                    "score": 0.85
+                  },
+                  {
+                    "type": "MEDICAL_RECORD",
+                    "start": 22,
+                    "end": 28,
+                    "score": 0.45
+                  },
+                  {
+                    "type": "HEALTH_TERM",
+                    "start": 34,
+                    "end": 43,
+                    "score": 1
+                  },
+                  {
+                    "type": "HEALTH_TERM",
+                    "start": 49,
+                    "end": 57,
+                    "score": 1
+                  }
+                ],
+                "counts": {
+                  "PERSON": 1,
+                  "MEDICAL_RECORD": 1,
+                  "HEALTH_TERM": 2
+                },
+                "policy": {
+                  "dataCollection": "deny",
+                  "cardDataRemoved": false
+                }
+              }
+            }
+          },
+          "schema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {
+              "input": {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "http"
+                  },
+                  "method": {
+                    "type": "string",
+                    "enum": [
+                      "POST",
+                      "PUT",
+                      "PATCH"
+                    ]
+                  },
+                  "bodyType": {
+                    "type": "string",
+                    "enum": [
+                      "json",
+                      "form-data",
+                      "text"
+                    ]
+                  },
+                  "body": {
+                    "type": "object",
+                    "properties": {
+                      "text": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 20000,
+                        "description": "Text to scan, 1 to 20,000 characters"
+                      }
+                    },
+                    "required": [
+                      "text"
+                    ]
+                  }
+                },
+                "required": [
+                  "type",
+                  "method",
+                  "bodyType",
+                  "body"
+                ],
+                "additionalProperties": false
+              },
+              "output": {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string"
+                  },
+                  "example": {
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "type"
+                ]
+              }
+            },
+            "required": [
+              "input"
+            ]
+          }
+        }
+      }
+    },
+    "POST /v1/privacy/mask": {
+      "accepts": [
+        {
+          "scheme": "exact",
+          "price": {
+            "amount": "0.01",
+            "asset": "524C555344000000000000000000000000000000",
+            "extra": {
+              "issuer": "rQhWct2fv4Vc4KRjRgMrxa8xPN9Zx9iLKV",
+              "invoiceId": "INV-1"
+            }
+          },
+          "network": "xrpl:1",
+          "payTo": "rwaugYNb1VYhPVhV3oEa77Pa9itayatbJd",
+          "maxTimeoutSeconds": 600,
+          "extra": {
+            "sourceTag": 804681468
+          }
+        },
+        {
+          "scheme": "exact",
+          "price": {
+            "amount": "10000",
+            "asset": "usdc.chainaim-test.testnet",
+            "extra": {
+              "invoiceId": "INV-1"
+            }
+          },
+          "network": "near:testnet",
+          "payTo": "merchant.chainaim-test.testnet",
+          "maxTimeoutSeconds": 600
+        }
+      ],
+      "description": "Replaces personal and health identifiers with numbered placeholders and removes card numbers. Returns the masked text and the map to restore it.",
+      "mimeType": "application/json",
+      "resource": "https://pay.example.com/v1/privacy/mask",
+      "extensions": {
+        "bazaar": {
+          "info": {
+            "input": {
+              "type": "http",
+              "bodyType": "json",
+              "body": {
+                "text": "Patient Jane Roe, MRN 991122, was diagnosed with diabetes."
+              }
+            },
+            "output": {
+              "type": "json",
+              "example": {
+                "decisionId": "0b9e5f3c-2d41-4a8e-b6c7-91d2e8f4a310",
+                "dataClass": "PHI",
+                "found": [
+                  "PHI",
+                  "PII"
+                ],
+                "maskedText": "Patient <PERSON_1>, MRN <MEDICAL_RECORD_1>, was diagnosed with diabetes.",
+                "map": {
+                  "<PERSON_1>": "Jane Roe",
+                  "<MEDICAL_RECORD_1>": "991122"
+                },
+                "counts": {
+                  "PERSON": 1,
+                  "MEDICAL_RECORD": 1,
+                  "HEALTH_TERM": 2
+                },
+                "cardsRemoved": 0
+              }
+            }
+          },
+          "schema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {
+              "input": {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "http"
+                  },
+                  "method": {
+                    "type": "string",
+                    "enum": [
+                      "POST",
+                      "PUT",
+                      "PATCH"
+                    ]
+                  },
+                  "bodyType": {
+                    "type": "string",
+                    "enum": [
+                      "json",
+                      "form-data",
+                      "text"
+                    ]
+                  },
+                  "body": {
+                    "type": "object",
+                    "properties": {
+                      "text": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 20000,
+                        "description": "Text to mask, 1 to 20,000 characters"
+                      }
+                    },
+                    "required": [
+                      "text"
+                    ]
+                  }
+                },
+                "required": [
+                  "type",
+                  "method",
+                  "bodyType",
+                  "body"
+                ],
+                "additionalProperties": false
+              },
+              "output": {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string"
+                  },
+                  "example": {
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "type"
+                ]
+              }
+            },
+            "required": [
+              "input"
+            ]
+          }
+        }
+      }
+    },
+    "POST /v1/chat/completions": {
+      "accepts": [
+        {
+          "scheme": "exact",
+          "price": {
+            "amount": "0.01",
+            "asset": "524C555344000000000000000000000000000000",
+            "extra": {
+              "issuer": "rQhWct2fv4Vc4KRjRgMrxa8xPN9Zx9iLKV",
+              "invoiceId": "INV-1"
+            }
+          },
+          "network": "xrpl:1",
+          "payTo": "rwaugYNb1VYhPVhV3oEa77Pa9itayatbJd",
+          "maxTimeoutSeconds": 600,
+          "extra": {
+            "sourceTag": 804681468
+          }
+        },
+        {
+          "scheme": "exact",
+          "price": {
+            "amount": "10000",
+            "asset": "usdc.chainaim-test.testnet",
+            "extra": {
+              "invoiceId": "INV-1"
+            }
+          },
+          "network": "near:testnet",
+          "payTo": "merchant.chainaim-test.testnet",
+          "maxTimeoutSeconds": 600
+        }
+      ],
+      "description": "OpenAI-compatible private chat. Masks the conversation, routes it with Jev across free models under a data policy set by what it contains, and restores the answer.",
+      "mimeType": "application/json",
+      "resource": "https://pay.example.com/v1/chat/completions",
+      "extensions": {
+        "bazaar": {
+          "info": {
+            "input": {
+              "type": "http",
+              "bodyType": "json",
+              "body": {
+                "model": "chainaim/auto",
+                "messages": [
+                  {
+                    "role": "user",
+                    "content": "Write a two-line reminder to Jane Roe (jane.roe@example.com) about Friday's 10:00 meeting."
+                  }
+                ],
+                "max_tokens": 200
+              }
+            },
+            "output": {
+              "type": "json",
+              "example": {
+                "id": "gen-1790000000-example",
+                "object": "chat.completion",
+                "model": "qwen/qwen3.8-27b:free",
+                "choices": [
+                  {
+                    "index": 0,
+                    "message": {
+                      "role": "assistant",
+                      "content": "Hi Jane Roe, a reminder that we meet on Friday at 10:00. Reply to jane.roe@example.com if that time doesn't work."
+                    },
+                    "finish_reason": "stop"
+                  }
+                ]
+              }
+            }
+          },
+          "schema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {
+              "input": {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "http"
+                  },
+                  "method": {
+                    "type": "string",
+                    "enum": [
+                      "POST",
+                      "PUT",
+                      "PATCH"
+                    ]
+                  },
+                  "bodyType": {
+                    "type": "string",
+                    "enum": [
+                      "json",
+                      "form-data",
+                      "text"
+                    ]
+                  },
+                  "body": {
+                    "type": "object",
+                    "properties": {
+                      "messages": {
+                        "type": "array",
+                        "minItems": 1,
+                        "description": "OpenAI chat messages; text only, at most 48,000 characters in total",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "role": {
+                              "type": "string"
+                            },
+                            "content": {
+                              "description": "a string, or an array of text parts"
+                            }
+                          },
+                          "required": [
+                            "role"
+                          ]
+                        }
+                      },
+                      "model": {
+                        "type": "string",
+                        "description": "chainaim/auto, or a free model id from GET /v1/models"
+                      },
+                      "max_tokens": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 1024
+                      },
+                      "stream": {
+                        "type": "boolean"
+                      },
+                      "tools": {
+                        "type": "array"
+                      },
+                      "response_format": {
+                        "type": "object"
+                      }
+                    },
+                    "required": [
+                      "messages"
+                    ]
+                  }
+                },
+                "required": [
+                  "type",
+                  "method",
+                  "bodyType",
+                  "body"
+                ],
+                "additionalProperties": false
+              },
+              "output": {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string"
+                  },
+                  "example": {
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "type"
+                ]
+              }
+            },
+            "required": [
+              "input"
+            ]
+          }
+        }
+      }
+    }
+  }
+}

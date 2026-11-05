@@ -812,4 +812,8 @@ Built in the AI's workspace on a snapshot of the owner's repo (main = e8626e8, v
 - Incident: a `git stash` run from the workspace could not delete .git/index.lock (deletion not permitted there); no stash was
   made, working tree intact; the lock was moved to .git/stale-index-lock-claude-2026-11-05T1209 (owner may delete it and
   .git/objects/1f/tmp_obj_FjdER3). No git write commands are run from the workspace.
+- 2026-11-05 12:24 merge of origin acd434f (chainaim-nisha, 'pay as you go initial'): conflicts in BUILD_LOG.md,
+  packages/crossask/src/index.ts (their step timings + our derivations), test-console/console/server.ts (their paid-jobs
+  imports and flags + our run-log ones) resolved by keeping both. Their commit had removed the v1.3.1 section of this log
+  (CHIRO-1b-1, NEAR TestNet setup, first live NEAR payment): kept.
 
