@@ -53,7 +53,9 @@ const server = serve({ fetch: createPaywall(config, deps).fetch, port: config.po
   console.log(
     `[chainaim-paywall] listening on ${config.host}:${info.port} ${xrplPart}${config.rails.length > 1 || near ? ` rails=${config.rails.join(",")}${nearPart}` : ""} ` +
       `gateway=${config.gatewayUrl}${facilitatorPart}${config.publicBaseUrl ? ` public=${config.publicBaseUrl}` : ""}` +
-      `${config.paymentLog ? ` paymentLog=${[config.paymentLog.url ? "url" : "", config.paymentLog.file ? "file" : ""].filter(Boolean).join("+")}` : ""}`,
+      `${config.paymentLog ? ` paymentLog=${[config.paymentLog.url ? "url" : "", config.paymentLog.file ? "file" : ""].filter(Boolean).join("+")}` : ""}` +
+      // Paid jobs (ARCH-106): only with PAID_JOBS=on; the key is never shown.
+      `${config.paidJobs ? ` paidJobs=on jobsResult=${redactUrl(config.paidJobs.resultUrl)} jobsMax=${config.paidJobs.max} jobsTtlSec=${config.paidJobs.ttlSec}` : ""}`,
   );
 });
 const shutdown = () =>

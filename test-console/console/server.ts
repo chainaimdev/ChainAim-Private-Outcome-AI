@@ -51,6 +51,29 @@
  *   --near-wallet-bundle PATH  the NEAR browser bundle (default ../../services/web/public/near-wallet.js;
  *                         build it with npm --prefix services/web run build:near-wallet)
  *
+ *   Paid jobs on tab 03 (architecture.md ARCH-104/105/112/114; off unless --paid-jobs on, which also needs --near-wallet):
+ *   POST /jobs/crossask runs the same job as /crossask, meters each model call (gateway usage), prices it with
+ *   packages/crossask cost.ts, holds the result here, registers {jobId, amount, expiresAt} with the paywall, and
+ *   answers only the cost. POST /paid/jobs/<id>/release relays the NEAR payment to the paywall (no gateway key); the
+ *   paywall reads the held result from the internal listener while it settles.
+ *   --paid-jobs on|off         default off: no new route, listener or page change
+ *   --jobs-internal-host H     the internal listener's address (default 127.0.0.1; see MANUAL_SETUP.md M2)
+ *   --jobs-internal-port N     its port (default 8731): GET /internal/jobs/<id>, POST /internal/jobs/<id>/released
+ *   --paid-jobs-key-env NAME   environment variable holding the key shared with the paywall (default PAID_JOBS_KEY, >= 24 chars)
+ *   --job-ttl-min N            minutes a quoted job stays payable (default 15; at most the paywall's PAID_JOBS_TTL_SEC)
+ *   --job-max N                open jobs held at once (default 100; beyond it /jobs/crossask answers 503)
+ *   --pricing-catalog PATH     model prices (pricing.inputPerM / outputPerM), e.g. ../../config/catalog.bedrock.json
+ *   --fee-per-model-call-usd D, --fee-analyst-usd D, --near-gas-fee-usd D, --margin-pct D, --min-price-usd D
+ *                              required with --paid-jobs on, non-negative decimals, never defaulted (MANUAL_SETUP.md)
+ *   Paid-job feed to near-watch (chainaim-adminUI-NEAR architecture-adminui-jobs.md ARCH-205; off unless --job-feed-url,
+ *   which needs --paid-jobs on): job_quoted / job_released / job_expired, ids, times, amounts, models and counts only
+ *   (job-feed.ts), never awaited by a request.
+ *   --job-feed-url URL          near-watch's ingest route, e.g. http://127.0.0.1:8790/ingest/job (default unset = off)
+ *   --job-feed-key-env NAME     environment variable holding near-watch's ingest key (default NEAR_WATCH_INGEST_KEY, >= 24 chars)
+ *   --job-feed-timeout-ms N     one post (default 5000)
+ *   --job-feed-max-inflight N   posts at once; beyond it an event is dropped and logged (default 20)
+ *   --job-expiry-check-sec N    how often held jobs are checked for expiry (default 30)
+ *
  *   Pages are served at /view/<id> with a sandbox Content-Security-Policy: their scripts run in an opaque
  *   origin and connect-src is 'none', so model-written HTML cannot call this console, the gateway or any
  *   other address. Pages live in memory only (they can hold statement data) and vanish on restart.
@@ -68,6 +91,9 @@ import { parseArgs } from "node:util";
 import { NETWORKS } from "../../services/web/src/balance.ts";
 import { NEAR_WALLETS, isNearWalletId } from "../../services/web/src/near-wallets.ts";
 import { analystClient, crossAsk, gatewayChat } from "../../packages/crossask/src/index.ts";
+import { quoteJob } from "../../packages/crossask/src/cost.ts";
+import { JobStore, internalHandler, meterOf, paidJobsConfig, registerJob } from "./jobs.ts";
+import { JobFeed, jobFeedConfig } from "./job-feed.ts";
 
 const { values: flags } = parseArgs({
   args: process.argv.slice(2),
@@ -94,6 +120,23 @@ const { values: flags } = parseArgs({
     "crossask-timeout-sec": { type: "string", default: "300" },
     "crossask-sql-retries": { type: "string", default: "1" },
     "crossask-answer-rows": { type: "string", default: "50" },
+    "paid-jobs": { type: "string" },
+    "jobs-internal-host": { type: "string" },
+    "jobs-internal-port": { type: "string" },
+    "paid-jobs-key-env": { type: "string" },
+    "job-ttl-min": { type: "string" },
+    "job-max": { type: "string" },
+    "pricing-catalog": { type: "string" },
+    "fee-per-model-call-usd": { type: "string" },
+    "fee-analyst-usd": { type: "string" },
+    "near-gas-fee-usd": { type: "string" },
+    "margin-pct": { type: "string" },
+    "min-price-usd": { type: "string" },
+    "job-feed-url": { type: "string" },
+    "job-feed-key-env": { type: "string" },
+    "job-feed-timeout-ms": { type: "string" },
+    "job-feed-max-inflight": { type: "string" },
+    "job-expiry-check-sec": { type: "string" },
   },
 });
 function positiveInt(name: "view-max" | "view-ttl-min" | "view-max-bytes" | "paid-timeout-sec" | "crossask-timeout-sec" | "crossask-sql-retries" | "crossask-answer-rows", min = 1): number {
@@ -110,6 +153,15 @@ const WALLET_BUNDLE = flags["wallet-bundle"]!;
 const NEAR_WALLET = flags["near-wallet"];
 if (NEAR_WALLET !== undefined && !isNearWalletId(NEAR_WALLET)) throw new Error(`--near-wallet must be one of ${Object.keys(NEAR_WALLETS).join(", ")}, got ${NEAR_WALLET}`);
 const NEAR_WALLET_BUNDLE = flags["near-wallet-bundle"]!;
+/** Paid jobs on tab 03 (ARCH-104/105/114): undefined unless --paid-jobs on; start-up stops here naming any missing flag. */
+const PAID_JOBS = paidJobsConfig(flags, process.env);
+if (PAID_JOBS && !NEAR_WALLET) throw new Error("--paid-jobs on needs --near-wallet intear-wallet: paid jobs are paid in USDC on NEAR from the page");
+/** The paid-job feed to near-watch (adminUI ARCH-205): undefined unless --job-feed-url; start-up stops here on a bad flag or key. */
+const JOB_FEED_CONFIG = jobFeedConfig(flags, process.env, PAID_JOBS !== undefined);
+const JOB_FEED = JOB_FEED_CONFIG ? new JobFeed(JOB_FEED_CONFIG) : undefined;
+const JOBS = PAID_JOBS ? new JobStore(PAID_JOBS.max, PAID_JOBS.ttlMs, Date.now, JOB_FEED ? (j) => JOB_FEED.expired(j.jobId) : undefined) : undefined;
+/** The tab 03 pay box and its script, added to the page only with --paid-jobs on (the page is otherwise served as it is). */
+const PAID_JOBS_FRAGMENT = fileURLToPath(new URL("./paid-jobs.html", import.meta.url));
 const CROSSASK_TIMEOUT_MS = positiveInt("crossask-timeout-sec") * 1000;
 const CROSSASK_RETRIES = positiveInt("crossask-sql-retries", 0);
 const CROSSASK_ROWS = positiveInt("crossask-answer-rows");
@@ -262,7 +314,10 @@ createServer(async (req, res) => {
     const [, api, name] = url.pathname.split("/");
     if (req.method === "GET" && url.pathname === "/") {
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-      res.end(readFileSync(PAGE));
+      if (!PAID_JOBS) { res.end(readFileSync(PAGE)); return; }
+      const page = readFileSync(PAGE, "utf8");
+      const at = page.lastIndexOf("</body>");
+      res.end(at === -1 ? page + readFileSync(PAID_JOBS_FRAGMENT, "utf8") : page.slice(0, at) + readFileSync(PAID_JOBS_FRAGMENT, "utf8") + page.slice(at));
       return;
     }
     // The pick list: every model the gateway serves now, plus this console's default.
@@ -498,6 +553,81 @@ createServer(async (req, res) => {
         return dataJson(res, 502, { error: (e as Error).message });
       }
     }
+    // ---- Paid jobs on tab 03 (ARCH-104, ARCH-112): only with --paid-jobs on -----------------------------------------
+    if (PAID_JOBS && JOBS && api === "jobs" && name === "config" && req.method === "GET") {
+      if (!hostOk(req)) return dataJson(res, 403, { error: `open the console as http://127.0.0.1:${PORT}` });
+      return dataJson(res, 200, { wallet: NEAR_WALLET, walletName: NEAR_WALLETS[NEAR_WALLET!].name, ttlMin: PAID_JOBS.ttlMs / 60_000 });
+    }
+    // Run, meter, quote, hold, register: the page gets the cost and the job id, never the result.
+    if (PAID_JOBS && JOBS && api === "jobs" && name === "crossask" && req.method === "POST") {
+      if (!hostOk(req)) return dataJson(res, 403, { error: `open the console as http://127.0.0.1:${PORT}` });
+      let b: Record<string, unknown>;
+      try { b = JSON.parse(await readBody(req)); } catch { return dataJson(res, 400, { error: "body must be JSON" }); }
+      const model = typeof b.model === "string" && b.model ? b.model : DEFAULT_MODEL;
+      if (!/^[\w.-]+\/[\w.:-]+$/.test(model)) return dataJson(res, 400, { error: `model must look like provider/name, got ${model}` });
+      if (typeof b.folder !== "string" || typeof b.question !== "string" || !b.question.trim()) return dataJson(res, 400, { error: "folder and question are required" });
+      const phrase = b.phrase === "none" ? "none" : "llm";
+      const answerModel = typeof b.answerModel === "string" && b.answerModel ? b.answerModel : undefined;
+      if (answerModel && !/^[\w.-]+\/[\w.:-]+$/.test(answerModel)) return dataJson(res, 400, { error: `answerModel must look like provider/name, got ${answerModel}` });
+      if (JOBS.full()) return dataJson(res, 503, { error: `${PAID_JOBS.max} paid jobs are open (--job-max); pay or let one expire first` });
+      let out;
+      try {
+        out = await crossAsk({ folder: b.folder, question: b.question, model, answerModel, phrase, sqlRetries: CROSSASK_RETRIES, answerMaxRows: CROSSASK_ROWS, sql: typeof b.sql === "string" && b.sql.trim() ? b.sql : undefined },
+          { analyst: analystClient(ANALYST, CROSSASK_TIMEOUT_MS), chat: gatewayChat({ url: GATEWAY, key: KEY, timeoutMs: CROSSASK_TIMEOUT_MS }), ...(JOB_FEED ? { clock: () => performance.now() } : {}) });
+      } catch (e) {
+        return dataJson(res, 502, { error: `the job did not run, so nothing can be paid: ${(e as Error).message}` });
+      }
+      // A job that did not produce a result is not sold (the free /crossask shows why).
+      if (out.error || !out.result) return dataJson(res, 422, { error: "the job did not produce a result, so nothing can be paid; run it unpaid to see why" });
+      let quote;
+      try { quote = quoteJob(meterOf(out.served), PAID_JOBS.prices, PAID_JOBS.fees); }
+      catch (e) { return dataJson(res, 422, { error: `no price for this job, so nothing can be paid: ${(e as Error).message}` }); }
+      const jobId = JOBS.newJobId();
+      const expiresAt = JOBS.expiryFromNow();
+      let offer;
+      try { offer = await registerJob(PAYWALL, PAID_JOBS.key, { jobId, amount: quote.amount, expiresAt }); }
+      catch (e) { return dataJson(res, 502, { error: (e as Error).message }); }
+      // The held (and later released) result is what it was before the job feed: the step timings are the feed's only.
+      const { timings: _timings, ...result } = out;
+      JOBS.hold({ jobId, result, amount: quote.amount, breakdown: quote.breakdown, expiresAt });
+      JOB_FEED?.quoted({ jobId, network: offer.network, expiresAt, out, quote });
+      // Ids and amounts only.
+      console.log(JSON.stringify({ ts: new Date().toISOString(), route: "paid-job", event: "job_quoted", jobId, amount: quote.amount, calls: quote.breakdown.calls.length }));
+      return dataJson(res, 200, { jobId, totalUsd: quote.totalUsd, amount: quote.amount, network: offer.network, asset: offer.asset, payTo: offer.payTo, expiresAt });
+    }
+    // The NEAR payment for one job, relayed to the paywall (never the gateway, and without the gateway key).
+    if (PAID_JOBS && api === "paid" && name === "jobs" && req.method === "POST") {
+      if (!hostOk(req)) return dataJson(res, 403, { error: `open the console as http://127.0.0.1:${PORT}` });
+      const parts = url.pathname.split("/");
+      const jobId = parts[3] ?? "";
+      if (parts.length !== 5 || parts[4] !== "release" || !/^[0-9a-f]{32}$/.test(jobId)) return json(res, 404, { error: { message: "not found" } });
+      const signature = req.headers["payment-signature"];
+      if (Array.isArray(signature)) return json(res, 400, { error: { message: "send one payment-signature header" } });
+      await readBody(req);
+      const started = Date.now();
+      let r: Response;
+      try {
+        r = await fetch(`${PAYWALL}/v1/jobs/${jobId}/release`, { method: "POST", headers: { ...(signature ? { "payment-signature": signature } : {}) }, signal: AbortSignal.timeout(PAID_TIMEOUT_MS) });
+      } catch {
+        return json(res, 502, { error: { message: signature ? "The connection to the paywall failed after your payment was sent. Check your wallet's recent transactions before trying again." : "Could not reach the paywall. You were not charged." } });
+      }
+      const headers: Record<string, string> = { "content-type": r.headers.get("content-type") ?? "application/json", "cache-control": "no-store" };
+      r.headers.forEach((value, key) => { if (PAID_PASS_BACK.test(key)) headers[key] = value; });
+      let out: Buffer;
+      try {
+        out = Buffer.from(await r.arrayBuffer());
+      } catch {
+        const receipt = headers["payment-response"];
+        res.writeHead(502, { "content-type": "application/json", ...(receipt ? { "payment-response": receipt } : {}) });
+        res.end(JSON.stringify({ error: { message: signature ? "The result was lost after your payment went through. Check your wallet's recent transactions." : "Could not read the paywall's answer. You were not charged." } }));
+        return;
+      }
+      // Status, job id and timing only: never the result, the payment header or the receipt.
+      console.log(JSON.stringify({ ts: new Date().toISOString(), route: "paid-job-release", jobId, status: r.status, withPayment: signature !== undefined, ms: Date.now() - started }));
+      res.writeHead(r.status, headers);
+      res.end(out);
+      return;
+    }
     // ---- Paid chat ---------------------------------------------------------------------------------------------
     // The browser bundle that pays from the visitor's Crossmark wallet (services/web/public/wallet.js).
     if (api === "wallet.js" && req.method === "GET") {
@@ -599,6 +729,18 @@ createServer(async (req, res) => {
   }
 }).listen(PORT, "127.0.0.1", async () => {
   console.log(`[test-console] http://127.0.0.1:${PORT}  default model: ${DEFAULT_MODEL}${NEAR_WALLET ? `  NEAR wallet: ${NEAR_WALLET}` : ""}`);
+  // The internal listener for the paywall (ARCH-105), only with --paid-jobs on; the key is never shown.
+  if (PAID_JOBS && JOBS) {
+    createServer(internalHandler(JOBS, PAID_JOBS.key, JOB_FEED ? (id) => JOB_FEED.released(id) : undefined)).listen(PAID_JOBS.internalPort, PAID_JOBS.internalHost, () => {
+      console.log(`[test-console] paid jobs on: internal listener http://${PAID_JOBS.internalHost}:${PAID_JOBS.internalPort}  key from ${PAID_JOBS.keyEnv}  ttl ${PAID_JOBS.ttlMs / 60_000} min  max ${PAID_JOBS.max}`);
+      if (JOB_FEED_CONFIG) {
+        const u = new URL(JOB_FEED_CONFIG.url);
+        console.log(`[test-console] job feed on: ${u.origin}${u.pathname}  key from ${JOB_FEED_CONFIG.keyEnv}  expiry check every ${JOB_FEED_CONFIG.expiryCheckSec} s`);
+        // Expiry is noticed when the store is read; this read makes it happen on time even when nobody asks.
+        setInterval(() => JOBS.size(), JOB_FEED_CONFIG.expiryCheckSec * 1000).unref();
+      }
+    }).on("error", (e) => { console.error(`[test-console] the paid jobs internal listener cannot start on ${PAID_JOBS.internalHost}:${PAID_JOBS.internalPort}: ${e.message}`); process.exit(1); });
+  }
   const { config, error } = readDataConfig();
   if (!config) console.log(`[test-console] ${error}`);
   else console.log(`[test-console] data folders: ${config.allowedRoots.join(", ")}; default ${config.defaultFolder}${(await isFolder(config.defaultFolder)) ? "" : "  (NOT FOUND: create it)"}`);

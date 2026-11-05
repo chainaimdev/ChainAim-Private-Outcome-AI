@@ -1,0 +1,84 @@
+<!-- Paid jobs on tab 03 (architecture.md ARCH-112). server.ts adds this to the page only with --paid-jobs on (and
+     --near-wallet); without it the page is served exactly as index.html is. Ticked, "Ask" runs the job as a paid job:
+     POST /jobs/crossask runs, meters, prices and holds it and shows only the total; "Pay" pays exactly that total in
+     USDC on NEAR (services/web nearPayAndRelease, through POST /paid/jobs/<id>/release, which relays to the paywall
+     without the gateway key); the released result is drawn by tab 03's own renderer. The result stays in page memory. -->
+<script>
+(() => {
+  const ask = document.getElementById("xaskGo");
+  const out = document.getElementById("xaskOut");
+  if (!ask || !out) return;
+  const box = document.createElement("div");
+  box.id = "xpayBox";
+  const label = document.createElement("label");
+  label.className = "paybox";
+  const tick = document.createElement("input");
+  tick.type = "checkbox"; tick.id = "xpayNear";
+  label.append(tick, " Pay with USDC · NEAR (run, see the total, then pay to see the result)");
+  const info = document.createElement("span");
+  info.className = "muted"; info.id = "xpayInfo";
+  info.textContent = "Off: Ask runs the job free, as before.";
+  const pay = document.createElement("div");
+  pay.id = "xpayQuote";
+  box.append(label, info, pay);
+  ask.closest(".row-actions").after(box);
+
+  let config = null;
+  const say = (text, isErr = false) => { info.textContent = text; info.className = isErr ? "err" : "muted"; };
+  tick.onchange = async () => {
+    pay.replaceChildren();
+    if (!tick.checked) { say("Off: Ask runs the job free, as before."); return; }
+    try {
+      const r = await fetch("/jobs/config");
+      config = await r.json();
+      if (!r.ok) throw new Error(config.error ?? `HTTP ${r.status}`);
+      say(`On: Ask runs the job and shows its total; nothing is shown or charged until you press Pay in ${config.walletName}. A quote stays payable ${config.ttlMin} minutes.`);
+    } catch (e) { say(e.message, true); }
+  };
+
+  /** Shows the total and a Pay button; resolves with the released result, or rejects with one plain sentence. */
+  function payStep(job) {
+    return new Promise((resolve, reject) => {
+      const total = document.createElement("p");
+      total.id = "xpayTotal";
+      total.textContent = `Total cost ${Number(job.totalUsd)} USDC (expires ${new Date(job.expiresAt).toLocaleTimeString()}) · ${job.network} · to ${job.payTo}`;
+      const button = document.createElement("button");
+      button.type = "button"; button.id = "xpayGo"; button.textContent = "Pay";
+      const cancel = document.createElement("button");
+      cancel.type = "button"; cancel.className = "ghost"; cancel.textContent = "Don't pay";
+      pay.replaceChildren(total, button, cancel);
+      cancel.onclick = () => { pay.replaceChildren(); reject(new Error("Not paid: the result stays hidden and the quote expires on its own.")); };
+      button.onclick = async () => {
+        button.disabled = true; cancel.disabled = true;
+        try {
+          const w = await nearWallet();
+          const saved = w.nearSavedAccount();
+          let payer = saved && saved.caip2 === job.network && saved.wallet === config.wallet ? saved.accountId : null;
+          if (!payer) { say(`Connecting ${config.walletName}…`); payer = await w.nearConnect(config.wallet, job.network); }
+          say(`Approve the payment of ${Number(job.totalUsd)} USDC in ${config.walletName}…`);
+          const quote = { network: job.network, asset: job.asset, payTo: job.payTo, amount: job.amount };
+          const r = await w.nearPayAndRelease(payer, config.wallet, quote, `/paid/jobs/${job.jobId}/release`, () => say("Payment signed, waiting for the result…"));
+          pay.replaceChildren();
+          if (r.error) { reject(new Error(r.error + (r.transaction ? ` (transaction ${r.transaction})` : ""))); return; }
+          const explorer = `https://${job.network === "near:mainnet" ? "" : "testnet."}nearblocks.io/txns/${r.transaction}`;
+          const link = document.createElement("a");
+          link.href = explorer; link.target = "_blank"; link.rel = "noopener";
+          link.textContent = `${r.transaction.slice(0, 8)}…${r.transaction.slice(-6)} ↗`;
+          info.replaceChildren(`Paid ${Number(job.totalUsd)} USDC on ${job.network} · receipt `, link);
+          info.className = "muted";
+          resolve(r.result);
+        } catch (e) { pay.replaceChildren(); reject(e); }
+      };
+    });
+  }
+
+  // Ticked: tab 03's own Ask flow gets the released result in place of the free one, and draws it as usual.
+  const free = postData;
+  postData = async (url, body) => {
+    if (url !== "/crossask" || !tick.checked) return free(url, body);
+    pay.replaceChildren();
+    const job = await free("/jobs/crossask", body);
+    return payStep(job);
+  };
+})();
+</script>

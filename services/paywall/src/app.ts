@@ -11,6 +11,7 @@
  * is free for the caller.
  */
 import { AsyncLocalStorage } from "node:async_hooks";
+import { timingSafeEqual } from "node:crypto";
 import { Hono, type Context } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { paymentMiddleware, x402ResourceServer } from "@x402/hono";
@@ -19,6 +20,7 @@ import { HTTPFacilitatorClient, type FacilitatorClient } from "@x402/core/server
 import { bazaarResourceServerExtension } from "@x402/extensions/bazaar";
 import { xrplOf, type PaywallConfig } from "./config.ts";
 import { InvoiceBook, SeenPayments } from "./invoices.ts";
+import { JobBook, JobInvoices, jobIdOfPath, parseJob } from "./jobs.ts";
 import type { NearRail } from "./near/rail.ts";
 import { PAID_ROUTES, routesConfig } from "./routes.ts";
 import { createSink, type PaymentSink } from "./sink.ts";
@@ -28,6 +30,8 @@ export const MAX_BODY_BYTES = 4 * 1024 * 1024;
 
 /** Gateway response headers passed back to the caller; everything else is dropped. */
 const PASS_BACK = /^(content-type|retry-after|x-chainaim-[a-z-]+)$/;
+/** Masking counts the gateway sends with --expose-entity-counts (adminUI ARCH-203): for the operator, never the public caller. */
+const NEVER_PASS_BACK = new Set(["x-chainaim-entity-counts", "x-chainaim-residual"]);
 
 export type PaywallDeps = {
   log?: (line: string) => void;
@@ -118,7 +122,7 @@ const ROOT_PAGE = `<!doctype html>
 </html>
 `;
 
-function errorBody(c: Context, status: 404 | 413 | 502 | 503, message: string, headers: Record<string, string> = {}): Response {
+function errorBody(c: Context, status: 400 | 401 | 404 | 409 | 410 | 413 | 502 | 503, message: string, headers: Record<string, string> = {}): Response {
   return c.json({ error: { message, type: status >= 500 ? "gateway_error" : "invalid_request_error", code: status } }, status, headers);
 }
 
@@ -138,10 +142,22 @@ export function createPaywall(config: PaywallConfig, deps: PaywallDeps = {}): Ho
   const invoices = new InvoiceBook(config.maxTimeoutSeconds * 1000, deps.now, deps.maxOpenInvoices);
   // NEAR only: a signed delegate names no invoice, so it is also claimed by its hash (invoices.ts, SeenPayments).
   const delegates = nearRail ? new SeenPayments(config.maxTimeoutSeconds * 4000, deps.now, deps.maxOpenInvoices) : undefined;
+  // Paid jobs (ARCH-106 to ARCH-110), only with PAID_JOBS=on: ids, amounts and times; never a result.
+  const paidJobs = config.paidJobs;
+  const jobs = paidJobs ? new JobBook(paidJobs.max, paidJobs.ttlSec * 1000, deps.now) : undefined;
+  const jobInvoices = paidJobs ? new JobInvoices(config.maxTimeoutSeconds * 1000, deps.now, deps.maxOpenInvoices) : undefined;
+  const pathOf = (transportContext: unknown): string | undefined => (transportContext as { request?: { path?: string } } | undefined)?.request?.path;
   server.onBeforeVerify(async (ctx) => {
     const m = mark();
     if (m) m.verifyAt = clock();
     const invoiceId = (ctx.requirements.extra as { invoiceId?: unknown } | undefined)?.invoiceId;
+    // A job invoice pays only the job it was issued for (ARCH-109); a signed delegate is still accepted once only.
+    if (jobInvoices && typeof invoiceId === "string" && jobInvoices.owns(invoiceId)) {
+      const delegate = nearRail?.isNearNetwork(ctx.requirements.network) ? nearRail.delegateKey(ctx.paymentPayload.payload) : undefined;
+      if (delegate !== undefined && !delegates!.first(delegate)) return { abort: true, reason: "payment_already_used", message: "this payment was already presented; sign a new one" };
+      if (jobInvoices.claim(invoiceId, jobIdOfPath(pathOf(ctx.transportContext)))) return;
+      return { abort: true, reason: "payment_already_used", message: "this payment was already presented; sign a new one" };
+    }
     const delegate = delegates && nearRail?.isNearNetwork(ctx.requirements.network) ? nearRail.delegateKey(ctx.paymentPayload.payload) : undefined;
     if (delegate !== undefined && !delegates!.first(delegate)) {
       return { abort: true, reason: "payment_already_used", message: "this payment was already presented; sign a new one" };
@@ -154,6 +170,9 @@ export function createPaywall(config: PaywallConfig, deps: PaywallDeps = {}): Ho
     server.onSettleFailure(async (ctx) => {
       if (!nearRail.isNearNetwork(ctx.requirements.network)) return;
       const request = (ctx.transportContext as { request?: { method?: string; path?: string } } | undefined)?.request;
+      // A release that did not settle released nothing (S0-b): the job may be paid again until it expires.
+      const failedJob = jobs ? jobIdOfPath(request?.path) : undefined;
+      if (failedJob !== undefined) jobs!.endPaying(failedJob);
       const invoiceId = (ctx.requirements.extra as { invoiceId?: unknown } | undefined)?.invoiceId;
       const failed = ctx.error as { errorReason?: unknown; transaction?: unknown } | undefined;
       log(
@@ -193,7 +212,53 @@ export function createPaywall(config: PaywallConfig, deps: PaywallDeps = {}): Ho
     });
     log(line);
     sink?.send(line);
+    // A settled release (ARCH-110): the job is closed here, and the console is told to drop the result.
+    const settledJob = jobs ? jobIdOfPath(request?.path) : undefined;
+    if (settledJob !== undefined) {
+      jobs!.markReleased(settledJob);
+      void notifyReleased(settledJob);
+    }
   });
+
+  /** POST console /internal/jobs/:id/released; a failure is logged with the job id and a reason only (the console's TTL still drops the job). */
+  async function notifyReleased(jobId: string): Promise<void> {
+    let reason: string | undefined;
+    try {
+      const r = await fetch(`${paidJobs!.resultUrl}/internal/jobs/${jobId}/released`, { method: "POST", headers: { "x-jobs-key": paidJobs!.key }, signal: AbortSignal.timeout(5000) });
+      await r.body?.cancel();
+      if (!r.ok) reason = `HTTP ${r.status}`;
+    } catch (e) {
+      reason = (e as Error).name === "TimeoutError" ? "timeout" : "unreachable";
+    }
+    if (reason !== undefined) log(JSON.stringify({ ts: new Date().toISOString(), event: "job_release_notify_failed", jobId, reason }));
+  }
+
+  /** The x-jobs-key header equals PAID_JOBS_KEY (constant time). */
+  const jobsKeyOk = (c: Context): boolean => {
+    const given = Buffer.from(c.req.header("x-jobs-key") ?? "", "utf8");
+    const want = Buffer.from(paidJobs!.key, "utf8");
+    return given.length === want.length && timingSafeEqual(given, want);
+  };
+
+  /** The paid release handler: read the held result from the console. Only a 200 is settled, and only a settled one is sent (S0-b). */
+  async function release(c: Context): Promise<Response> {
+    const jobId = jobIdOfPath(c.req.path)!;
+    if (!jobs!.beginPaying(jobId)) return errorBody(c, 409, "this job is already being paid or was released; you were not charged");
+    let held: { jobId?: unknown; result?: unknown };
+    try {
+      const r = await fetch(`${paidJobs!.resultUrl}/internal/jobs/${jobId}`, { headers: { "x-jobs-key": paidJobs!.key }, signal: AbortSignal.timeout(10_000) });
+      if (!r.ok) {
+        await r.body?.cancel();
+        throw new Error(`HTTP ${r.status}`);
+      }
+      held = (await r.json()) as { jobId?: unknown; result?: unknown };
+      if (held?.jobId !== jobId || held.result === undefined) throw new Error("not the job asked for");
+    } catch {
+      jobs!.endPaying(jobId);
+      return errorBody(c, 502, "the job's result could not be read; you were not charged");
+    }
+    return c.json(held.result as object, 200);
+  }
 
   /**
    * Forward the method, path, content type and body; pass back the status,
@@ -219,7 +284,7 @@ export function createPaywall(config: PaywallConfig, deps: PaywallDeps = {}): Ho
     }
     const out = new Headers();
     upstream.headers.forEach((value, name) => {
-      if (PASS_BACK.test(name)) out.set(name, value);
+      if (PASS_BACK.test(name) && !NEVER_PASS_BACK.has(name)) out.set(name, value);
     });
     return new Response(upstream.body, { status: upstream.status, headers: out });
   }
@@ -251,9 +316,50 @@ export function createPaywall(config: PaywallConfig, deps: PaywallDeps = {}): Ho
     return errorBody(c, 503, `chat is unavailable right now (${reason}); you were not charged`, { "retry-after": retryAfter });
   });
 
-  app.use(paymentMiddleware(routesConfig(config, (paymentHeader) => invoices.forRequest(paymentHeader)), server));
+  if (jobs && paidJobs) {
+    // Job intake from the test console (ARCH-106): the key, then each field; nothing of the body is logged.
+    app.post("/internal/jobs", async (c) => {
+      if (!jobsKeyOk(c)) return errorBody(c, 401, "x-jobs-key is missing or wrong");
+      let body: unknown;
+      try {
+        body = await c.req.json();
+      } catch {
+        return errorBody(c, 400, "body must be JSON");
+      }
+      const job = parseJob(body, (deps.now ?? Date.now)(), paidJobs.ttlSec);
+      if ("error" in job) return errorBody(c, 400, job.error);
+      const stored = jobs.register(job);
+      if (stored === "full") return errorBody(c, 503, `${paidJobs.max} jobs are open (PAID_JOBS_MAX); try again later`);
+      if (stored === "exists") return errorBody(c, 409, "this jobId is already registered");
+      return c.json({ jobId: job.jobId, amount: job.amount, expiresAt: job.expiresAt }, 201);
+    });
+    // Release guard (ARCH-107), before the payment middleware: nobody is asked to pay for a job that cannot be released.
+    app.use("/v1/jobs/:id/release", async (c, next) => {
+      if (c.req.method !== "POST") return next();
+      const jobId = jobIdOfPath(c.req.path);
+      const state = jobId === undefined ? "unknown" : jobs.state(jobId);
+      if (state === "unknown") return errorBody(c, 404, "no such job; nothing was charged");
+      if (state === "expired") return errorBody(c, 410, "this job has expired; run it again. Nothing was charged");
+      if (state === "released") return errorBody(c, 409, "this job was already paid and released");
+      return next();
+    });
+  }
+
+  app.use(
+    paymentMiddleware(
+      jobs && jobInvoices
+        ? routesConfig(config, (paymentHeader) => invoices.forRequest(paymentHeader), {
+            amountOf: (jobId) => jobs.amountOf(jobId),
+            invoiceFor: (jobId, paymentHeader) => jobInvoices.forRequest(jobId, paymentHeader),
+            jobIdOf: jobIdOfPath,
+          })
+        : routesConfig(config, (paymentHeader) => invoices.forRequest(paymentHeader)),
+      server,
+    ),
+  );
 
   for (const route of PAID_ROUTES) app.post(route.path, proxy);
+  if (jobs) app.post("/v1/jobs/:id/release", release);
   app.get("/", (c) => c.html(ROOT_PAGE));
   app.get("/v1/models", proxy);
   app.get("/healthz", proxy);

@@ -10,7 +10,7 @@
   },
   "scripts": {
     "gateway": "node services/gateway/src/main.ts",
-    "test": "node scripts/check-deps.ts && node --test \"services/gateway/test/*.test.ts\" \"scripts/test/*.test.ts\"",
+    "test": "node scripts/check-deps.ts && node --test \"services/gateway/test/*.test.ts\" \"scripts/test/*.test.ts\" \"test-console/test/*.test.ts\"",
     "check:deps": "node scripts/check-deps.ts",
     "test:engine": "npm --prefix packages/route-engine run check",
     "test:paywall": "npm --prefix services/paywall test",

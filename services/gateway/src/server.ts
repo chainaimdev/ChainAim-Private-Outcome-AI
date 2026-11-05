@@ -30,7 +30,17 @@ export type ServerOptions = {
   maxBodyBytes: number;
   /** Bearer token clients must send; undefined = no gateway auth (bind to localhost only). */
   gatewayKey: string | undefined;
+  /**
+   * --expose-entity-counts (adminUI ARCH-202; default off): chat replies also carry x-chainaim-entity-counts (entity
+   * kind -> count, the ledger's entityCounts) and x-chainaim-residual (pass, or refused on a residual refusal). Kinds and
+   * counts only, never a value or placeholder. The paywall drops both before answering a public caller (ARCH-203).
+   */
+  exposeEntityCounts?: boolean;
 };
+
+/** The two masking headers of --expose-entity-counts (ARCH-202); the paywall strips exactly these (ARCH-203). */
+export const ENTITY_COUNTS_HEADER = "x-chainaim-entity-counts";
+export const RESIDUAL_HEADER = "x-chainaim-residual";
 
 function sendJson(res: ServerResponse, status: number, body: unknown, headers: Record<string, string> = {}): void {
   if (res.headersSent) {
@@ -133,6 +143,7 @@ export function createGateway(deps: GatewayDeps, opts: ServerOptions): Server {
     if (!result.ok) {
       if (result.status === 499) return; // the client is gone
       if (result.retryAfterSec !== undefined) headers["retry-after"] = String(result.retryAfterSec);
+      if (opts.exposeEntityCounts && result.record.residual?.length) headers[RESIDUAL_HEADER] = "refused";
       sendError(res, result.status, result.message, headers);
       return;
     }
@@ -142,6 +153,11 @@ export function createGateway(deps: GatewayDeps, opts: ServerOptions): Server {
     if (result.record.zone) headers["x-chainaim-zone"] = result.record.zone;
     headers["x-chainaim-restored"] = result.record.restored === false ? "no" : "yes";
     if (result.record.unresolvedPlaceholders !== undefined) headers["x-chainaim-unresolved"] = String(result.record.unresolvedPlaceholders);
+    if (opts.exposeEntityCounts) {
+      headers[ENTITY_COUNTS_HEADER] = JSON.stringify(result.record.entityCounts ?? {});
+      // A served reply passed the residual check; with --residual-guard off there was no check, so no header.
+      if ((deps.chat.residual ?? DEFAULT_RESIDUAL).enabled) headers[RESIDUAL_HEADER] = "pass";
+    }
     if (!result.stream) {
       sendJson(res, 200, result.completion, headers);
       return;

@@ -117,7 +117,7 @@ export type RlusdPrice = { amount: string; asset: string; extra: { issuer: strin
 /** A USDC amount on NEAR: a whole number of base units, the NEP-141 contract id, and the invoice in extra. */
 export type NearUsdcPrice = { amount: string; asset: string; extra: { invoiceId: string } };
 
-type RequestLike = { paymentHeader?: string };
+type RequestLike = { paymentHeader?: string; path?: string };
 
 export type XrplAccept = {
   scheme: "exact";
@@ -154,7 +154,19 @@ export type RouteEntry = {
  * metadata. invoiceFor gives the invoice id for a request from its payment
  * header (undefined when the request carries no payment).
  */
-export function routesConfig(config: PaywallConfig, invoiceFor: (paymentHeader: string | undefined) => string): Record<string, RouteEntry> {
+/**
+ * Paid jobs (ARCH-107): the release route's price comes from the job named in the path, and its invoice is bound to
+ * that job. Given only with PAID_JOBS=on.
+ */
+export type JobPricing = {
+  amountOf: (jobId: string) => string | undefined;
+  invoiceFor: (jobId: string, paymentHeader: string | undefined) => string;
+  jobIdOf: (path: string | undefined) => string | undefined;
+};
+
+export const JOB_RELEASE_DESCRIPTION = "Releases the held result of one paid job (test console tab 03), priced at the total it was quoted. Paid in USDC on NEAR only.";
+
+export function routesConfig(config: PaywallConfig, invoiceFor: (paymentHeader: string | undefined) => string, jobs?: JobPricing): Record<string, RouteEntry> {
   // With more than one rail, every offer of one quote names the same invoice: the middleware prices all offers
   // with the same request object, so the first offer's invoice is kept for it. Claiming that invoice once
   // (app.ts onBeforeVerify) means one call cannot be paid on two rails. With one rail, nothing changes.
@@ -172,7 +184,7 @@ export function routesConfig(config: PaywallConfig, invoiceFor: (paymentHeader: 
   const xrpl = config.rails.includes("xrpl") ? xrplOf(config) : undefined;
   const near = config.near;
   const nearPrices = near ? usdcPrices(config.prices, near) : undefined;
-  return Object.fromEntries(
+  const table: Record<string, RouteEntry> = Object.fromEntries(
     PAID_ROUTES.map((r): [string, RouteEntry] => [
       r.key,
       {
@@ -211,4 +223,27 @@ export function routesConfig(config: PaywallConfig, invoiceFor: (paymentHeader: 
       },
     ]),
   );
+  if (config.paidJobs && jobs && near) {
+    // One offer only, NEAR USDC, whatever PAY_RAILS also has: the amount is the job's, never a configured price.
+    table["POST /v1/jobs/:id/release"] = {
+      accepts: [
+        {
+          scheme: "exact",
+          price: (request) => {
+            const jobId = jobs.jobIdOf(request.path);
+            const amount = jobId === undefined ? undefined : jobs.amountOf(jobId);
+            if (jobId === undefined || amount === undefined) throw new Error("the job is not open");
+            return { amount, asset: near.usdcContract, extra: { invoiceId: jobs.invoiceFor(jobId, request.paymentHeader) } };
+          },
+          network: near.network,
+          payTo: near.payTo,
+          maxTimeoutSeconds: config.maxTimeoutSeconds,
+        },
+      ],
+      description: JOB_RELEASE_DESCRIPTION,
+      mimeType: "application/json",
+      extensions: {},
+    };
+  }
+  return table;
 }

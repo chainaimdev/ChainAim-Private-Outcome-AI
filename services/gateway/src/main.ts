@@ -59,6 +59,7 @@ const USAGE = `chainaim-gateway [flags]
   --ledger DIR|off           decision ledger directory                   (default data/ledger)
   --max-body-bytes N         request size limit                          (default 4194304)
   --api-key-env NAME         env var holding the gateway bearer key      (default none = no auth)
+  --expose-entity-counts on|off  chat replies carry x-chainaim-entity-counts and x-chainaim-residual (kinds and counts; default off)
   --help`;
 
 /** "all" = every zone (undefined); otherwise a comma list of known zones. */
@@ -123,6 +124,7 @@ const OPTIONS = {
   ledger: { type: "string", default: "data/ledger" },
   "max-body-bytes": { type: "string", default: String(4 * 1024 * 1024) },
   "api-key-env": { type: "string" },
+  "expose-entity-counts": { type: "string", default: "off" },
   help: { type: "boolean", default: false },
 } as const;
 
@@ -132,7 +134,7 @@ export function parseFlags(argv: string[]) {
   if (source !== "catalog" && source !== "openrouter-free") throw new Error("--model-source must be catalog or openrouter-free");
   if (v.jev !== "on" && v.jev !== "off") throw new Error("--jev must be on or off");
   if (v["residual-guard"] !== "on" && v["residual-guard"] !== "off") throw new Error("--residual-guard must be on or off");
-  for (const name of ["restore-lenient", "placeholder-instruction"] as const) if (v[name] !== "on" && v[name] !== "off") throw new Error(`--${name} must be on or off`);
+  for (const name of ["restore-lenient", "placeholder-instruction", "expose-entity-counts"] as const) if (v[name] !== "on" && v[name] !== "off") throw new Error(`--${name} must be on or off`);
   if (!ENV_NAME.test(v["openrouter-key-env"]!)) throw new Error("--openrouter-key-env must be an environment variable NAME, not a key");
   for (const name of ["presidio-url", "openrouter-base-url"] as const) {
     if (!URL.canParse(v[name]!)) throw new Error(`--${name} must be a URL`);
@@ -179,6 +181,7 @@ export function parseFlags(argv: string[]) {
     ledgerDir: v.ledger === "off" ? undefined : v.ledger!,
     maxBodyBytes: int("max-body-bytes", v["max-body-bytes"]!, 1024),
     apiKeyEnv: v["api-key-env"],
+    exposeEntityCounts: v["expose-entity-counts"] === "on",
   };
 }
 
@@ -244,7 +247,7 @@ async function main(): Promise<void> {
       ledger,
       chat: { maxOutputTokens: f.maxOutputTokens, maxAttempts: f.maxAttempts, attemptTimeoutMs: f.attemptTimeoutMs, healthFlagThreshold: f.healthFlagThreshold, residual: f.residual, restoreLenient: f.restoreLenient, placeholderInstruction: f.placeholderInstruction, ...(f.autoZones ? { autoZones: f.autoZones } : {}), ...(f.phiZones ? { phiZones: f.phiZones } : {}) },
     },
-    { maxBodyBytes: f.maxBodyBytes, gatewayKey },
+    { maxBodyBytes: f.maxBodyBytes, gatewayKey, ...(f.exposeEntityCounts ? { exposeEntityCounts: true } : {}) },
   );
   server.listen(f.port, f.host, () => {
     const addr = server.address();
@@ -252,7 +255,7 @@ async function main(): Promise<void> {
     console.log(
       `[chainaim-gateway] listening on http://${f.host}:${port}  source=${f.modelSource} models=${source.models().length} ` +
         `jev=${jev ? "on" : "off"} presidio=${presidio.url} extra-entities=${f.extraEntities.join(",") || "none"} ` +
-        `residual=${f.residual.enabled ? `${f.residual.checks.join(",")}/${f.residual.minDigits}` : "off"} restore-lenient=${f.restoreLenient ? "on" : "off"} placeholder-instruction=${f.placeholderInstruction ? "on" : "off"} auto-zones=${f.autoZones?.join(",") ?? "all"} phi-zones=${f.phiZones?.join(",") ?? "all"} ledger=${ledger.enabled ? f.ledgerDir : "off"} auth=${gatewayKey ? "on" : "off"}`,
+        `residual=${f.residual.enabled ? `${f.residual.checks.join(",")}/${f.residual.minDigits}` : "off"} restore-lenient=${f.restoreLenient ? "on" : "off"} placeholder-instruction=${f.placeholderInstruction ? "on" : "off"} auto-zones=${f.autoZones?.join(",") ?? "all"} phi-zones=${f.phiZones?.join(",") ?? "all"} ledger=${ledger.enabled ? f.ledgerDir : "off"} auth=${gatewayKey ? "on" : "off"}${f.exposeEntityCounts ? " expose-entity-counts=on" : ""}`,
     );
   });
   const shutdown = () => {
