@@ -22,6 +22,14 @@ that what is running matches it. ca-gateway stays owned by switch-models.ps1.
                                      -PaymentLogKeyEnv (default LEDGER_WATCH_INGEST_KEY), read from -PaymentLogKeyFile (a
                                      NAME=value env file) or else from this window; never printed. Default none = off.
 
+  stack.ps1 -Rebuild paywall -NearEnvFile C:\PRIV-AI-SECRETS\near-testnet.env
+                                     also offer USDC on NEAR (MANUAL_SETUP.md "NEAR USDC rail"): reads the paywall's NEAR
+                                     settings from a NAME=value file (PAY_RAILS, NEAR_NETWORK, NEAR_PAY_TO_<NET>,
+                                     NEAR_USDC_CONTRACT_<NET>, NEAR_USDC_DECIMALS_<NET>, NEAR_RPC_URL_<NET>,
+                                     NEAR_RPC_FALLBACK_URL_<NET>, NEAR_FACILITATOR_URL_<NET>, NEAR_RELAYER_ACCOUNT_<NET>,
+                                     NEAR_RELAYER_KEY_<NET>, NEAR_MAX_GAS). Passed as -e NAME (never on a command line);
+                                     only names are printed. Other names in the file (buyer keys, ...) are ignored and listed.
+
 What -Check verifies, per container (ca-presidio, ca-openrouter-stub, ca-gateway, ca-paywall):
   - it exists, runs, and is on the docker network
   - it runs the CURRENT build of its image tag (a rebuilt image does not reach a container until it is recreated)
@@ -64,7 +72,8 @@ param(
   [string]$PaymentLogFile = "payments.log",
   [string]$PaymentLogUrl = "none",
   [string]$PaymentLogKeyEnv = "LEDGER_WATCH_INGEST_KEY",
-  [string]$PaymentLogKeyFile = ""
+  [string]$PaymentLogKeyFile = "",
+  [string]$NearEnvFile = ""
 )
 $ErrorActionPreference = "Stop"
 $repo = [IO.Path]::GetFullPath((Split-Path $PSScriptRoot -Parent))
@@ -206,12 +215,34 @@ if ($recreateSet -contains "paywall") {
       $logArgs += @("-e", "PAYMENT_LOG_URL", "-e", "PAYMENT_LOG_KEY")
       Write-Host "  payment log API: $PaymentLogUrl (ledger-watch /ingest/claim; key from $PaymentLogKeyEnv, not printed)"
     }
+    # NEAR rail (MANUAL_SETUP.md "NEAR USDC rail"): settings from -NearEnvFile, allowlisted, passed as -e NAME, values never printed.
+    $nearNames = @()
+    if ($NearEnvFile) {
+      if (-not (Test-Path $NearEnvFile)) { throw "-NearEnvFile $NearEnvFile does not exist" }
+      $allowed = '^(PAY_RAILS|NEAR_NETWORK|NEAR_MAX_GAS|NEAR_(PAY_TO|USDC_CONTRACT|USDC_DECIMALS|RPC_URL|RPC_FALLBACK_URL|FACILITATOR_URL|RELAYER_ACCOUNT|RELAYER_KEY)_(TESTNET|MAINNET))$'
+      $ignored = @()
+      foreach ($line in Get-Content $NearEnvFile) {
+        if ($line -match '^\s*(#|$)') { continue }
+        if ($line -notmatch '^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=(.*)$') { throw "-NearEnvFile: a line is not NAME=value (line not printed)" }
+        $n = $Matches[1]; $v = $Matches[2].Trim().Trim('"').Trim("'")
+        if ($n -notmatch $allowed) { $ignored += $n; continue }
+        if ($v -eq "") { continue }
+        Set-Item -Path "env:$n" -Value $v
+        $nearNames += $n
+      }
+      $rails = [Environment]::GetEnvironmentVariable("PAY_RAILS")
+      if (-not $rails -or ($rails -split ",") -notcontains "near") { throw "-NearEnvFile must set PAY_RAILS to near or xrpl,near" }
+      foreach ($n in $nearNames) { $envArgs += @("-e", $n) }
+      Write-Host "  NEAR rail: PAY_RAILS=$rails; passing $($nearNames.Count) setting(s): $($nearNames -join ', ') (values not printed)"
+      if ($ignored.Count) { Write-Host "  ignored (not paywall NEAR settings): $($ignored -join ', ')" }
+    }
     Write-Host "Recreating $PaywallContainer from $PaywallImage ($XrplNetwork, pay to $payTo)"
     Invoke-DockerQuiet @("rm", "-f", $PaywallContainer) | Out-Null
     Invoke-DockerLoud (@("run", "-d", "--name", $PaywallContainer, "--network", $Network) + $envArgs + $logArgs + $srcLabel +
       @("-p", "127.0.0.1:${PaywallPort}:8080", $PaywallImage)) "Starting $PaywallContainer"
   } finally {
     Remove-Item Env:CHAINAIM_GATEWAY_KEY, Env:PAYMENT_LOG_URL, Env:PAYMENT_LOG_KEY -ErrorAction SilentlyContinue
+    foreach ($n in $nearNames) { Remove-Item "Env:$n" -ErrorAction SilentlyContinue }
   }
 }
 
@@ -299,6 +330,12 @@ if ($p) {
     if ($map.ContainsKey("PAYMENT_LOG_KEY")) { Ok "payment log API $($map['PAYMENT_LOG_URL']) (key set, not printed)" } else { Fail "PAYMENT_LOG_URL is set but PAYMENT_LOG_KEY is not. Fix: stack.ps1 -Recreate paywall -PaymentLogUrl <url> -PaymentLogKeyFile <file>" }
   }
   elseif ($PaymentLogUrl -ne "none") { Fail "no PAYMENT_LOG_URL although -PaymentLogUrl was given. Fix: stack.ps1 -Recreate paywall -PaymentLogUrl $PaymentLogUrl -PaymentLogKeyFile <file>" }
+  if ($map.ContainsKey("PAY_RAILS")) {
+    if ((($map["PAY_RAILS"]) -split ",") -contains "near") { Ok "PAY_RAILS=$($map['PAY_RAILS']) (NEAR settings: $((@($map.Keys | Where-Object { $_ -like 'NEAR_*' }) | Sort-Object) -join ', '); values not printed)" }
+    else { Ok "PAY_RAILS=$($map['PAY_RAILS'])" }
+  }
+  elseif ($NearEnvFile) { Fail "no PAY_RAILS although -NearEnvFile was given. Fix: stack.ps1 -Recreate paywall -NearEnvFile $NearEnvFile" }
+  else { Ok "no PAY_RAILS: RLUSD on XRPL only (add USDC on NEAR with -NearEnvFile)" }
   $expectPayTo = $null
   try { $expectPayTo = Resolve-PayTo } catch { Warn $_.Exception.Message }
 

@@ -62,6 +62,103 @@
       }
     },
     {
+      "id": "chiro-ct",
+      "label": "Practice Management - Chiro (ChiroTouch)",
+      "folder": "prms/chiro-1-chirotouch",
+      "engine": "crossask",
+      "subfolders": true,
+      "defaultSubfolder": "SET-1/POS",
+      "description": "Synthetic ChiroTouch exports (day sheet, deposits, CT Payments, Cash Practice) with the Bank of America statement, fee schedule, PI cases and care plans. Questions are answered by a model-written SQL query over the CSV files until the chiro reconciliation and query bank are built (CHIRO-1b-2).",
+      "templates": [
+        {
+          "label": "Insurance paid by payer",
+          "q": "How much did each insurance payer pay us this month (day sheet rows with Type Payment and Code ERA), and how many claims does that cover?"
+        },
+        {
+          "label": "Bank deposits by kind",
+          "q": "Total bank credits by kind of deposit (insurance EFT HCCLAIMPMT, card settlements, ATM deposits, auto-debits) per week, from the bank statement."
+        },
+        {
+          "label": "Care plans: unearned revenue",
+          "q": "For each care plan: price, visits bought, visits used, collected and unearned amount. What is the total unearned (prepaid, not yet delivered) revenue?"
+        },
+        {
+          "label": "PI cases: open balances",
+          "q": "For personal injury cases: billed, carrier paid, open balance (billed minus paid) by state and coverage (PIP or MedPay); list the open cases with the largest balances."
+        },
+        {
+          "label": "Contracted vs charged",
+          "q": "For each payer and CPT code in the fee schedule, how does the contracted allowed amount compare with our charge in the day sheet (Type Charge) (average charge per code)?"
+        },
+        {
+          "label": "Cash flow vs installment",
+          "q": "How much cash came into and went out of the bank account this month, and what was the net cash flow? Could it cover a loan installment of 8,000 a month?"
+        }
+      ],
+      "setLabels": {
+        "SET-1/POS": "POS - everything reconciles (synthetic, tools/chiro-synth)"
+      },
+      "fileKinds": {
+        "BANK-ST": "Bank statement",
+        "FEESCHED": "Fee schedule",
+        "PI-CASES": "Personal injury cases",
+        "CAREPLANS": "Care plans",
+        "CT-PATIENTS": "Patient list",
+        "CT-DAYSHEET": "Day sheet (ledger)",
+        "CT-DEPOSITS": "Deposit report",
+        "CTPAY": "CT Payments batches",
+        "CASHPRAC": "Cash Practice auto-debits"
+      }
+    },
+    {
+      "id": "chiro-jane",
+      "label": "Practice Management - Chiro (Jane)",
+      "folder": "prms/chiro-2-jane",
+      "engine": "crossask",
+      "subfolders": true,
+      "defaultSubfolder": "SET-1/POS",
+      "description": "Synthetic Jane exports (transactions, payments with fees, Jane Payments payouts) with the Bank of America statement, fee schedule, PI cases and care plans. Questions are answered by a model-written SQL query over the CSV files until the chiro reconciliation and query bank are built (CHIRO-1b-2).",
+      "templates": [
+        {
+          "label": "Insurance paid by payer",
+          "q": "How much did each insurance payer pay us this month (insurance payments in the transactions file (Type Payment, Item ERA)), and how many claims does that cover?"
+        },
+        {
+          "label": "Bank deposits by kind",
+          "q": "Total bank credits by kind of deposit (insurance EFT HCCLAIMPMT, card settlements, ATM deposits, auto-debits) per week, from the bank statement."
+        },
+        {
+          "label": "Care plans: unearned revenue",
+          "q": "For each care plan: price, visits bought, visits used, collected and unearned amount. What is the total unearned (prepaid, not yet delivered) revenue?"
+        },
+        {
+          "label": "PI cases: open balances",
+          "q": "For personal injury cases: billed, carrier paid, open balance (billed minus paid) by state and coverage (PIP or MedPay); list the open cases with the largest balances."
+        },
+        {
+          "label": "Contracted vs charged",
+          "q": "For each payer and CPT code in the fee schedule, how does the contracted allowed amount compare with our charge in the transactions file (Type Payment, Item ERA) (average charge per code)?"
+        },
+        {
+          "label": "Cash flow vs installment",
+          "q": "How much cash came into and went out of the bank account this month, and what was the net cash flow? Could it cover a loan installment of 8,000 a month?"
+        }
+      ],
+      "setLabels": {
+        "SET-1/POS": "POS - everything reconciles (synthetic, tools/chiro-synth)"
+      },
+      "fileKinds": {
+        "BANK-ST": "Bank statement",
+        "FEESCHED": "Fee schedule",
+        "PI-CASES": "Personal injury cases",
+        "CAREPLANS": "Care plans",
+        "JANE-PATIENTS": "Patient list",
+        "JANE-TRANSACTIONS": "Transactions (ledger)",
+        "JANE-PAYMENTS-REFUNDS-FEES": "Payments, refunds and fees",
+        "JANEPAY-PAYOUTS": "Jane Payments payouts"
+      }
+    },
+    {
       "id": "pers-fin",
       "label": "Personal Financials",
       "folder": "pers-fin",

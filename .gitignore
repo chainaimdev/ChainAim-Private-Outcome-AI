@@ -53,3 +53,8 @@ data/lending/
 # generated demo-video output (55 MB WAVs, frame dumps): regenerate, never commit
 brag-output/
 brag-output-*/
+
+# ERA remittance files (X12 835) hold patient claims (PHI): only generated ones, under sample-data/, ever live in the repository
+*.835
+# NEAR CLI legacy keychain (private keys as JSON) if near-cli is ever run with the repository as its home or cwd
+**/.near-credentials/

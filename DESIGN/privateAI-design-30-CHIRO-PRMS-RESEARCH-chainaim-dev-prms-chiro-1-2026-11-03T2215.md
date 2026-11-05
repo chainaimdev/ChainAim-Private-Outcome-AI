@@ -237,6 +237,35 @@ PR adjustments = CLP05 (payer practice), BPR02 = sum(CLP04) - sum(PLB), SE01 cou
 
 Known limit: `reconcile.ts` allows one file per layout per folder, so a Set keeps all payments in one interchange file (one ST per payment).
 
-### Next (CHIRO-1b), needs §10 answers 2, 4, 5, 6, 8
+### §10 answers (owner, 2026-11-03 23:20; options proposed by Claude, chosen by the owner)
+- 2 Payer mix default (generator flags, assumption, not real clinic data): commercial 45, Medicare 20, Medicaid 5, PI 15, cash plan 15, WC 0.
+- 3 Workers' comp: not in v1 (WC share 0).
+- 4 Clearinghouse: ChiroTouch -> TriZetto (CT ProClear); Jane -> Claim.MD. Unverified against a real ERA envelope.
+- 5 Processors: CT Payments (Global Payments, CTPAY-*) and Cash Practice auto-debit (CASHPRAC-*) for ChiroTouch; Jane Payments (JANEPAY-*) for Jane.
+- 8 Clinic shape: 1 clinic, 3 DCs, 1 month.
+- 1 State (revised 23:22): Connecticut + Massachusetts, both PRMS (payers from both states, like the dental HUSKY + MassHealth sample).
+  Auto PI coverage and prepaid-plan rules per state: see §12 (sources read before the generator uses them).
+- 6 Bank: insurance EFT (DES:HCCLAIMPMT ... TRN*1*<trace>) and Global Payments card deposit (GB PY DES:GLOBAL DEP) reuse the verified
+  dental BofA formats. Jane Payments payout and Cash Practice auto-debit deposit lines: still open (owner to supply one anonymized line each).
+- 7 Fee schedule: yes, synthetic FEESCHED-*.csv (contracted rate per payer + CPT); NEG-CONTRACT-UNDERPAY stays in NEG-ALL (16 leak types).
+- 9 Demo audience: clinic owner (leaks first, loan capacity last).
+- Still open: ChiroTouch/Jane export header lines (first row only).
+
+### CHIRO-1b-1 (2026-11-03): generator POS for both PRMS
+- `tools/chiro-synth/gen_chiro_set.py` (canonical model, both layout families, 835 writer, BofA writer, answer key) and
+  `verify_chiro_set.py` (independent re-read; cross-PRMS check). Seed 1: 150 patients, 723 visits, 622 claims, 16 ERA payments.
+- Checked: both folders ALL CHECKS PASS with --compare; ERA byte-identical across PRMS; the TS 835 parser reads it with 0 failed
+  checks; four tampered copies (bank amount, 835 line, other seed) are caught. Found and fixed during build: payroll 100x
+  (randrange bounds), different event streams per PRMS (auto-debit draw).
+- `services/analyst/test/chiro-sets.test.ts`: the sets through bank/bofa and remit/x12-835 (DuckDB, owner PC).
+
+### Next (CHIRO-1b-2): NEG scenarios (16 leaks) + chiro reconcile + query bank + datasets
 Generator canonical model (`tools/chiro-synth`), 835 writer verified by this parser, chiro reconcile.json (ERA TRN vs bank trace),
 ChiroTouch/Jane layout adapters (after header lines from real exports), datasets.json entries chiro-ct / chiro-jane, scenario tests.
+
+## 12. State rules used by the chiro generator (sources read 2026-11-03)
+| Rule | State | Value used | Basis |
+|---|---|---|---|
+| Auto PI first-party coverage | MA | PIP compulsory, $8,000 per person; when the patient has health insurance PIP pays medical up to $2,000, then the health plan | mass.gov Superior Court jury instruction 8.00 (PIP, amended Nov 2021, G.L. c. 90 s.34A); insurer pages (Plymouth Rock, MAPFRE) for the $8,000 limit |
+| Auto PI first-party coverage | CT | Not no-fault; MedPay optional; MedPay primary over health insurance (policies from 2000-11-01) | CT Insurance Dept. regulation 38a-334-7 (portal.ct.gov/cid pc48); Plymouth Rock "Is CT a no-fault state" |
+| Prepaid care plans | MA, CT | No state-specific rule found (searched MA 233 CMR and CT); generator uses unearned revenue + pro-rata refund of unused visits, no escrow check | ASSUMPTION (pro-rata is the rule in NC 21 NCAC 10.0305 and the Illinois Chiropractic Society guidance; not MA/CT law) |

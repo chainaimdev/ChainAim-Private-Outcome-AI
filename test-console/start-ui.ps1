@@ -8,6 +8,14 @@ already running is kept (use -RestartConsole / -RestartAnalyst to replace those 
   .\test-console\start-ui.ps1 -RestartChainQuery    also restart chain-query (after a code change)
   .\test-console\start-ui.ps1 -NoChainQuery         do not start chain-query (the Blockchain queries twisty then says so)
   .\test-console\start-ui.ps1 -NoBrowser            do not open the browser
+  .\test-console\start-ui.ps1 -RestartAll           restart everything: docker restart of the four containers (same
+                                                    settings; use stack.ps1 -Recreate to change settings), then the
+                                                    analyst, chain-query and console windows
+  .\test-console\start-ui.ps1 -NearWallet intear-wallet -RestartConsole
+                                                    start the console with the "Pay with USDC - NEAR" box
+                                                    (--near-wallet; MANUAL_SETUP.md "Test console: pay in USDC on NEAR").
+                                                    The paywall must offer NEAR too (PAY_RAILS=xrpl,near), which the
+                                                    ca-paywall container created by stack.ps1 does not set today.
 
   -ModelsFile    the model list the console shows (default config\local-models.cpu-all.json)
   -ConsolePort   default 8730       -AnalystPort  default 8740      -GatewayPort  default 8720      -ChainQueryPort default 8750
@@ -33,9 +41,12 @@ param(
   [int]$ChainQueryPort = 8750,
   [switch]$RestartChainQuery,
   [switch]$NoChainQuery,
-  [switch]$NoBrowser
+  [switch]$NoBrowser,
+  [switch]$RestartAll,
+  [ValidateSet("", "intear-wallet")][string]$NearWallet = ""
 )
 $ErrorActionPreference = "Stop"
+if ($RestartAll) { $RestartConsole = $true; $RestartAnalyst = $true; $RestartChainQuery = $true }
 $repo = Split-Path -Parent $PSScriptRoot
 Set-Location $repo
 function Say([string]$tag, [string]$text) { Write-Host ("{0,-6} {1}" -f $tag, $text) }
@@ -72,7 +83,11 @@ foreach ($name in @("ca-presidio", "ca-openrouter-stub", "ca-gateway", "ca-paywa
     if ($name -eq "ca-gateway") { Stop-Here "ca-gateway does not exist. Run: .\test-console\switch-models.ps1 -To ollama-cpu-8gb-all  (it asks for the model keys), then run this again." }
     Stop-Here "$name does not exist. Run: .\test-console\stack.ps1 -Rebuild all  (or see DESIGN\README.md section 1), then run this again."
   }
-  if ($state -ne "running") {
+  if ($RestartAll -and $state -eq "running") {
+    Say "RESTART" "$name (docker restart; same settings)"
+    & docker restart $name | Out-Null
+    if ($LASTEXITCODE -ne 0) { Stop-Here "docker restart $name failed; see the message above." }
+  } elseif ($state -ne "running") {
     Say "START" "$name was $state"
     & docker start $name | Out-Null
     if ($LASTEXITCODE -ne 0) { Stop-Here "docker start $name failed; see the message above." }
@@ -101,7 +116,9 @@ if ($RestartConsole -and (Listening $ConsolePort)) { Say "STOP" "console on $Con
 if (Listening $ConsolePort) { Say "OK" "console already running on $ConsolePort" }
 else {
   Say "START" "console (its own window; keep it open), models from $ModelsFile"
-  $cmd = "Set-Location '$repo'; node test-console\console\server.ts --models-file '$ModelsFile' --port $ConsolePort --chain-query http://127.0.0.1:$ChainQueryPort"
+  $near = if ($NearWallet) { " --near-wallet $NearWallet" } else { "" }
+  if ($NearWallet) { Say "INFO" "console with NEAR wallet $NearWallet (bundle: services\web\public\near-wallet.js)" }
+  $cmd = "Set-Location '$repo'; node test-console\console\server.ts --models-file '$ModelsFile' --port $ConsolePort --chain-query http://127.0.0.1:$ChainQueryPort$near"
   Start-Process powershell -ArgumentList @("-NoExit", "-Command", $cmd)
 }
 if (-not (Wait-Http "http://127.0.0.1:$ConsolePort/" "console")) { Stop-Here "Look at the console window for the error." }
