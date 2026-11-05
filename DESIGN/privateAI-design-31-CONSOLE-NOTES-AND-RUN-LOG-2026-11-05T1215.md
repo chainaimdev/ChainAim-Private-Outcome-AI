@@ -48,3 +48,15 @@ not be traced afterwards (only `dental-test.ps1` writes `sample-data/prms/_runs/
 - Absolute or relative: relative in repos.json when the team agrees one layout (same value on every PC); absolute for the env var.
 - Tests: scripts/test/near-watch-locate.test.ts (7). Workspace: default run skips with the reason (exit 0); strict run exit 1.
 
+## 5. One command for the desk (owner, 13:00: "1 consolidated script, not piecemeal")
+- Problem seen 12:15-13:00: the console, analyst, chain-query, near-watch and admin UI each had their own launcher and window;
+  a closed window lost its error (analyst down, tab 03 "the job did not run"); paid jobs needed a hand-typed console command
+  and a long stack.ps1 -PassEnv line; the console's model file did not match the gateway (3b default, 8b and Bedrock missing).
+- test-console/desk.ps1: settings in config/local/desk.json (per PC; desk.example.json committed with no prices, ARCH-114);
+  secrets read by name from secretsDir into the process (never printed); containers started or docker-restarted; the paywall
+  rebuilt with the paid-jobs names only when its env differs from paid-jobs.env (compared in memory) or -RebuildPaywall;
+  analyst, chain-query, near-watch, admin UI and console started hidden with per-service logs, each health-checked before
+  the next; models file = the config/local-models*.json whose model set equals summary.json (default model from it); the
+  paid-jobs listener and the paywall->console reachability (401) checked; one READY / NOT READY table with each fix or log.
+- -Restart, -Stop, -Check, -Test, -RebuildPaywall, -NoBrowser, -Settings, -WaitSec. Guard: scripts/test/desk.test.ts (5).
+- Not run in the workspace (no PowerShell); first run on the owner PC.

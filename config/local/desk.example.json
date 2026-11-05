@@ -1,0 +1,27 @@
+{
+  "notes": "Per-PC settings for test-console\\desk.ps1 (privateAI-design-31 s5). Copy to config/local/desk.json (git-ignored) and edit. secretsDir holds the *.env files read BY NAME (values never printed): paidJobs.secretsFile needs PAID_JOBS, PAID_JOBS_KEY, PAID_JOBS_RESULT_URL; adminUi.secretsFile is near-watch's env file (NEAR_WATCH_INGEST_KEY, ADMIN_API_KEY, NEAR_PAY_TO_TESTNET); paywall.nearEnvFile is the NEAR rail file for stack.ps1 -NearEnvFile. Fees are YOUR prices, written as text numbers (no defaults by design, ARCH-114). modelsFile/defaultModel 'auto' follow the gateway's current model set. paywall.nearRpcCandidates: NEAR testnet RPCs in order of preference (public endpoints from docs.near.org/api/rpc/providers); desk.ps1 tests them from inside the paywall and gives it the first that answers, so a rate-limited RPC (FastNEAR is also used by near-watch on this PC) never refuses payments. The adminUI checkout comes from config/local/repos.json (nearWatchDir). runLog: off | meta (no data values) | full (synthetic data only).",
+  "secretsDir": "C:\\PRIV-AI-SECRETS",
+  "console": { "modelsFile": "auto", "defaultModel": "auto", "runLog": "meta", "nearWallet": "intear-wallet" },
+  "paidJobs": {
+    "enabled": true,
+    "secretsFile": "paid-jobs.env",
+    "pricingCatalog": "config\\catalog.bedrock.json",
+    "feePerModelCallUsd": "<you choose, e.g. 0.001>",
+    "feeAnalystUsd": "<you choose, e.g. 0.002>",
+    "nearGasFeeUsd": "<measured 0.000332587 NEAR per payment x NEAR/USD>",
+    "marginPct": "<you choose, e.g. 20>",
+    "minPriceUsd": "<you choose, e.g. 0.01>"
+  },
+  "paywall": {
+    "nearEnvFile": "near-testnet.env",
+    "nearRpcCandidates": ["https://near-testnet.drpc.org", "https://testnet-rpc.intea.rs", "https://rpc.testnet.fastnear.com"]
+  },
+  "adminUi": {
+    "enabled": true,
+    "secretsFile": "near-watch.env",
+    "jobFeed": true,
+    "watch": ["buyer1=buyer=<buyer account>.testnet", "relayer=relayer=<relayer account>.testnet"],
+    "gasPerPaymentNear": "0.000333"
+  },
+  "ports": { "gateway": 8720, "paywall": 8080, "analyst": 8740, "chainQuery": 8750, "console": 8730, "jobs": 8731, "nearWatch": 8790, "adminUi": 8800 }
+}

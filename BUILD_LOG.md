@@ -830,3 +830,22 @@ Built in the AI's workspace on a snapshot of the owner's repo (main = e8626e8, v
 - Merge 30f39fa (origin acd434f, Nisha, tagged v1.3.2) committed 12:35. Tag v1.3.3 = this commit: CHIRO-1b-2 stages 1-2, console
   notes + run log (design-31 §1-3), the merge, and this change.
 
+## 2026-11-05 — test-console/desk.ps1: one command for the whole desk (privateAI-design-31 §5)
+- New: test-console/desk.ps1, config/local/desk.example.json, scripts/test/desk.test.ts (5 pass in the workspace); MANUAL_SETUP
+  section; design-31 §5. Owner PC (git-ignored): config/local/desk.json with TEST fees (0.001 / 0.002 / gas 0.001 / 20% / 0.01).
+- Owner PC 12:47-12:58 before it: adminUI built (npm install x2, next build OK); C:\PRIV-AI-SECRETS\near-watch.env and
+  paid-jobs.env created with generated keys (names checked, values never shown); paywall rebuilt with PAID_JOBS=on
+  (stack.ps1 -Check all passed: paidJobs=on jobsResult=http://host.docker.internal:8731); console started by hand with
+  --paid-jobs on and the job feed: tab 03 shows "Pay with USDC - NEAR"; the job then stopped because the analyst was down.
+- Found: the console's models file (cpu-all, default 3b) did not match the gateway (summary.json = all-sources set, default
+  deepseek-r1-8b, with Bedrock); desk.ps1 picks the matching file automatically.
+- Owner PC 13:07 desk.ps1: READY; tab 03 offered the quote, Intear signed, the paywall refused the payment
+  (invalid_exact_near_current_block_height_unavailable; nothing charged). Cause, checked from inside ca-paywall: its NEAR RPC
+  rpc.testnet.fastnear.com answered -429 "Rate limits exceeded" (near-watch on the same PC also reads FastNEAR: inference).
+- desk.ps1 now: paywall.nearRpcCandidates (public testnet RPCs from docs.near.org/api/rpc/providers: dRPC, Intear, FastNEAR)
+  tested from inside the paywall; the first that answers becomes NEAR_RPC_URL_TESTNET in the same single paywall rebuild as the
+  paid-jobs settings, and is kept on later rebuilds. Owner PC 13:13: SWITCH fastnear -> near-testnet.drpc.org, rebuilt, READY.
+- near-watch /healthz is 503 whenever its NEAR feed is not "live" (services/near-watch/src/server.ts); desk.ps1 showed DOWN at
+  13:14. Now: near-watch gets --rpc-fallback-url = the paywall's working RPC; start-up waits for it to answer (any status); the
+  table shows RUN with the feed state and an honesty note instead of DOWN (not counted as NOT READY). -Check reports the RPC.
+- Not yet run on the PC: these last two changes (guard test 6 tests, run in the commit step). Tag v1.3.4.

@@ -286,3 +286,19 @@ Not found: those tests are skipped and the run says where it looked, from which 
 suite is unaffected. `$env:REQUIRE_NEAR_WATCH = "1"` makes them fail instead (release checks, CI). Keep the adminUI checkout
 current (`git pull` there) when the job-feed contract changes.
 
+## 2026-11-05 — One command for the desk: test-console\desk.ps1 (privateAI-design-31 §5; owner)
+Starts or restarts everything with one settings file and prints one READY table. Replaces the hand-typed console flags, the
+long stack.ps1 -PassEnv line and the separate adminUI launcher for daily use (start-ui.ps1 and stack.ps1 still work).
+One time:
+1. `config\local\repos.json` points at the adminUI checkout (nearWatchDir) — section above.
+2. Secrets in `C:\PRIV-AI-SECRETS` (names only listed; never paste values): `paid-jobs.env` (PAID_JOBS, PAID_JOBS_KEY,
+   PAID_JOBS_RESULT_URL=http://host.docker.internal:8731), `near-watch.env` (adminUI .env.example: ADMIN_API_KEY,
+   NEAR_WATCH_INGEST_KEY, NEAR_PAY_TO_TESTNET = the paywall's NEAR pay-to), `near-testnet.env` (NEAR rail, as before).
+3. The adminUI built once: `npm --prefix <adminUI>\services\near-watch install`, `npm --prefix <adminUI>\apps\admin-console install`,
+   `npm --prefix <adminUI>\apps\admin-console run build`.
+4. Copy `config\local\desk.example.json` to `config\local\desk.json` and set YOUR fees (text numbers) and watch accounts.
+Daily: `.\test-console\desk.ps1` (start what is missing) or `-Restart` (clean restart of containers and every service);
+`-Check` reports only; `-Stop` stops the services; `-Test` runs the terminal suites; `-RebuildPaywall` after changing
+paid-jobs.env. Services run hidden; their logs are `test-console\runs\desk\<service>.log` (previous run `.prev`).
+The console's model list follows the gateway's current set (config\generated\summary.json); switch models with
+switch-models.ps1, then `desk.ps1 -Restart`.
