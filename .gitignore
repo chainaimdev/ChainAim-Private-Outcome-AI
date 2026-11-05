@@ -62,3 +62,6 @@ brag-output-*/
 # Python bytecode (tools/chiro-synth imports chiro_leaks.py)
 __pycache__/
 *.pyc
+
+# console run log (privateAI-design-31 s3): can hold result rows in full mode
+test-console/runs/

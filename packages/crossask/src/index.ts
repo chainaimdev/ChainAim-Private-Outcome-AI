@@ -15,6 +15,7 @@
  * (scripts/ask.ts) run the same steps, and the tests run them without a network.
  */
 import { verifyAnswer, type MoneyVerifyResult } from "./verify.ts";
+import { deriveFigure } from "./derive.ts";
 
 /** What an answer's figures are checked against: the computed result AND the user's own question. A figure the user typed
  * ("could it cover an installment of 20,368?") is not something the model made up, so quoting it back is not flagged. */
@@ -56,6 +57,8 @@ export type CrossAskResult = {
   question: string; schema: string; relations: unknown[]; attempts: Attempt[];
   sql: string | null; result: { columns: string[]; rows: Record<string, unknown>[]; truncated: boolean } | null;
   answer: string | null; unverified: string[]; served: ChatReply[]; sentToModel: { step: string; chars: number; hasData: boolean }[];
+  /** For each figure in unverified that simple arithmetic on the result gives exactly: what it equals (deriveFigure). A hint, not a check. */
+  derivations: Record<string, string>;
   /** Problems with the result that the number check cannot see (e.g. a join that multiplies rows). */
   warnings: string[];
   error?: string;
@@ -100,7 +103,7 @@ export function resultText(r: { columns: string[]; rows: Record<string, unknown>
 export async function crossAsk(input: CrossAskInput, deps: CrossAskDeps): Promise<CrossAskResult> {
   if (typeof input.question !== "string" || !input.question.trim()) throw new Error("question is required");
   const rel = await deps.analyst("relations", { folder: input.folder });
-  const out: CrossAskResult = { question: input.question, schema: rel.schema, relations: rel.relations, attempts: [], sql: null, result: null, answer: null, unverified: [], served: [], sentToModel: [], warnings: [] };
+  const out: CrossAskResult = { question: input.question, schema: rel.schema, relations: rel.relations, attempts: [], sql: null, result: null, answer: null, unverified: [], served: [], sentToModel: [], warnings: [], derivations: {} };
   const messages: Msg[] = [{ role: "system", content: SQL_SYSTEM }, { role: "user", content: `${rel.schema}\n\nQuestion: ${input.question.trim()}` }];
   let sql: string | null = input.sql?.trim() || null;
   for (let attempt = 0; attempt <= input.sqlRetries; attempt++) {
@@ -157,6 +160,7 @@ export async function crossAsk(input: CrossAskInput, deps: CrossAskDeps): Promis
     out.served.push(reply);
     out.answer = reply.text.trim();
     out.unverified = verifyAnswer(out.answer, answerEvidence(input.question, table)).notFound;
+    for (const f of out.unverified) { const d = deriveFigure(f, out.result); if (d) out.derivations[f] = d; }
     // A placeholder left in the answer (e.g. "$<PHONE>.07": the gateway masked an amount and the model did not copy the
     // placeholder exactly, so it could not be restored) hides a value: never report that answer as fully checked.
     for (const p of out.answer.match(/<[A-Z][A-Z_]*(?:_\d+)?>|\[CARD REMOVED\]/g) ?? []) if (!out.unverified.includes(p)) out.unverified.push(p);

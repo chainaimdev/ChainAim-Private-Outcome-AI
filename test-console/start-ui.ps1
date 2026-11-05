@@ -11,6 +11,11 @@ already running is kept (use -RestartConsole / -RestartAnalyst to replace those 
   .\test-console\start-ui.ps1 -RestartAll           restart everything: docker restart of the four containers (same
                                                     settings; use stack.ps1 -Recreate to change settings), then the
                                                     analyst, chain-query and console windows
+  .\test-console\start-ui.ps1 -RunLog full -RestartConsole
+                                                    save every "Ask across files" run with its result rows, answer and
+                                                    model replies in test-console\runs\crossask-YYYY-MM-DD.jsonl (synthetic
+                                                    data only). -RunLog meta (default): no data values; -RunLog off: nothing.
+                                                    -RunLogDir PATH to save elsewhere (privateAI-design-31 s3).
   .\test-console\start-ui.ps1 -NearWallet intear-wallet -RestartConsole
                                                     start the console with the "Pay with USDC - NEAR" box
                                                     (--near-wallet; MANUAL_SETUP.md "Test console: pay in USDC on NEAR").
@@ -43,7 +48,9 @@ param(
   [switch]$NoChainQuery,
   [switch]$NoBrowser,
   [switch]$RestartAll,
-  [ValidateSet("", "intear-wallet")][string]$NearWallet = ""
+  [ValidateSet("", "intear-wallet")][string]$NearWallet = "",
+  [ValidateSet("off", "meta", "full")][string]$RunLog = "meta",
+  [string]$RunLogDir = ""
 )
 $ErrorActionPreference = "Stop"
 if ($RestartAll) { $RestartConsole = $true; $RestartAnalyst = $true; $RestartChainQuery = $true }
@@ -118,7 +125,9 @@ else {
   Say "START" "console (its own window; keep it open), models from $ModelsFile"
   $near = if ($NearWallet) { " --near-wallet $NearWallet" } else { "" }
   if ($NearWallet) { Say "INFO" "console with NEAR wallet $NearWallet (bundle: services\web\public\near-wallet.js)" }
-  $cmd = "Set-Location '$repo'; node test-console\console\server.ts --models-file '$ModelsFile' --port $ConsolePort --chain-query http://127.0.0.1:$ChainQueryPort$near"
+  $runLogArgs = " --run-log $RunLog" + $(if ($RunLogDir) { " --run-log-dir '$RunLogDir'" } else { "" })
+  Say "INFO" "run log: $RunLog$(if ($RunLog -ne 'off') { ' -> ' + $(if ($RunLogDir) { $RunLogDir } else { 'test-console\runs' }) })"
+  $cmd = "Set-Location '$repo'; node test-console\console\server.ts --models-file '$ModelsFile' --port $ConsolePort --chain-query http://127.0.0.1:$ChainQueryPort$near$runLogArgs"
   Start-Process powershell -ArgumentList @("-NoExit", "-Command", $cmd)
 }
 if (-not (Wait-Http "http://127.0.0.1:$ConsolePort/" "console")) { Stop-Here "Look at the console window for the error." }

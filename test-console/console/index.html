@@ -84,6 +84,12 @@ header.top code { font: 500 .88em var(--mono); background: var(--field); border:
 .themebtn { margin-left: auto; border: 1px solid var(--rule-firm); background: transparent; color: var(--ink-2); font: 500 11.5px/1 var(--mono); padding: 7px 11px; border-radius: 3px; cursor: pointer; }
 .themebtn:hover { color: var(--ink); border-color: var(--ink); }
 .flag { justify-self: start; border: 1px solid var(--rule-firm); border-left: 3px solid var(--warn); background: var(--sheet); color: var(--warn); font: 500 11.5px/1.5 var(--mono); padding: 9px 13px; border-radius: 0 3px 3px 0; max-width: 80ch; }
+/* Notes (privateAI-design-31 s1): calm, labelled. Curation = what the console did to keep a result reliable;
+   honesty = a limit on what it can vouch for. .flag stays for real errors only (a request that failed). */
+.note { justify-self: start; border: 1px solid var(--rule-firm); border-left: 3px solid var(--rule-firm); background: var(--sheet); color: var(--ink-2); font: 400 12px/1.55 var(--mono); padding: 9px 13px; border-radius: 0 3px 3px 0; max-width: 80ch; }
+.note .tag { display: inline-block; margin-right: 8px; font: 500 10.5px/1 var(--mono); letter-spacing: .12em; text-transform: uppercase; }
+.note.curation { border-left-color: var(--ok); } .note.curation .tag { color: var(--ok); }
+.note.honesty { border-left-color: var(--amber); } .note.honesty .tag { color: var(--amber); }
 
 /* desk */
 .desk { display: grid; grid-template-columns: 208px minmax(0, 1fr); gap: 36px; padding-top: 28px; }
@@ -447,6 +453,27 @@ const withPlaceholders = (text) => {
 };
 // The worksheet's building blocks.
 const block = (...kids) => el("div", { className: "block" }, ...kids);
+/** A labelled note (privateAI-design-31 s1). kind "curation": what the console did to keep a result reliable; kind
+ *  "honesty": a limit on what it can vouch for, said calmly, with what IS exact. Never for errors (those use .flag). */
+const note = (kind, ...kids) => el("p", { className: `note ${kind}` }, el("span", { className: "tag", textContent: kind === "honesty" ? "Honesty note" : "Curation note" }), ...kids);
+/** The figure-check notes under an "Ask across files" answer (always a list). */
+function figureNote(r) {
+  const marks = r.unverified.filter((x) => /^<|^\[/.test(x)), figs = r.unverified.filter((x) => !/^<|^\[/.test(x));
+  if (!figs.length && !marks.length) return [note("curation", `Every number in this answer was checked against the computed result and found there.`)];
+  const out = [];
+  if (figs.length) {
+    const one = figs.length === 1, derived = figs.filter((f) => r.derivations?.[f]);
+    out.push(note("honesty", `${figs.join(", ")} ${one ? "is" : "are"} not a value in the result, so ${one ? "it was" : "they were"} not checked against your data. `
+      + (derived.length ? `${derived.map((f) => `${f} equals ${r.derivations[f]}`).join("; ")}, so the model most likely worked ${derived.length === 1 ? "it" : "them"} out from the result. ` : `The model may have worked ${one ? "it" : "them"} out itself. `)
+      + `The result table is computed exactly on this PC.`));
+  }
+  if (marks.length) out.push(note("honesty", `${marks.join(", ")} ${marks.length === 1 ? "is a masked value" : "are masked values"} the model did not copy back exactly, so ${marks.length === 1 ? "it" : "they"} could not be restored in the sentence; the values themselves are in the result table.`));
+  return out;
+}
+/** Where this run was saved (run log, privateAI-design-31 s3), so it can be read back later. */
+const runLogLine = (rl) => !rl ? el("p", { className: "muted", textContent: "Run log is off for this console (start-ui.ps1 -RunLog meta|full)." })
+  : rl.error ? note("honesty", `This run was not saved: ${rl.error}`)
+  : el("p", { className: "muted", textContent: `Saved as run ${rl.id} (${rl.mode}) in test-console\\runs\\${rl.file}` });
 const cell = (term, value, cls = "", sub) => el("div", { className: "cell" },
   el("dt", { textContent: term }), el("dd", { className: cls }, String(value), sub ? el("small", { textContent: sub }) : null));
 const verdict = (...cells) => el("dl", { className: "verdict" }, ...cells);
@@ -1453,14 +1480,14 @@ $("xaskGo").onclick = () => busy($("xaskGo"), async () => {
     cell("Rows", r.result ? r.result.rows.length + (r.result.truncated ? "+" : "") : "-"),
     cell("Data sent to a model", sentData ? "result rows" : "none", sentData ? "" : "clear", sentData ? "masked by the gateway" : "column names only"))));
   if (r.error) out.append(block(el("p", { className: "flag", textContent: r.error })));
-  for (const w of r.warnings ?? []) out.append(block(el("p", { className: "flag", textContent: `Warning: ${w}. Do not trust these totals.` })));
-  if (r.answer !== null) out.append(block(el("span", { className: "blabel", textContent: "Answer" }), withPlaceholders(r.answer),
-    el("p", { className: r.unverified.length ? "flag" : "muted", textContent: r.unverified.length ? `Numbers or placeholders not in the result: ${r.unverified.join(", ")}` : "Every number in the answer is in the result." })));
+  for (const w of r.warnings ?? []) out.append(block(note("honesty", `${w}. Rows may be counted more than once, so please compare the totals with the result table before using them.`)));
+  if (r.answer !== null) out.append(block(el("span", { className: "blabel", textContent: "Answer" }), withPlaceholders(r.answer), ...figureNote(r)));
   if (r.result) out.append(block(el("span", { className: "blabel", textContent: "Result (computed on this PC)" }), resultTable(r.result.columns, r.result.rows)));
   const last = r.attempts.at(-1);
   if (last) out.append(el("details", { className: "behind" }, el("summary", { textContent: `The query${r.attempts.length > 1 ? ` (${r.attempts.length} tries)` : ""}` }),
     ...r.attempts.map((a, i) => block(el("span", { className: "blabel", textContent: `Try ${i + 1}${a.error ? " (failed)" : ""}` }), pre(a.sql || "(no query in the reply)"), a.error ? el("p", { className: "flag", textContent: a.error }) : null))));
   out.append(el("details", { className: "behind" }, el("summary", { textContent: "How the files relate" }), relationsBlock(r.relations)));
+  out.append(runLogLine(r.runLog));
 });
 // ---- Datasets (config/datasets.json, DESIGN/xrplh-29): picks the folder, describes it, and supplies the questions ----
 const ds = { list: [], cur: null, pick: null, rootPath: "", rootLabel: "", bank: null, intent: null, style: "table" };
@@ -1599,10 +1626,12 @@ async function packAsk(out) {
     `Reconciled ${r.files.length} file(s) on this PC with DuckDB${set}.`,
     `Built a fact sheet: ${r.facts} fact(s), ${r.sheetChars} characters (codes, dates, amounts; no names).`,
     `The gateway masked it and sent it to ${r.served.model ?? model}${r.served.zone ? ` (zone ${r.served.zone})` : ""}; answered in ${r.served.seconds} s.`,
-    r.check.ok ? `Checked ${r.check.checked} figure(s)/ID(s) against the facts: all match.` : `Checked the figures: ${r.check.problems.length} problem(s), so the computed facts are shown instead of the model's text.`]));
-  if (r.check.ok) out.append(block(el("span", { className: "blabel", textContent: "Answer" }), pre(r.answer)));
-  else out.append(block(el("span", { className: "blabel", textContent: "Answer (computed facts)" }), pre(r.computed)),
-    block(el("span", { className: "blabel", textContent: "Why the model's text was not shown" }), pre(r.check.problems.join("\n"))),
+    r.check.ok ? `Checked ${r.check.checked} figure(s)/ID(s) against the facts: all match.` : `Checked ${r.check.checked} figure(s)/ID(s) against the facts; the computed facts are shown (curation note below).`]));
+  if (r.check.ok) out.append(block(el("span", { className: "blabel", textContent: "Answer" }), pre(r.answer),
+    note("curation", `Every figure and ID in this answer was checked against the reconciled facts and matches.`)));
+  else out.append(block(el("span", { className: "blabel", textContent: "Answer (computed facts)" }), pre(r.computed),
+    note("curation", `${r.check.problems.length} figure(s) in the model's wording did not match the reconciled facts, so the facts computed on this PC are shown instead. The model's text and what did not match are kept below for reference.`)),
+    el("details", {}, el("summary", { className: "muted", textContent: "What did not match" }), pre(r.check.problems.join("\n"))),
     el("details", {}, el("summary", { className: "muted", textContent: "The model's text" }), pre(r.answer)));
 }
 $("dsRoot").addEventListener("change", () => dsLoad().catch((e) => { $("dsDesc").textContent = e.message; }));

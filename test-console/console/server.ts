@@ -36,6 +36,12 @@
  *   --crossask-timeout-sec N   per call to the analyst or the gateway (default 300)
  *   --crossask-sql-retries N   times the model may fix a failed query (default 1)
  *   --crossask-answer-rows N   result rows sent for the worded answer (default 50)
+ *   Run log (privateAI-design-31 §3): one JSON line per question in <dir>/crossask-YYYY-MM-DD.jsonl (run-log.ts).
+ *   --run-log off|meta|full    meta (default): no data values; full: also result rows, the answer and model replies
+ *                              (synthetic data only); off: nothing written
+ *   --run-log-dir PATH         default test-console/runs (git-ignored)
+ *   --run-log-max-rows N       result rows kept per run in full mode (default 50)
+ *   --run-log-keep-days N      older run files are removed (default 14)
  *
  *   Paid chat ("Pay with Crossmark" box on the chat tab): the browser pays the paywall's chat price from its own
  *   Crossmark wallet with the web page's bundle (services/web, payAndChat). This server serves the bundle and
@@ -68,6 +74,7 @@ import { parseArgs } from "node:util";
 import { NETWORKS } from "../../services/web/src/balance.ts";
 import { NEAR_WALLETS, isNearWalletId } from "../../services/web/src/near-wallets.ts";
 import { analystClient, crossAsk, gatewayChat } from "../../packages/crossask/src/index.ts";
+import { RUN_LOG_MODES, RunLog, type RunLogMode } from "./run-log.ts";
 
 const { values: flags } = parseArgs({
   args: process.argv.slice(2),
@@ -94,6 +101,10 @@ const { values: flags } = parseArgs({
     "crossask-timeout-sec": { type: "string", default: "300" },
     "crossask-sql-retries": { type: "string", default: "1" },
     "crossask-answer-rows": { type: "string", default: "50" },
+    "run-log": { type: "string", default: "meta" },
+    "run-log-dir": { type: "string", default: fileURLToPath(new URL("../runs", import.meta.url)) },
+    "run-log-max-rows": { type: "string", default: "50" },
+    "run-log-keep-days": { type: "string", default: "14" },
   },
 });
 function positiveInt(name: "view-max" | "view-ttl-min" | "view-max-bytes" | "paid-timeout-sec" | "crossask-timeout-sec" | "crossask-sql-retries" | "crossask-answer-rows", min = 1): number {
@@ -113,6 +124,8 @@ const NEAR_WALLET_BUNDLE = flags["near-wallet-bundle"]!;
 const CROSSASK_TIMEOUT_MS = positiveInt("crossask-timeout-sec") * 1000;
 const CROSSASK_RETRIES = positiveInt("crossask-sql-retries", 0);
 const CROSSASK_ROWS = positiveInt("crossask-answer-rows");
+if (!(RUN_LOG_MODES as readonly string[]).includes(flags["run-log"]!)) throw new Error(`--run-log must be one of ${RUN_LOG_MODES.join(", ")}, got ${flags["run-log"]}`);
+const RUN_LOG = new RunLog({ mode: flags["run-log"] as RunLogMode, dir: resolve(flags["run-log-dir"]!), maxRows: Number(flags["run-log-max-rows"]), keepDays: Number(flags["run-log-keep-days"]) });
 /** Paywall response headers the paid chat passes back: the price, the receipt, retry advice and the gateway's own. */
 const PAID_PASS_BACK = /^(payment-required|payment-response|retry-after|x-chainaim-[a-z-]+)$/;
 for (const s of VIEW_SOURCES) {
@@ -490,12 +503,15 @@ createServer(async (req, res) => {
       const phrase = b.phrase === "none" ? "none" : "llm";
       const answerModel = typeof b.answerModel === "string" && b.answerModel ? b.answerModel : undefined;
       if (answerModel && !/^[\w.-]+\/[\w.:-]+$/.test(answerModel)) return dataJson(res, 400, { error: `answerModel must look like provider/name, got ${answerModel}` });
+      const userSql = typeof b.sql === "string" && b.sql.trim() ? b.sql : undefined;
+      const runIn = { folder: b.folder, question: b.question, model, answerModel, phrase, userSql: userSql !== undefined };
+      const started = Date.now();
       try {
-        const out = await crossAsk({ folder: b.folder, question: b.question, model, answerModel, phrase, sqlRetries: CROSSASK_RETRIES, answerMaxRows: CROSSASK_ROWS, sql: typeof b.sql === "string" && b.sql.trim() ? b.sql : undefined },
+        const out = await crossAsk({ folder: b.folder, question: b.question, model, answerModel, phrase, sqlRetries: CROSSASK_RETRIES, answerMaxRows: CROSSASK_ROWS, sql: userSql },
           { analyst: analystClient(ANALYST, CROSSASK_TIMEOUT_MS), chat: gatewayChat({ url: GATEWAY, key: KEY, timeoutMs: CROSSASK_TIMEOUT_MS }) });
-        return dataJson(res, 200, out);
+        return dataJson(res, 200, { ...out, runLog: RUN_LOG.write(runIn, out, undefined, Date.now() - started) });
       } catch (e) {
-        return dataJson(res, 502, { error: (e as Error).message });
+        return dataJson(res, 502, { error: (e as Error).message, runLog: RUN_LOG.write(runIn, null, (e as Error).message, Date.now() - started) });
       }
     }
     // ---- Paid chat ---------------------------------------------------------------------------------------------
@@ -598,6 +614,7 @@ createServer(async (req, res) => {
     json(res, 502, { error: (e as Error).message });
   }
 }).listen(PORT, "127.0.0.1", async () => {
+  console.log(`[test-console] run log: ${RUN_LOG.opt.mode}${RUN_LOG.opt.mode === "off" ? "" : ` -> ${RUN_LOG.opt.dir} (keep ${RUN_LOG.opt.keepDays} days${RUN_LOG.opt.mode === "full" ? `, up to ${RUN_LOG.opt.maxRows} rows per run` : ""})`}`);
   console.log(`[test-console] http://127.0.0.1:${PORT}  default model: ${DEFAULT_MODEL}${NEAR_WALLET ? `  NEAR wallet: ${NEAR_WALLET}` : ""}`);
   const { config, error } = readDataConfig();
   if (!config) console.log(`[test-console] ${error}`);

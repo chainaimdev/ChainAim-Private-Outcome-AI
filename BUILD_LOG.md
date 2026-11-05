@@ -796,3 +796,20 @@ Built in the AI's workspace on a snapshot of the owner's repo (main = e8626e8, v
 - Owner PC 2026-11-05 10:33: services/analyst npm test 201/201 pass, 0 skipped (190 + 7 layout + 4 load tests); chiro POS and
   NEG-ALL load in both PRMS with every check ok except the UNVERIFIED layout check.
 
+## 2026-11-05 — Console notes (honesty / curation) + "Ask across files" run log (privateAI-design-31)
+- index.html: .note.curation / .note.honesty + note(); figure check, join warnings and the dental Explained check now calm,
+  labelled notes that say what is exact; .flag kept for real errors; the page shows each run's id. packages/crossask: derive.ts
+  (possible derivation of an unchecked figure, exact in cents), CrossAskResult.derivations. test-console/console/run-log.ts +
+  server.ts --run-log off|meta|full, --run-log-dir, --run-log-max-rows, --run-log-keep-days; start-ui.ps1 -RunLog / -RunLogDir;
+  .gitignore test-console/runs/. DESIGN/privateAI-design-31.
+- Linux workspace: crossask 16/16 (incl. new derive tests, golden unchanged), console-notes 6/6, console-progress unchanged pass;
+  page script syntax ok; server.ts started with --run-log full and saved a run.
+- Owner PC 12:15: start-ui.ps1 -RunLog failed (PowerShell names are case-insensitive: local $runlog was the -RunLog parameter);
+  fixed ($runLogArgs). Console then saved run 2026-11-05T171559-e4b5, which showed the cause of a failed bank question: the
+  generic loader reads the BofA summary row as the header (bank_st_set1_pos = Description DATE, column1, Summary Amt., column3).
+  Run log now also keeps the schema the query model was given (headers only). Fix designed separately (loader preamble).
+- Owner PC 12:21: crossask + console-notes + console-progress tests 28/28 pass.
+- Incident: a `git stash` run from the workspace could not delete .git/index.lock (deletion not permitted there); no stash was
+  made, working tree intact; the lock was moved to .git/stale-index-lock-claude-2026-11-05T1209 (owner may delete it and
+  .git/objects/1f/tmp_obj_FjdER3). No git write commands are run from the workspace.
+
