@@ -58,3 +58,7 @@ brag-output-*/
 *.835
 # NEAR CLI legacy keychain (private keys as JSON) if near-cli is ever run with the repository as its home or cwd
 **/.near-credentials/
+
+# Python bytecode (tools/chiro-synth imports chiro_leaks.py)
+__pycache__/
+*.pyc

@@ -263,6 +263,24 @@ Known limit: `reconcile.ts` allows one file per layout per folder, so a Set keep
 Generator canonical model (`tools/chiro-synth`), 835 writer verified by this parser, chiro reconcile.json (ERA TRN vs bank trace),
 ChiroTouch/Jane layout adapters (after header lines from real exports), datasets.json entries chiro-ct / chiro-jane, scenario tests.
 
+### CHIRO-1b-2 stage 1 (2026-11-04): NEG scenarios for both PRMS
+- `tools/chiro-synth/chiro_leaks.py` (16 leaks, two stages: claims before payments/remittances, model after IDs) wired into
+  `gen_chiro_set.py` (`--scenario neg-<leak>|neg-all`, `--leak-seed`, `--short-max-cents`, `--unposted-min/max-cents`,
+  `--underpay-pct`, `--at-missing-cas`, `--gz-cas`, `--return-days`, `--pi-stale-days`). Answer key: `expect` column per bank
+  credit; truth.json `expected_exceptions` (code, severity, group, date, cents, refs, payer, detail), `unmatched_bank_credits`,
+  `unmatched_prms_rows`, `not_applicable`, `watch_items` (PI_STALE). 835: denied claims carry CLP02 = 4; CO adjustments are posted
+  per CARC (POS output unchanged: only CO-45).
+- Decisions taken in the build (owner may override): AUTODEBIT_RETURNED is ChiroTouch-only (Jane has no Cash Practice) -> Jane
+  NEG-ALL = 15 leaks; PI_STALE is a watch item in every scenario, not a 17th leak; patient responsibility is collected as the ERA
+  states (a denied line carries no coinsurance); the denial CARC for AT-missing / GZ is a flag (CO-50, ASSUMPTION: Noridian JF and
+  Palmetto GBA confirm the denial, not the CARC).
+- `verify_chiro_set.py`: NEG-aware generic checks, one check per leak in the files, a reverse scan (every anomaly must be a planted
+  leak), the scenario's leak set, and cross-PRMS findings. Tamper tests: dropping any one of the 16 leaks from the key fails.
+- Linux workspace: POS data files byte-identical to v1.3.1 both PRMS; NEG-ALL deterministic; 35 sets (18 ChiroTouch, 17 Jane)
+  ALL CHECKS PASS with --compare; era-to-csv on both NEG-ALL ERAs 0 failed checks. Sets written to sample-data (git-ignored).
+- Next: stage 2 layout adapters (ChiroTouch with a no-header fallback, Jane with the public Jane guide names as basis), stage 3
+  reconcile.json + reconcile-check reproducing these answer keys, stage 4 query bank + datasets switch, stage 5 scenario tests.
+
 ## 12. State rules used by the chiro generator (sources read 2026-11-03)
 | Rule | State | Value used | Basis |
 |---|---|---|---|

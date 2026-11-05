@@ -36,7 +36,12 @@ Modelling choices that are ASSUMPTIONS (flags where they are numbers):
   * PI (design-30 §12): MA -> PIP ($8,000 limit; $2,000 medical cap when the patient has health insurance); CT -> optional
     MedPay. Cases start with a letter of protection; a settled case records billed, received and the approved reduction.
 
-Scenarios: 'pos' is built. Leak scenarios (NEG-*) are rejected explicitly until they are built.
+Scenarios (chiro_leaks.py): 'pos' (everything reconciles), 'neg-<leak>' (one leak) and 'neg-all' (all 16 on separate claims,
+remittances, payments and days; AUTODEBIT_RETURNED is ChiroTouch-only, so Jane neg-all has 15). Leaks draw from their own
+random stream (--leak-seed), so the rest of a NEG set equals POS; the answer key lists every expected exception.
+  ASSUMPTION: --at-missing-cas / --gz-cas default CO-50. Sources say a CMT line without AT is denied as maintenance
+  (Noridian JF chiropractic claim submission requirements) and GZ lines are auto-denied (Palmetto GBA acute treatment page);
+  neither page names the CARC, so it is a flag.
 """
 import argparse
 import csv
@@ -47,7 +52,7 @@ import os
 import random
 from collections import defaultdict
 
-SCENARIOS_BUILT = ("pos",)
+from chiro_leaks import SCENARIOS, LeakPlan, scenario_leaks
 CPT_FEE = {"98940": 6000, "98941": 7500, "98942": 9000, "97140": 5000, "97110": 4500, "97012": 3000, "99203": 15000, "72100": 8500}
 MEDICARE_ALLOWED = {"98940": 3050, "98941": 4300, "98942": 5500}
 # code, name, class, state, payment route, bank originator, payer id (N1*PR04), CLP06, copay cents, allowed % of charge
@@ -121,7 +126,7 @@ def add_business_days(d, n):
 
 
 # ---------------------------------------------------------------- canonical model
-def build(a):
+def build(a, leaks=None):
     rng = random.Random(a.seed)
     start = dt.date.fromisoformat(a.start)
     end = start + dt.timedelta(days=a.days - 1)
@@ -195,7 +200,7 @@ def build(a):
     allowed = {(c, cpt): amt for c, cpt, amt in fees}
 
     # insurance adjudication (835 payers) and patient responsibility collected at the visit
-    claims = []
+    claims, collect = [], []
     for v in visits:
         pay = PAYER.get(v["payer"]) if v["payer"] else None
         if not pay:
@@ -219,9 +224,23 @@ def build(a):
         claim = dict(visit=v["id"], patient=v["patient"], payer=pay[0], dos=v["date"], lines=lines,
                      charge=sum(l["charge"] for l in lines), paid=sum(l["paid"] for l in lines), pr=pr_left, route=pay[4])
         claims.append(claim)
-        if pr_left:
-            pay_events.append(dict(kind="patient", date=v["date"], patient=v["patient"], visit=v["id"], cents=pr_left,
-                                   method=rng.choices(["card", "cash", "check"], [65, 25, 10])[0]))
+        # the method draw happens whenever the POS claim has patient responsibility, so a leak never shifts the main stream
+        collect.append((claim, v, rng.choices(["card", "cash", "check"], [65, 25, 10])[0] if pr_left else None))
+
+    def eft_paid_on(c):  # deterministic payment day of an EFT claim (no draw), None when after the period or paid by check
+        if c["route"] != "eft":
+            return None
+        due = c["dos"] + dt.timedelta(days=a.adjudication_days)
+        while due.weekday() != a.era_weekday:
+            due += dt.timedelta(days=1)
+        return due if due <= end else None
+
+    if leaks:
+        leaks.apply_claims(claims, {v["id"]: v for v in visits}, PAYER, eft_paid_on, allowed)
+    for claim, v, method in collect:
+        cents = claim["pr"] - claim.get("pr_writeoff", 0)
+        if method and cents > 0 and not claim.get("pr_not_transferred"):
+            pay_events.append(dict(kind="patient", date=v["date"], patient=v["patient"], visit=v["id"], cents=cents, method=method))
 
     # remittance runs: EFT payers weekly on --era-weekday; PI carriers pay by check
     remits = []
@@ -295,21 +314,40 @@ def build(a):
     pay_events.sort(key=lambda e: (e["date"], e["kind"], e.get("patient") or ""))
     for i, e in enumerate(pay_events):
         e["id"] = f"P{i + 1:05d}"
-    return dict(start=start, end=end, patients=patients, visits=visits, claims=claims, remits=remits, plans=plans, pi=pi_cases,
-                pay=pay_events, fees=fees, providers=providers)
+    m = dict(start=start, end=end, patients=patients, visits=visits, claims=claims, remits=remits, plans=plans, pi=pi_cases,
+             pay=pay_events, fees=fees, providers=providers)
+    if leaks:
+        leaks.apply_model(m, PAYER, add_business_days)
+    return m
 
 
 # ---------------------------------------------------------------- deposits and bank
-def deposits_and_bank(a, m, rng):
+def eft_desc(a, pay, trace, draw):
+    return (f"{pay[5]} DES:HCCLAIMPMT ID:{draw} INDN:{a.legal_name} CO ID:{pay[6]} CCD "
+            f"PMT INFO:TRN*1*{trace}*{pay[6]}\\")
+
+
+def deposits_and_bank(a, m, rng, plan=None):
+    """-> credits (date, order, description, cents, group, refs, expect), debits, card batches. 'expect' is 'match' or
+    'exception:<LEAK>' for a credit that a planted leak changed (answer key)."""
     end = m["end"]
-    credits = []  # (date, order, description, cents, group, refs)
+    credits = []
     for r in m["remits"]:
         if r["route"] != "eft":
             continue
         pay = PAYER[r["payer"]]
-        desc = (f"{pay[5]} DES:HCCLAIMPMT ID:{rng.randrange(10**9, 10**10)} INDN:{a.legal_name} CO ID:{pay[6]} CCD "
-                f"PMT INFO:TRN*1*{r['trace']}*{pay[6]}\\")
-        credits.append((r["date"], 1, desc, r["cents"], "insurance_eft", [r["trace"]]))
+        draw = rng.randrange(10**9, 10**10)  # drawn even when the credit is left out, so later descriptions stay the POS ones
+        if r.get("eft_missing") or r["cents"] <= 0:
+            continue
+        trace = r.get("bank_trace", r["trace"])
+        credits.append((r["date"], 1, eft_desc(a, pay, trace, draw), r["cents"], "insurance_eft", [trace],
+                        "exception:REF_MISMATCH" if "bank_trace" in r else "match"))
+    if plan:
+        lr = plan.rng("BANK_UNPOSTED:bank")
+        for payer, day, cents, trace in plan.extra_efts:
+            credits.append((day, 1, eft_desc(a, PAYER[payer], trace, lr.randrange(10**9, 10**10)), cents, "insurance_eft", [trace], "exception:BANK_UNPOSTED"))
+    card_short = plan.card_short if plan else {}
+    cash_short = plan.cash_short if plan else {}
     card_by_day, atm_by_day, auto_by_day = defaultdict(list), defaultdict(list), defaultdict(list)
     for e in m["pay"]:
         (card_by_day if e["method"] == "card" else auto_by_day if e["method"] == "autodebit" else atm_by_day)[e["date"]].append(e)
@@ -329,13 +367,17 @@ def deposits_and_bank(a, m, rng):
         for e in es:
             e["batch"] = bid
         if bdate <= end:
-            credits.append((bdate, 2, desc, gross - fee, "card_processor", [bid]))
+            short = card_short.get(day, 0)
+            credits.append((bdate, 2, desc, gross - fee - short, "card_processor", [bid], "exception:CARD_BATCH_SHORT" if short else "match"))
     for day in sorted(auto_by_day):
         es = auto_by_day[day]
         bdate = add_business_days(day, a.autodebit_days)
         if bdate <= end:
             desc = f"CASH PRACTICE DES:AUTODEBIT ID:{rng.randrange(10**8, 10**9)} INDN:{a.practice_name} CO ID:SYNCP00001 CCD"
-            credits.append((bdate, 2, desc, sum(e["cents"] for e in es), "autodebit", [e["id"] for e in es]))
+            kept = [e for e in es if not e.get("returned")]
+            if kept:
+                credits.append((bdate, 2, desc, sum(e["cents"] for e in kept), "autodebit", [e["id"] for e in kept],
+                                "exception:AUTODEBIT_RETURNED" if len(kept) < len(es) else "match"))
     seqn = 0
     for day in sorted(atm_by_day):
         es = atm_by_day[day]
@@ -343,7 +385,11 @@ def deposits_and_bank(a, m, rng):
         seqn += 1
         if bdate <= end:
             desc = f"BKOFAMERICA ATM {bdate.strftime('%m/%d')} #{seqn:09d} DEPOSIT MAIN ST ANYTOWN MA CKCD 4135770000004410"
-            credits.append((bdate, 3, desc, sum(e["cents"] for e in es), "branch_atm_deposit", [e["id"] for e in es]))
+            kept = [e for e in es if not e.get("undeposited")]
+            short = cash_short.get(day, 0)
+            if kept:
+                expect = "exception:CASH_SHORT" if short else "exception:UNDEPOSITED_CHECK" if len(kept) < len(es) else "match"
+                credits.append((bdate, 3, desc, sum(e["cents"] for e in kept) - short, "branch_atm_deposit", [e["id"] for e in kept], expect))
     debits = []
     d = m["start"]
     while d <= end:
@@ -376,7 +422,7 @@ def era_835(a, m):
         pats = {p["id"]: p for p in m["patients"]}
         for c in r["claims"]:
             p = pats[c["patient"]]
-            body += [S("CLP", c["visit"], "1", x12amt(c["charge"]), x12amt(c["paid"]), x12amt(c["pr"]), pay[7], f"PCN{c['visit'][1:]}"),
+            body += [S("CLP", c["visit"], "4" if c["paid"] == 0 else "1", x12amt(c["charge"]), x12amt(c["paid"]), x12amt(c["pr"]), pay[7], f"PCN{c['visit'][1:]}"),
                      S("NM1", "QC", "1", p["last"].upper(), p["first"].upper(), "", "", "", "MI", f"SYN{p['id']}"),
                      S("DTM", "232", c["dos"].strftime("%Y%m%d"))]
             for i, ln in enumerate(c["lines"]):
@@ -393,7 +439,7 @@ def era_835(a, m):
 
 
 # ---------------------------------------------------------------- writers
-def write_set(a, m, credits, debits, batches):
+def write_set(a, m, credits, debits, batches, plan=None):
     tag = f"{a.set_name}-{a.scenario.upper()}"
     pats = {p["id"]: p for p in m["patients"]}
     payer_name = lambda code: PAYER[code][1] if code else "SELF / CARE PLAN"
@@ -422,7 +468,7 @@ def write_set(a, m, credits, debits, batches):
                                               "Has Health Insurance", "Status", "Settled Date", "Prior Balance", "Settlement Received", "Reduction", "Reduction Approved"]] +
                                             [[c["id"], c["patient"], c["state"], c["coverage"], payer_name(c["payer"]), c["attorney"], mdy(c["lop"]), money(c["billed"]),
                                               money(c["carrier_paid"]), "yes" if c["health_ins"] else "no", c["status"], mdy(c["settled_on"]) if c["settled_on"] else "",
-                                              money(c.get("prior_balance", 0)), money(c["settled"]), money(c["reduction"]), c["approved"]] for c in m["pi"]], False)
+                                              money(c.get("prior_balance", 0)), money(c["settled"]), money(c.get("reduction_recorded", c["reduction"])), c["approved"]] for c in m["pi"]], False)
     files[f"CAREPLANS-{tag}.csv"] = csv_text([["Plan ID", "Patient ID", "Start Date", "Visits Bought", "Price", "Payment", "Visits Used", "Collected", "Earned", "Unearned"]] +
                                              [[pl["id"], pl["patient"], mdy(pl["start"]), pl["visits_bought"], money(pl["price"]), pl["method"], pl["visits_used"],
                                                money(collected := sum(e["cents"] for e in m["pay"] if e.get("plan") == pl["id"])),
@@ -430,7 +476,13 @@ def write_set(a, m, credits, debits, batches):
 
     # PRMS transactions (charges, payments, adjustments), canonical columns
     tx = []
+    upfront = {pl["id"] for pl in m["plans"] if pl.get("revenue_upfront")}
+    for pl in m["plans"]:
+        if pl["id"] in upfront:  # PREPAY_UNEARNED: the whole plan price posted as one charge at purchase
+            tx.append([pl["start"], pl["patient"], pl["id"], pats[pl["patient"]]["provider"], "Charge", "PLAN", "", 1, pl["price"], "", "CARE PLAN " + pl["id"]])
     for v in m["visits"]:
+        if v.get("plan") in upfront:
+            continue
         for ln in v["lines"]:
             if ln["charge"]:
                 tx.append([v["date"], v["patient"], v["id"], v["provider"], "Charge", ln["cpt"], "+".join(ln["mods"]), 1, ln["charge"], "", payer_name(v["payer"]) if v["payer"] else "CARE PLAN " + v.get("plan", "")])
@@ -439,9 +491,17 @@ def write_set(a, m, credits, debits, batches):
         for c in r["claims"]:
             if c["paid"]:
                 tx.append([post, c["patient"], c["visit"], pats[c["patient"]]["provider"], "Payment", "ERA" if r["route"] == "eft" else "Insurance Check", "", "", -c["paid"], r["trace"], payer_name(r["payer"])])
-            co = sum(x for ln in c["lines"] for g, carc, x in ln["adj"] if g == "CO")
-            if co:
-                tx.append([post, c["patient"], c["visit"], pats[c["patient"]]["provider"], "Adjustment", "CO-45", "", "", -co, r["trace"], payer_name(r["payer"])])
+            co = defaultdict(int)
+            for ln in c["lines"]:
+                for g, carc, x in ln["adj"]:
+                    if g == "CO":
+                        co[carc] += x
+            for carc in sorted(co, key=lambda k: (k != "45", k)):
+                tx.append([post, c["patient"], c["visit"], pats[c["patient"]]["provider"], "Adjustment", f"CO-{carc}", "", "", -co[carc], r["trace"], payer_name(r["payer"])])
+            if c.get("pr_writeoff"):  # VISIT_CAP: PR-119 written off instead of billed to the patient
+                tx.append([post, c["patient"], c["visit"], pats[c["patient"]]["provider"], "Adjustment", "WO-PR-119", "", "", -c["pr_writeoff"], r["trace"], payer_name(r["payer"])])
+            if c.get("posted_twice"):  # POSTED_TWICE: a manual EOB post of the same claim payment
+                tx.append([post, c["patient"], c["visit"], pats[c["patient"]]["provider"], "Payment", "Manual EOB", "", "", -c["paid"], r["trace"], payer_name(r["payer"])])
     for e in m["pay"]:
         if e["kind"] in ("patient", "plan", "attorney"):
             tx.append([e["date"], e["patient"], e.get("visit") or e.get("plan") or e.get("case"), pats[e["patient"]]["provider"], "Payment",
@@ -452,6 +512,9 @@ def write_set(a, m, credits, debits, batches):
     for r in m["remits"]:
         if r["route"] == "eft":
             deposits.append([r["date"] + dt.timedelta(days=1), f"E{r['no']:04d}", "EFT", payer_name(r["payer"]), r["trace"], r["cents"], ""])
+        for c in r["claims"]:
+            if c.get("posted_twice"):
+                deposits.append([r["date"] + dt.timedelta(days=1), f"M{r['no']:04d}", "Manual EOB", payer_name(r["payer"]), r["trace"], c["paid"], ""])
     deposits.sort(key=lambda d: (d[0], d[1]))
 
     if a.prms == "chirotouch":
@@ -463,8 +526,11 @@ def write_set(a, m, credits, debits, batches):
                                                    [[mdy(d[0]), d[1], d[2], d[3], d[4], money(d[5]), d[6]] for d in deposits], False)
         files[f"CTPAY-{tag}.csv"] = csv_text([["Batch Date", "Batch ID", "Transactions", "Gross", "Fees", "Net", "Settlement Date"]] +
                                              [[mdy(b["day"]), b["id"], b["n"], money(b["gross"]), money(b["fee"]), money(b["net"]), mdy(b["bank_date"])] for b in batches], False)
+        cp = [(e["date"], e["id"], "Debit", e) for e in m["pay"] if e["method"] == "autodebit"]
+        cp += [(e["returned"], e["id"], "Return", e) for e in m["pay"] if e.get("returned")]  # AUTODEBIT_RETURNED
         files[f"CASHPRAC-{tag}.csv"] = csv_text([["Date", "Patient ID", "Plan ID", "Type", "Amount", "Reference"]] +
-                                                [[mdy(e["date"]), e["patient"], e["plan"], "Debit", money(e["cents"]), e["id"]] for e in m["pay"] if e["method"] == "autodebit"], False)
+                                                [[mdy(d), e["patient"], e["plan"], typ, money(e["cents"] if typ == "Debit" else -e["cents"]), e["id"]]
+                                                 for d, _, typ, e in sorted(cp, key=lambda x: (x[0], x[1], x[2]))], False)
     else:
         files[f"JANE-PATIENTS-{tag}.csv"] = csv_text([["Patient Number", "Last Name", "First Name", "Primary Policy", "Payer Class", "State", "Practitioner"]] +
                                                      [[p["id"], p["last"], p["first"], payer_name(p["payer"]) if p["payer"] else "", p["cls"], p["state"], p["provider"]] for p in m["patients"]], False)
@@ -486,12 +552,12 @@ def write_set(a, m, credits, debits, batches):
         with open(os.path.join(a.out, name), "w", encoding="utf-8", newline="") as fh:
             fh.write(text)
 
-    matches = [dict(bank_line=line, date=b[0].isoformat(), cents=b[3], group=b[4], refs=";".join(b[5])) for line, b in bank_rows if b[3] > 0]
+    matches = [dict(bank_line=line, date=b[0].isoformat(), cents=b[3], group=b[4], refs=";".join(b[5]), expect=b[6]) for line, b in bank_rows if b[3] > 0]
     with open(os.path.join(a.out, "_answer-key", "expected-matches.csv"), "w", encoding="utf-8", newline="") as fh:
         w = csv.writer(fh, lineterminator="\r\n")
-        w.writerow(["bank_line", "date", "amount", "group", "refs"])
+        w.writerow(["bank_line", "date", "amount", "group", "refs", "expect"])
         for x in matches:
-            w.writerow([x["bank_line"], x["date"], money(x["cents"]), x["group"], x["refs"]])
+            w.writerow([x["bank_line"], x["date"], money(x["cents"]), x["group"], x["refs"], x["expect"]])
     by_group = defaultdict(int)
     for x in matches:
         by_group[x["group"]] += x["cents"]
@@ -505,7 +571,14 @@ def write_set(a, m, credits, debits, batches):
                  patients_by_class={c: sum(1 for p in m["patients"] if p["cls"] == c) for c in ("commercial", "medicare", "medicaid", "pi", "prepay")},
                  bank_credits_by_group={g: money(c) for g, c in sorted(by_group.items())},
                  unearned_plan_revenue=money(unearned),
-                 expected_exceptions=[], files=sorted(files))
+                 expected_exceptions=plan.exceptions if plan else [],
+                 not_applicable=plan.not_applicable if plan else [],
+                 unmatched_bank_credits=sum(1 for x in matches if x["expect"] != "match"),
+                 unmatched_prms_rows=sorted(plan.unmatched_prms) if plan else [],
+                 watch_items=[dict(code="PI_STALE", severity="watch", group="pi_case", date=c["lop"].isoformat(), refs=[c["id"]],
+                                   detail=f"open PI case, letter of protection older than {a.pi_stale_days} days at period end")
+                              for c in m["pi"] if c["status"] == "open" and (m["end"] - c["lop"]).days > a.pi_stale_days],
+                 leak_seed=a.leak_seed, files=sorted(files))
     with open(os.path.join(a.out, "_answer-key", "truth.json"), "w", encoding="utf-8", newline="\n") as fh:
         json.dump(truth, fh, indent=2, sort_keys=False, default=str)
         fh.write("\n")
@@ -517,7 +590,16 @@ def main(argv=None):
     ap.add_argument("--prms", choices=["chirotouch", "jane"], required=True)
     ap.add_argument("--out", required=True, help="output folder, e.g. sample-data/prms/chiro-1-chirotouch/SET-1/POS")
     ap.add_argument("--set-name", default="SET1", help="tag in file names (default SET1)")
-    ap.add_argument("--scenario", default="pos", help="pos (built); NEG-* scenarios are not built yet")
+    ap.add_argument("--scenario", default="pos", choices=SCENARIOS, help="pos, neg-all (every leak, on separate items) or neg-<leak>")
+    ap.add_argument("--leak-seed", type=int, default=1, help="seed of the leak streams (NEG only; the base set always uses --seed)")
+    ap.add_argument("--short-max-cents", type=int, default=5000, help="CARD_BATCH_SHORT / CASH_SHORT: largest shortfall in cents (default 5000)")
+    ap.add_argument("--unposted-min-cents", type=int, default=10000, help="BANK_UNPOSTED: smallest extra EFT in cents (default 10000)")
+    ap.add_argument("--unposted-max-cents", type=int, default=90000, help="BANK_UNPOSTED: largest extra EFT in cents (default 90000)")
+    ap.add_argument("--underpay-pct", type=int, default=12, help="CONTRACT_UNDERPAY: %% below the fee schedule (default 12)")
+    ap.add_argument("--at-missing-cas", default="CO-50", help="MCR_AT_MISSING: CAS group-CARC of the denial, ASSUMPTION (default CO-50)")
+    ap.add_argument("--gz-cas", default="CO-50", help="MAINT_NO_ABN: CAS group-CARC of the GZ denial, ASSUMPTION (default CO-50)")
+    ap.add_argument("--return-days", type=int, default=2, help="AUTODEBIT_RETURNED: business days from debit to return (default 2)")
+    ap.add_argument("--pi-stale-days", type=int, default=180, help="PI_STALE watch item: open case with LOP older than this at period end (default 180)")
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--start", default="2024-09-01")
     ap.add_argument("--days", type=int, default=30)
@@ -549,16 +631,21 @@ def main(argv=None):
     ap.add_argument("--npi", default="1234567893")
     ap.add_argument("--merchant-id", default="8788000000001")
     a = ap.parse_args(argv)
-    if a.scenario not in SCENARIOS_BUILT:
-        ap.error(f"scenario {a.scenario} is not built yet (built: {', '.join(SCENARIOS_BUILT)})")
+    if not 0 < a.underpay_pct < 100 or a.short_max_cents < 102 or not 0 < a.unposted_min_cents <= a.unposted_max_cents:
+        ap.error("--underpay-pct must be 1-99, --short-max-cents >= 102, 0 < --unposted-min-cents <= --unposted-max-cents")
     if a.plan_visits <= 0 or a.plan_months <= 0 or a.min_visits < 1 or a.max_visits < a.min_visits:
         ap.error("--plan-visits, --plan-months and --min-visits must be >= 1, and --max-visits >= --min-visits")
-    m = build(a)
-    credits, debits, batches = deposits_and_bank(a, m, random.Random(a.seed * 7919 + 1))
-    t = write_set(a, m, credits, debits, batches)
+    leaks, not_applicable = scenario_leaks(a.scenario, a.prms)
+    plan = LeakPlan(a, leaks, not_applicable) if leaks else None
+    m = build(a, plan)
+    credits, debits, batches = deposits_and_bank(a, m, random.Random(a.seed * 7919 + 1), plan)
+    t = write_set(a, m, credits, debits, batches, plan)
     print(f"gen_chiro_set: {a.prms} {a.set_name}-{a.scenario.upper()} -> {a.out}")
     print(json.dumps(t["counts"]))
     print(json.dumps(t["bank_credits_by_group"]))
+    if plan:
+        print(f"planted {len(t['expected_exceptions'])} leak(s): {', '.join(x['code'] for x in t['expected_exceptions'])}"
+              + (f"; not applicable to {a.prms}: {', '.join(not_applicable)}" if not_applicable else ""))
     return 0
 
 

@@ -775,3 +775,14 @@ Built in the AI's workspace on a snapshot of the owner's repo (main = e8626e8, v
   chainaim-payto.testnet, answer served by bedrock/nemotron-nano-3-30b, receipt CXhucEut...B2MRUv shown. Before it, two refusals worked as
   designed and charged nothing: HTTP 422 residual-digit guard (attached BofA sample), HTTP 400 PHI-to-private-cloud zone rule (demo MRN question).
   Note: the model's answer about "x402" was factually wrong (not a payment-system fact check; the rail itself worked).
+
+## 2026-11-04 — CHIRO-1b-2 stage 1: chiro NEG scenarios (16 leaks), verifier per leak
+- tools/chiro-synth/chiro_leaks.py (new); gen_chiro_set.py: --scenario neg-<leak>|neg-all, --leak-seed and 8 more leak flags; answer key
+  expect column, expected_exceptions, unmatched counts, not_applicable, PI_STALE watch items. verify_chiro_set.py: NEG-aware checks,
+  per-leak checks, reverse scan for unplanted anomalies, scenario leak set, cross-PRMS findings. README and design-30 §11 updated.
+- Linux workspace: POS data byte-identical to v1.3.1 (both PRMS); NEG-ALL deterministic; 35 sets ALL CHECKS PASS with --compare
+  (ChiroTouch 16 leaks, Jane 15: AUTODEBIT_RETURNED is ChiroTouch-only); tamper: each of 16 leaks dropped from the key -> FAIL;
+  era-to-csv on both NEG-ALL ERAs: 0 failed checks. One verifier bug found and fixed in the build (POSTED_TWICE counted the
+  patient's copay as an insurance post).
+- PC run 2026-11-05 08:20: Windows Python verify_chiro_set.py --compare on SET-1/NEG-ALL: ALL CHECKS PASS chirotouch (65 credits, 16 ERA).
+- Not run: analyst / gateway test suites (no code under services/ changed).
