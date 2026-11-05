@@ -9,5 +9,6 @@ import { CARECREDIT } from "./financing/carecredit.ts";
 import { CHERRY } from "./financing/cherry.ts";
 import { HFD } from "./financing/hfd.ts";
 import { X12_835 } from "./remit/x12-835.ts";
+import { CHIRO_SOURCES } from "./prms/chiro/index.ts";
 
-export const BUILT_IN_SOURCES: readonly SourceAdapter[] = [BOFA_STATEMENT, CURVE_DEPOSIT_DETAIL, CURVE_LEDGER, CURVE_PATIENT_LIST, CURVE_PROCEDURES, CARECREDIT, CHERRY, HFD, X12_835];
+export const BUILT_IN_SOURCES: readonly SourceAdapter[] = [BOFA_STATEMENT, CURVE_DEPOSIT_DETAIL, CURVE_LEDGER, CURVE_PATIENT_LIST, CURVE_PROCEDURES, CARECREDIT, CHERRY, HFD, X12_835, ...CHIRO_SOURCES];

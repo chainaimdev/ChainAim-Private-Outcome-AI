@@ -786,3 +786,13 @@ Built in the AI's workspace on a snapshot of the owner's repo (main = e8626e8, v
   patient's copay as an insurance post).
 - PC run 2026-11-05 08:20: Windows Python verify_chiro_set.py --compare on SET-1/NEG-ALL: ALL CHECKS PASS chirotouch (65 credits, 16 ERA).
 - Not run: analyst / gateway test suites (no code under services/ changed).
+
+## 2026-11-05 — CHIRO-1b-2 stage 2: chiro source adapters (12 layouts, all UNVERIFIED)
+- services/analyst/src/sources/prms/chiro/{layouts.ts, load.ts, index.ts} (new), sources/index.ts registers them;
+  chiro pack comment updated; tools/chiro-synth/README.md lists adapter + header line per file; design-30 §11 stage 2.
+- Tests: test/chiro-layouts.test.ts (new, 7, pure); test/chiro-sets.test.ts expects each chiro file claimed by its own layout and
+  loads every chiro file of POS and NEG-ALL; test/sources-financing.test.ts adapter list 9 -> 21.
+- Linux workspace: chiro-layouts.test.ts 7/7 pass (35 sets detected). DuckDB tests not runnable there (npm 403, no pip duckdb).
+- Owner PC 2026-11-05 10:33: services/analyst npm test 201/201 pass, 0 skipped (190 + 7 layout + 4 load tests); chiro POS and
+  NEG-ALL load in both PRMS with every check ok except the UNVERIFIED layout check.
+

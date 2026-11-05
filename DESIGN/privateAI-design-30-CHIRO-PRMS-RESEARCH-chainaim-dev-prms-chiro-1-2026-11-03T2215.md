@@ -281,6 +281,24 @@ ChiroTouch/Jane layout adapters (after header lines from real exports), datasets
 - Next: stage 2 layout adapters (ChiroTouch with a no-header fallback, Jane with the public Jane guide names as basis), stage 3
   reconcile.json + reconcile-check reproducing these answer keys, stage 4 query bank + datasets switch, stage 5 scenario tests.
 
+### CHIRO-1b-2 stage 2 (2026-11-05): chiro source adapters
+- `services/analyst/src/sources/prms/chiro/{layouts.ts, load.ts, index.ts}`: 12 layouts (ChiroTouch patients / day sheet /
+  deposits, CT Payments batches, Cash Practice, Jane patients / transactions / Payments-Refunds-Fees / payouts, fee schedule,
+  PI cases, care plans), registered in `sources/index.ts`. Spec-driven like the financing adapters: exact header line, each
+  canonical column { header, verified, basis }, forbidden person-name headers (only into name_key), keys, row identities
+  (CTPAY Net = Gross - Fees; Jane Amount paid to the clinic = Amount - Processing fees, per Jane's guide; Cash Practice signs;
+  care plans Unearned = Collected - Earned). Every file reports "layout verified against a real export" = UNVERIFIED.
+- Basis: Jane "Payments, Refunds, and Fees Report" Detail view field names read 2026-11-05 (jane.app guide) = the generator's
+  eight columns; Jane Payouts fields read 2026-11-04. ChiroTouch, Cash Practice, CT Payments: no published header (stay canonical).
+- Decisions: no positional detection for headerless ChiroTouch exports (owner adds the header line; README lists them);
+  ChiroTouch / Jane deposit tables use the Curve deposit-detail column names (payment_id, method, ref_id, payer, rp_pseudonym,
+  cents) so deposit-match can read them in stage 3; Jane Payor name loaded only on insurance methods (ASSUMPTION that those carry
+  the payer's organisation name). Adapter ids: prms/chirotouch/*, prms/jane/*, processor/*, owner/*.
+- Tests: `test/chiro-layouts.test.ts` (7, no DuckDB: spec sound, each header picks exactly its layout, names never a column,
+  every file of the 35 generated sets detected by its own layout) passes in the Linux workspace. `test/chiro-sets.test.ts`
+  (DuckDB): every chiro file of POS and NEG-ALL loads with all checks ok except the UNVERIFIED one; `sources-financing.test.ts`
+  adapter list now 21. DuckDB tests run on the owner PC (npm and pip blocked in the workspace).
+
 ## 12. State rules used by the chiro generator (sources read 2026-11-03)
 | Rule | State | Value used | Basis |
 |---|---|---|---|

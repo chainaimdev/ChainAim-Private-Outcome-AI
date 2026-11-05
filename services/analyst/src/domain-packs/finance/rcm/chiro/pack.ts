@@ -4,9 +4,9 @@
  * This pack holds what is known now: the file kinds of design-30 §3 and the owner's file-name prefixes (§8.3): CT-* and
  * JANE-* (PRMS reports), CTPAY-* / JANEPAY-* / CASHPRAC-* (card, payout and auto-debit processors), ERA-*.835, BANK-ST-*,
  * PI-CASES-*, CAREPLANS-*. Hints only propose a kind; the owner confirms the recipe.
- * Not here yet, on purpose: `reconcile` and `sourceConfigs`. They need the ChiroTouch and Jane export layouts, which are
- * UNVERIFIED (no published headers; design-30 §3), and the owner's answers in design-30 §10. They are added with the
- * layouts/chirotouch and layouts/jane adapters, each value as { value, verified, basis }.
+ * Source adapters (CHIRO-1b-2 stage 2): services/analyst/src/sources/prms/chiro (12 layouts, each column { header, verified,
+ * basis }; every one still UNVERIFIED against a real export, and each loaded file says so). Not here yet: `reconcile`
+ * (stage 3: chiro reconcile.json, with reconcile.ts reading the deposit/ledger adapters from the pack instead of the Curve ids).
  */
 import type { DomainPack } from "../../../../core/ports.ts";
 

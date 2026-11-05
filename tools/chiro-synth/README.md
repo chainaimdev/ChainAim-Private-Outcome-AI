@@ -30,6 +30,30 @@ sample-data/prms/chiro-1-chirotouch/SET-1/POS/        sample-data/prms/chiro-2-j
 Layout status is in the docstring of `gen_chiro_set.py`: BofA and 835 verified; Jane payment/payout columns from Jane's
 public guides; ChiroTouch and the other Jane files canonical (UNVERIFIED) until real header lines arrive.
 
+## Analyst adapters (services/analyst/src/sources/prms/chiro)
+
+Each file is recognised only by its exact header line (no positional guessing). If a real export has no header row, add
+the header line of its layout as the first line. Every column carries { header, verified, basis }; all are UNVERIFIED
+until a real export is seen, and each loaded file reports that in its checks.
+
+| File | Adapter | Header line |
+|---|---|---|
+| CT-PATIENTS | prms/chirotouch/patients | `Patient ID,Last Name,First Name,Primary Insurance,Payer Class,State,Provider` |
+| CT-DAYSHEET | prms/chirotouch/daysheet | `Date,Patient ID,Visit,Provider,Type,Code,Modifiers,Units,Amount,Reference,Payer` |
+| CT-DEPOSITS | prms/chirotouch/deposits | `Date,Payment ID,Method,Payer,Reference,Amount,Patient ID` |
+| CTPAY | processor/ct-payments | `Batch Date,Batch ID,Transactions,Gross,Fees,Net,Settlement Date` |
+| CASHPRAC | processor/cash-practice | `Date,Patient ID,Plan ID,Type,Amount,Reference` |
+| JANE-PATIENTS | prms/jane/patients | `Patient Number,Last Name,First Name,Primary Policy,Payer Class,State,Practitioner` |
+| JANE-TRANSACTIONS | prms/jane/transactions | `Date,Patient Number,Invoice,Practitioner,Type,Item,Modifiers,Units,Amount,Reference,Payer` |
+| JANE-PAYMENTS-REFUNDS-FEES | prms/jane/payments-refunds-fees | `Date,Payor name,Payment method,Reference number,Invoice number,Amount,Processing fees,Amount paid to the clinic` (Jane guide names) |
+| JANEPAY-PAYOUTS | processor/jane-payments-payouts | `Date Created,Date Deposited,Payout Amount,Payout Status` (Jane guide names) |
+| FEESCHED | owner/fee-schedule | `Payer Code,Payer,CPT,Allowed` |
+| PI-CASES | owner/pi-cases | `Case ID,Patient ID,State,Coverage,Carrier,Attorney,LOP Date,Billed,Carrier Paid,Has Health Insurance,Status,Settled Date,Prior Balance,Settlement Received,Reduction,Reduction Approved` |
+| CAREPLANS | owner/care-plans | `Plan ID,Patient ID,Start Date,Visits Bought,Price,Payment,Visits Used,Collected,Earned,Unearned` |
+
+Person names (Last Name, First Name) are read only into name_key; Jane's Payor name is loaded only on insurance rows
+(EFT, Manual EOB, Insurance Check), because on patient rows it is a person's name.
+
 ## Run (from the repo root, Python 3.9+)
 
 ```powershell
