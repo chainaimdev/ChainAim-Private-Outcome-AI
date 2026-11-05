@@ -21,6 +21,8 @@
 
 **adminUI Jobs tab feed (chainaim-adminUI-NEAR architecture-adminui-jobs.md ARCH-201..205, 2026-11-05):** built and tested locally. Gateway: `--expose-entity-counts` (default off). Paywall: strips both masking headers. crossask: entityCounts/residual and the optional clock → timings. Console: `--job-feed-url` → job-feed.ts (job_quoted/released/expired, never awaited). Root 397/397, paywall 274/274, crossask 23/23, web 133/133. Open (owner): M-G, M-P, M-C, M-UI (MANUAL_SETUP.md 2026-11-05 "Job feed"). Seen while testing, pre-existing: the console-paid-jobs ARCH-104/105 TTL-boundary flake (BUILD_LOG.md).
 
+**Docker (DOCKERIZE-PLAN.md, 2026-11-06):** P1 (analyst/chain-query bind + Host flags) and P3 (console --mode ui|api and C2-C7, --dataset-root) done with tests; images for analyst, chain-query and console-api built and smoke-run on a throwaway network; docker-compose.yml, test-console/up.ps1 / down.ps1 written, up.ps1 -DryRun passes. Not done: the switch itself (owner: up.ps1 -ReplaceRunning -Build, then the P5 end-to-end) and C:PRIV-AI-SECRETSpaid-jobs-settings.env (owner prices). Open, not from this work: check-deps fails on scripts/test/console-notes.test.ts importing test-console (owner: move that test or add an allow entry).
+
 **Deviation from the design:** the buyer signs a NEP-366 SignedDelegate (relayer pays gas), not a full transaction with a `memo`, because that is the official x402 NEAR scheme. The invoice binding the memo would have given is replaced by claiming each delegate once by its hash (`SeenPayments`), tested.
 
 ---

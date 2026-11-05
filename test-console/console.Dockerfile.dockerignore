@@ -1,0 +1,13 @@
+# Build context for test-console/console.Dockerfile only (BuildKit reads <Dockerfile>.dockerignore instead of the root
+# .dockerignore). Everything is left out except what the Dockerfile copies; keys, runs and data never enter the context.
+*
+!packages/crossask/package.json
+!packages/crossask/src
+!services/web/src/balance.ts
+!services/web/src/near-wallets.ts
+!config
+config/local
+config/data-sources.json
+!test-console/console
+**/node_modules
+**/*.env

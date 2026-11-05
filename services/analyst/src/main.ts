@@ -5,6 +5,9 @@
  *   node src/main.ts [flags]
  *
  *   --port N                     default 8740
+ *   --bind HOST                  listen address (default 127.0.0.1; 0.0.0.0 only inside a container, DOCKERIZE-PLAN A1)
+ *   --allowed-hosts LIST         Host headers accepted, comma-separated host:port (default 127.0.0.1:<port>,localhost:<port>;
+ *                                e.g. analyst:8740 for the console in Docker, DOCKERIZE-PLAN A2)
  *   --data-config PATH           allowed data folders, shared with the console (default ../../config/data-sources.json)
  *   --work-dir PATH              recipes and run manifests, no data (default <first allowedRoot>/_analyst)
  *   --period week|month|quarter  default month
@@ -39,7 +42,7 @@
  * A folder's recipe may override period, baselinePeriods, variancePct, varianceAmount, dateWindowDays,
  * amountTolerance, match, pairMode, agingDays and expectedRatio (pins the ratio for ratio pairs) in "settings".
  *
- * Routes (JSON; Host must be 127.0.0.1:<port> or localhost:<port>):
+ * Routes (JSON; Host must be one of --allowed-hosts, by default 127.0.0.1:<port> or localhost:<port>):
  *   GET  /healthz
  *   POST /profile  {folder}            files, columns, proposed recipe, saved recipe
  *   POST /recipe   {folder, recipe}    validate and save the confirmed recipe
@@ -138,7 +141,7 @@ async function body(req: IncomingMessage): Promise<Record<string, any>> {
   for await (const c of req) { size += (c as Buffer).length; if (size > 4_000_000) throw new HttpError(413, "request body over 4 MB"); chunks.push(c as Buffer); }
   try { return JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}"); } catch { throw new HttpError(400, "body must be JSON"); }
 }
-const hostOk = (req: IncomingMessage): boolean => { const h = (req.headers.host ?? "").toLowerCase(); return h === `127.0.0.1:${flags.port}` || h === `localhost:${flags.port}`; };
+const hostOk = (req: IncomingMessage): boolean => flags.allowedHosts.includes((req.headers.host ?? "").toLowerCase());
 
 async function folderOf(b: Record<string, any>, cfg: DataConfig): Promise<string> {
   const folder = await insideRoots(b.folder, cfg);
@@ -330,8 +333,8 @@ createServer(async (req, res) => {
     console.error("[analyst]", e);
     return send(res, 500, { error: (e as Error).message });
   }
-}).listen(flags.port, "127.0.0.1", () => {
+}).listen(flags.port, flags.bind, () => {
   let where = "";
   try { const c = readDataConfig(flags); where = ` data: ${c.allowedRoots.join(", ")}; work dir: ${c.workDir}`; } catch (e) { where = ` ${(e as Error).message}`; }
-  console.log(`[analyst] http://127.0.0.1:${flags.port}${where}`);
+  console.log(`[analyst] http://127.0.0.1:${flags.port}${where}${flags.bind === "127.0.0.1" ? "" : `  (listening on ${flags.bind}; hosts ${flags.allowedHosts.join(",")})`}`);
 });

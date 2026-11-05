@@ -1,0 +1,178 @@
+# chainiam-private-ai backend in Docker (DOCKERIZE-PLAN.md). Start it with test-console\up.ps1, not by hand: up.ps1 reads
+# the secrets from C:\PRIV-AI-SECRETS through the same allowlists stack.ps1 uses, puts only those names in its own
+# process environment (nothing is written to a file), writes runtime\compose\commands.yml (the gateway's current
+# command and the console's paid-job flags, no secrets) and runs:
+#   docker compose -f docker-compose.yml -f runtime/compose/commands.yml up -d
+# The 8730 UI stays on the PC: node test-console/console/server.ts --mode ui --api http://127.0.0.1:8735 (up.ps1 starts it).
+#
+# Container names, the network and its aliases, the ledger volume and the host ports are the ones stack.ps1 and
+# switch-models.ps1 use today, so stack.ps1 -Check still recognises them and the old and new way cannot both run.
+# Every port is published on 127.0.0.1 only. Secrets are listed here by NAME only (taken from up.ps1's environment);
+# never run "docker compose config" or "docker inspect" where others can read the output: both print the values.
+name: chainaim-private-ai
+
+x-source: &source
+  chainaim.source: ${CHAINAIM_SOURCE:-unknown}
+  chainaim.managed-by: docker-compose
+
+networks:
+  chainaim-test:
+    external: true
+
+volumes:
+  chainaim-test-ledger:
+    external: true
+  chainaim-analyst-work:
+  chainaim-console-runs:
+
+secrets:
+  gateway-key:
+    file: ./test-console/local-gateway-key.txt
+
+services:
+  presidio:
+    build: { context: services/presidio, labels: *source }
+    image: chainaim-presidio:test
+    container_name: ca-presidio
+    labels: *source
+    networks: { chainaim-test: { aliases: [presidio.railway.internal] } }
+    restart: "no"
+
+  openrouter-stub:
+    profiles: [test]
+    image: node:24-slim
+    container_name: ca-openrouter-stub
+    labels: *source
+    command: ["node", "/spy/spy-openrouter.ts"]
+    volumes:
+      - ./scripts:/app/scripts:ro
+      - ./test-console/spy:/spy:ro
+    ports: ["127.0.0.1:5004:5004"]
+    networks: { chainaim-test: { aliases: [openrouter-stub] } }
+
+  gateway:
+    build: { context: ., dockerfile: services/gateway/Dockerfile, labels: *source }
+    image: chainaim-gateway:test
+    container_name: ca-gateway
+    labels: *source
+    # The image's default command; up.ps1 puts the gateway's CURRENT mode command (from the running ca-gateway, as
+    # switch-models.ps1 built it) in runtime/compose/commands.yml.
+    environment:
+      - CHAINAIM_GATEWAY_KEY
+      - OPENROUTER_API_KEY
+      - BEDROCK_API_KEY
+    volumes:
+      - chainaim-test-ledger:/data
+      - ./config:/config:ro
+    ports: ["127.0.0.1:8720:8700"]
+    networks: { chainaim-test: { aliases: [gateway.railway.internal] } }
+    depends_on: [presidio]
+
+  paywall:
+    build: { context: services/paywall, labels: *source }
+    image: chainaim-paywall:test
+    container_name: ca-paywall
+    labels: *source
+    environment:
+      - XRPL_NETWORK
+      - XRPL_PAY_TO_TESTNET
+      - XRPL_PAY_TO_MAINNET
+      - RLUSD_ISSUER_TESTNET
+      - RLUSD_ISSUER_MAINNET
+      - FACILITATOR_URL_TESTNET
+      - FACILITATOR_URL_MAINNET
+      - PRICE_SCAN
+      - PRICE_MASK
+      - PRICE_CHAT
+      - PUBLIC_BASE_URL
+      - GATEWAY_URL=http://gateway.railway.internal:8700
+      - CHAINAIM_GATEWAY_KEY
+      - PAY_RAILS
+      - NEAR_NETWORK
+      - NEAR_MAX_GAS
+      - NEAR_PAY_TO_TESTNET
+      - NEAR_USDC_CONTRACT_TESTNET
+      - NEAR_USDC_DECIMALS_TESTNET
+      - NEAR_RPC_URL_TESTNET
+      - NEAR_RPC_FALLBACK_URL_TESTNET
+      - NEAR_FACILITATOR_URL_TESTNET
+      - NEAR_RELAYER_ACCOUNT_TESTNET
+      - NEAR_RELAYER_KEY_TESTNET
+      - NEAR_PAY_TO_MAINNET
+      - NEAR_USDC_CONTRACT_MAINNET
+      - NEAR_USDC_DECIMALS_MAINNET
+      - NEAR_RPC_URL_MAINNET
+      - NEAR_RPC_FALLBACK_URL_MAINNET
+      - NEAR_FACILITATOR_URL_MAINNET
+      - NEAR_RELAYER_ACCOUNT_MAINNET
+      - NEAR_RELAYER_KEY_MAINNET
+      - PAID_JOBS
+      - PAID_JOBS_KEY
+      # The console is in this compose file, so the paywall reaches its internal listener by service name.
+      - PAID_JOBS_RESULT_URL=http://console-api:8731
+      - PAID_JOBS_TTL_SEC
+      - PAID_JOBS_MAX
+      - PAYMENT_LOG_URL
+      - PAYMENT_LOG_KEY
+    ports: ["127.0.0.1:8080:8080"]
+    networks: [chainaim-test]
+    depends_on: [gateway]
+
+  analyst:
+    build: { context: ., dockerfile: services/analyst/Dockerfile, labels: *source }
+    image: chainaim-analyst:local
+    container_name: ca-analyst
+    labels: *source
+    volumes:
+      - ./config:/app/config:ro
+      - ${SAMPLE_DATA_DIR:-./sample-data}:/app/sample-data:ro
+      - ${PRIV_AI_DATA_DIR:-C:/PRIV-AI-DATA}:/data/priv-ai-data:ro
+      - chainaim-analyst-work:/work
+    ports: ["127.0.0.1:8740:8740"]
+    networks: [chainaim-test]
+
+  chain-query:
+    build: { context: ., dockerfile: services/chain-query/Dockerfile, labels: *source }
+    image: chainaim-chain-query:local
+    container_name: ca-chain-query
+    labels: *source
+    volumes:
+      - ./config/chains:/app/config/chains:ro
+      - ./config/local:/app/config/local:ro
+    ports: ["127.0.0.1:8750:8750"]
+    networks: [chainaim-test]
+
+  console-api:
+    build: { context: ., dockerfile: test-console/console.Dockerfile, labels: *source }
+    image: chainaim-console:local
+    container_name: ca-console-api
+    labels: *source
+    # The base command (paid jobs off); up.ps1 writes the full one, with the paid-job flags, in runtime/compose/commands.yml.
+    command:
+      - --mode=api
+      - --bind=0.0.0.0
+      - --port=8735
+      - --gateway-key-file=/run/secrets/gateway-key
+      - --run-log-dir=/runs
+      - --gateway=http://gateway.railway.internal:8700
+      - --paywall=http://paywall:8080
+      - --analyst=http://analyst:8740
+      - --chain-query=http://chain-query:8750
+      - --spy=http://openrouter-stub:5004
+      - --data-config=/app/config/data-sources.docker.json
+      - --ledger-source=dir:/gateway-data/ledger
+      - --dataset-root=private=/data/priv-ai-data/chainaim3003
+      - --models-file=/app/config/local-models.cpu-all.json
+    environment:
+      - PAID_JOBS_KEY
+      - NEAR_WATCH_INGEST_KEY
+    secrets: [gateway-key]
+    volumes:
+      - ./config:/app/config:ro
+      - ${SAMPLE_DATA_DIR:-./sample-data}:/app/sample-data:ro
+      - ${PRIV_AI_DATA_DIR:-C:/PRIV-AI-DATA}:/data/priv-ai-data:ro
+      - chainaim-test-ledger:/gateway-data:ro
+      - chainaim-console-runs:/runs
+    ports: ["127.0.0.1:8735:8735"]
+    networks: [chainaim-test]
+    depends_on: [gateway, analyst, chain-query]

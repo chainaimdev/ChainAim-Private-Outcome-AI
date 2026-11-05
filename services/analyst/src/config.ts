@@ -32,6 +32,10 @@ export type Settings = {
 
 export type Flags = Settings & {
   port: number;
+  /** --bind: the address the server listens on (default 127.0.0.1; 0.0.0.0 inside a container, DOCKERIZE-PLAN A1). */
+  bind: string;
+  /** --allowed-hosts: the Host headers accepted (default 127.0.0.1:<port> and localhost:<port>; DOCKERIZE-PLAN A2), lowercase. */
+  allowedHosts: string[];
   /** Domain pack for recipes that name none (null = the composition root's default, finance-generic). */
   pack: string | null;
   /** --print-pack <id>: print the effective pack (with where each rule comes from) and exit. */
@@ -76,6 +80,8 @@ export function parseFlags(argv: string[]): Flags {
     strict: true,
     options: {
       port: { type: "string", default: "8740" },
+      bind: { type: "string", default: "127.0.0.1" },
+      "allowed-hosts": { type: "string" },
       "data-config": { type: "string", default: fileURLToPath(new URL("../../../config/data-sources.json", import.meta.url)) },
       "work-dir": { type: "string" },
       period: { type: "string", default: "month" },
@@ -119,8 +125,15 @@ export function parseFlags(argv: string[]): Flags {
   const port = positive("port", f.port);
   if (port < 1 || port > 65535) throw new Error(`--port must be 1 to 65535, got ${f.port}`);
   if (f["work-dir"] !== undefined && !isAbsolute(f["work-dir"])) throw new Error(`--work-dir must be an absolute folder, got ${f["work-dir"]}`);
+  const bind = f.bind!.trim();
+  if (!/^[0-9a-fA-F.:]+$|^localhost$/.test(bind)) throw new Error(`--bind must be an IP address such as 127.0.0.1 or 0.0.0.0, got ${f.bind}`);
+  const allowedHosts = f["allowed-hosts"] === undefined ? [`127.0.0.1:${port}`, `localhost:${port}`] : f["allowed-hosts"].split(",").map((h) => h.trim().toLowerCase()).filter(Boolean);
+  for (const h of allowedHosts) if (!/^[a-z0-9.-]+:\d{1,5}$|^\[[0-9a-f:]+\]:\d{1,5}$/.test(h)) throw new Error(`--allowed-hosts entries must be host:port, got ${h}`);
+  if (!allowedHosts.length) throw new Error("--allowed-hosts must list at least one host:port");
   return {
     port,
+    bind,
+    allowedHosts,
     pack: f.pack ?? null,
     printPack: f["print-pack"] ?? null,
     reconcilePack: f["reconcile-pack"]!,

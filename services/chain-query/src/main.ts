@@ -6,6 +6,10 @@
  *   --registry   chain registry (default <repo>/config/chains/networks.json); re-read on every request, so edits need no restart
  *   --profile    per-PC choices, git-ignored (default <repo>/config/local/chain-profile.json; optional): selected chain/env
  *   --validate   ping every environment, list every source that still has placeholders, exit 0/1 (no server)
+ *   --allow-non-loopback  let --host be any address, e.g. 0.0.0.0 inside a container (DOCKERIZE-PLAN 4.3; default off:
+ *                loopback only, as before)
+ *   --allowed-hosts LIST  accept only these Host headers, comma-separated host:port (e.g. chain-query:8750,127.0.0.1:8750);
+ *                default unset: no Host check, as before
  *
  *   GET /healthz
  *   GET /chains                                         chains, environments, capabilities, sources (ready / missing fields)
@@ -34,12 +38,18 @@ const { values: f } = parseArgs({
     port: { type: "string", default: "8750" },
     "timeout-ms": { type: "string", default: "8000" },
     validate: { type: "boolean", default: false },
+    "allow-non-loopback": { type: "boolean", default: false },
+    "allowed-hosts": { type: "string" },
   },
 });
 const PORT = Number(f.port), TIMEOUT = Number(f["timeout-ms"]);
 if (!Number.isInteger(PORT) || PORT < 1 || PORT > 65535) throw new Error(`--port must be 1-65535, got ${f.port}`);
 if (!Number.isInteger(TIMEOUT) || TIMEOUT < 500) throw new Error(`--timeout-ms must be a whole number >= 500, got ${f["timeout-ms"]}`);
-if (!["127.0.0.1", "::1", "localhost"].includes(f.host!)) throw new Error("--host must be a loopback address: chain-query is for this PC only");
+if (!f["allow-non-loopback"] && !["127.0.0.1", "::1", "localhost"].includes(f.host!)) throw new Error("--host must be a loopback address: chain-query is for this PC only (inside a container, add --allow-non-loopback)");
+if (f["allow-non-loopback"] && !/^[0-9a-fA-F.:]+$/.test(f.host!)) throw new Error(`--host must be an IP address such as 0.0.0.0, got ${f.host}`);
+const ALLOWED_HOSTS = f["allowed-hosts"] === undefined ? null : f["allowed-hosts"].split(",").map((h) => h.trim().toLowerCase()).filter(Boolean);
+if (ALLOWED_HOSTS) for (const h of ALLOWED_HOSTS) if (!/^[a-z0-9.-]+:\d{1,5}$/.test(h)) throw new Error(`--allowed-hosts entries must be host:port, got ${h}`);
+if (ALLOWED_HOSTS && !ALLOWED_HOSTS.length) throw new Error("--allowed-hosts must list at least one host:port");
 
 const adapters: Adapters = { xrpl: xrplAdapter(httpJson, TIMEOUT), near: nearAdapter(httpJson, TIMEOUT) };
 function selected(): { chain?: string; env?: string } | null {
@@ -54,6 +64,7 @@ const json = (res: import("node:http").ServerResponse, status: number, body: unk
 };
 createServer(async (req, res) => {
   try {
+    if (ALLOWED_HOSTS && !ALLOWED_HOSTS.includes((req.headers.host ?? "").toLowerCase())) return json(res, 403, { error: "this Host is not in --allowed-hosts" });
     if (req.method !== "GET") return json(res, 405, { error: "GET only" });
     const u = new URL(req.url ?? "/", "http://local");
     if (u.pathname === "/healthz") return json(res, 200, { ok: true, service: "chain-query" });

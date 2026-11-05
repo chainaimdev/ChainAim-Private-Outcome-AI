@@ -80,6 +80,23 @@
  *   --job-feed-max-inflight N   posts at once; beyond it an event is dropped and logged (default 20)
  *   --job-expiry-check-sec N    how often held jobs are checked for expiry (default 30)
  *
+ *   Docker split (DOCKERIZE-PLAN 4.1, C1-C7; every default is today's single process on 127.0.0.1):
+ *   --mode all|ui|api          all (default): page and backend in one process, as before. api: the same backend, meant to
+ *                              run in a container (with --bind 0.0.0.0). ui: serves only /, /wallet.js and /near-wallet.js
+ *                              and forwards every other request, byte for byte, to --api; it holds no key and reads no
+ *                              data, config or ledger.
+ *   --bind HOST                the address this console listens on (default 127.0.0.1)
+ *   --api URL                  ui mode only, required there: the console API, e.g. http://127.0.0.1:8735
+ *   --forward-timeout-sec N    ui mode: one forwarded request (default the longer of --paid-timeout-sec and --crossask-timeout-sec)
+ *   --allowed-hosts LIST       Host headers the guarded routes accept, comma-separated host:port
+ *                              (default 127.0.0.1:<port>,localhost:<port>). In ui mode every forwarded request needs one.
+ *   --ledger-source S          the ledger twisty: docker-exec (default: docker exec ca-gateway tail ...), dir:<path> (the
+ *                              gateway's ledger folder mounted read-only, e.g. dir:/gateway-data/ledger) or off
+ *   --gateway-key-file PATH    the gateway key (default test-console/local-gateway-key.txt; not read in ui mode)
+ *   --paid-jobs-page on|off    ui mode: add the tab 03 pay box to the page (default off; jobs themselves run in the api)
+ *   --dataset-root NAME=PATH   replace one root of config/datasets.json (repeatable), e.g. private=/data/priv-ai-data/chainaim3003
+ *                              when the data is mounted at another path; default none = the file's own roots
+ *
  *   Pages are served at /view/<id> with a sandbox Content-Security-Policy: their scripts run in an opaque
  *   origin and connect-src is 'none', so model-written HTML cannot call this console, the gateway or any
  *   other address. Pages live in memory only (they can hold statement data) and vanish on restart.
@@ -148,8 +165,43 @@ const { values: flags } = parseArgs({
     "job-feed-timeout-ms": { type: "string" },
     "job-feed-max-inflight": { type: "string" },
     "job-expiry-check-sec": { type: "string" },
+    mode: { type: "string", default: "all" },
+    bind: { type: "string", default: "127.0.0.1" },
+    api: { type: "string" },
+    "forward-timeout-sec": { type: "string" },
+    "allowed-hosts": { type: "string" },
+    "ledger-source": { type: "string", default: "docker-exec" },
+    "gateway-key-file": { type: "string", default: fileURLToPath(new URL("../local-gateway-key.txt", import.meta.url)) },
+    "paid-jobs-page": { type: "string" },
+    "dataset-root": { type: "string", multiple: true },
   },
 });
+/** DOCKERIZE-PLAN C1: all (today), ui (page + forwarding) or api (backend in a container). */
+const MODE = flags.mode as "all" | "ui" | "api";
+if (!["all", "ui", "api"].includes(MODE)) throw new Error(`--mode must be all, ui or api, got ${flags.mode}`);
+if (MODE === "ui") {
+  // The ui process runs nothing of the backend; a backend flag here would be silently unused, so it is refused.
+  for (const name of ["paid-jobs", "job-feed-url", "pricing-catalog", "dataset-root"] as const) {
+    if (flags[name] !== undefined) throw new Error(`--${name} belongs to the api process, not --mode ui (use --paid-jobs-page on for the tab 03 pay box)`);
+  }
+  if (!flags.api) throw new Error("--mode ui needs --api URL: the console API, e.g. http://127.0.0.1:8735");
+  if (!URL.canParse(flags.api) || !/^https?:$/.test(new URL(flags.api).protocol)) throw new Error(`--api must be an http(s) URL, got ${flags.api}`);
+} else {
+  if (flags.api !== undefined) throw new Error("--api is for --mode ui only");
+  if (flags["paid-jobs-page"] !== undefined) throw new Error("--paid-jobs-page is for --mode ui only (in this mode the page follows --paid-jobs)");
+}
+if (flags["paid-jobs-page"] !== undefined && !["on", "off"].includes(flags["paid-jobs-page"])) throw new Error(`--paid-jobs-page must be on or off, got ${flags["paid-jobs-page"]}`);
+if (!/^[0-9a-fA-F.:]+$|^localhost$/.test(flags.bind!)) throw new Error(`--bind must be an IP address such as 127.0.0.1 or 0.0.0.0, got ${flags.bind}`);
+/** C5: where the ledger twisty reads the gateway's last ledger lines. */
+const LEDGER_SOURCE = flags["ledger-source"]!;
+if (!(LEDGER_SOURCE === "docker-exec" || LEDGER_SOURCE === "off" || /^dir:.+/.test(LEDGER_SOURCE))) throw new Error(`--ledger-source must be docker-exec, dir:<path> or off, got ${LEDGER_SOURCE}`);
+/** --dataset-root NAME=PATH: roots of config/datasets.json replaced for this process (e.g. inside a container). */
+const DATASET_ROOTS: Record<string, string> = {};
+for (const pair of flags["dataset-root"] ?? []) {
+  const m = /^([A-Za-z0-9_-]+)=(.+)$/.exec(pair);
+  if (!m) throw new Error(`--dataset-root must be NAME=PATH, got ${pair}`);
+  DATASET_ROOTS[m[1]] = m[2];
+}
 function positiveInt(name: "view-max" | "view-ttl-min" | "view-max-bytes" | "paid-timeout-sec" | "crossask-timeout-sec" | "crossask-sql-retries" | "crossask-answer-rows", min = 1): number {
   const n = Number(flags[name]);
   if (!Number.isInteger(n) || n < min) throw new Error(`--${name} must be a positive integer, got ${flags[name]}`);
@@ -164,15 +216,18 @@ const WALLET_BUNDLE = flags["wallet-bundle"]!;
 const NEAR_WALLET = flags["near-wallet"];
 if (NEAR_WALLET !== undefined && !isNearWalletId(NEAR_WALLET)) throw new Error(`--near-wallet must be one of ${Object.keys(NEAR_WALLETS).join(", ")}, got ${NEAR_WALLET}`);
 const NEAR_WALLET_BUNDLE = flags["near-wallet-bundle"]!;
-/** Paid jobs on tab 03 (ARCH-104/105/114): undefined unless --paid-jobs on; start-up stops here naming any missing flag. */
-const PAID_JOBS = paidJobsConfig(flags, process.env);
+/** Paid jobs on tab 03 (ARCH-104/105/114): undefined unless --paid-jobs on; start-up stops here naming any missing flag. Never in ui mode. */
+const PAID_JOBS = MODE === "ui" ? undefined : paidJobsConfig(flags, process.env);
 if (PAID_JOBS && !NEAR_WALLET) throw new Error("--paid-jobs on needs --near-wallet intear-wallet: paid jobs are paid in USDC on NEAR from the page");
 /** The paid-job feed to near-watch (adminUI ARCH-205): undefined unless --job-feed-url; start-up stops here on a bad flag or key. */
-const JOB_FEED_CONFIG = jobFeedConfig(flags, process.env, PAID_JOBS !== undefined);
+const JOB_FEED_CONFIG = MODE === "ui" ? undefined : jobFeedConfig(flags, process.env, PAID_JOBS !== undefined);
 const JOB_FEED = JOB_FEED_CONFIG ? new JobFeed(JOB_FEED_CONFIG) : undefined;
 const JOBS = PAID_JOBS ? new JobStore(PAID_JOBS.max, PAID_JOBS.ttlMs, Date.now, JOB_FEED ? (j) => JOB_FEED.expired(j.jobId) : undefined) : undefined;
 /** The tab 03 pay box and its script, added to the page only with --paid-jobs on (the page is otherwise served as it is). */
 const PAID_JOBS_FRAGMENT = fileURLToPath(new URL("./paid-jobs.html", import.meta.url));
+/** C7: whether the page gets the pay box: --paid-jobs in all/api mode, --paid-jobs-page in ui mode. */
+const PAGE_PAID = MODE === "ui" ? flags["paid-jobs-page"] === "on" : PAID_JOBS !== undefined;
+if (MODE === "ui" && PAGE_PAID && !NEAR_WALLET) throw new Error("--paid-jobs-page on needs --near-wallet intear-wallet: the pay box pays with the NEAR bundle");
 const CROSSASK_TIMEOUT_MS = positiveInt("crossask-timeout-sec") * 1000;
 const CROSSASK_RETRIES = positiveInt("crossask-sql-retries", 0);
 const CROSSASK_ROWS = positiveInt("crossask-answer-rows");
@@ -188,6 +243,19 @@ for (const name of ["gateway", "paywall", "spy", "analyst", "chain-query"] as co
 }
 const PORT = Number(flags.port);
 if (!Number.isInteger(PORT) || PORT < 1 || PORT > 65535) throw new Error(`--port must be 1 to 65535, got ${flags.port}`);
+/** C4: the Host headers the guarded routes accept; by default exactly today's two. */
+const ALLOWED_HOSTS = flags["allowed-hosts"] === undefined ? [`127.0.0.1:${PORT}`, `localhost:${PORT}`] : flags["allowed-hosts"].split(",").map((h) => h.trim().toLowerCase()).filter(Boolean);
+for (const h of ALLOWED_HOSTS) if (!/^[a-z0-9.-]+:\d{1,5}$/.test(h)) throw new Error(`--allowed-hosts entries must be host:port, got ${h}`);
+if (!ALLOWED_HOSTS.length) throw new Error("--allowed-hosts must list at least one host:port");
+const API = MODE === "ui" ? flags.api!.replace(/\/+$/, "") : "";
+const FORWARD_TIMEOUT_MS = flags["forward-timeout-sec"] === undefined ? Math.max(positiveInt("paid-timeout-sec"), positiveInt("crossask-timeout-sec")) * 1000 : (() => {
+  const n = Number(flags["forward-timeout-sec"]);
+  if (!Number.isInteger(n) || n < 1) throw new Error(`--forward-timeout-sec must be a positive integer, got ${flags["forward-timeout-sec"]}`);
+  return n * 1000;
+})();
+/** Request headers the ui forwards (the api needs nothing else), and the response headers it passes back: those this server sets. */
+const FORWARD_IN = ["content-type", "payment-signature", "accept"];
+const FORWARD_BACK = /^(content-type|cache-control|content-disposition|content-security-policy|x-content-type-options|referrer-policy|payment-required|payment-response|retry-after|x-chainaim-[a-z-]+)$/;
 /** The registry's defaultModel, so the pick list follows config/local-models.json; chainaim/auto when it cannot be read. */
 function registryDefault(path: string): string {
   try {
@@ -210,7 +278,8 @@ function generatedMaxOutput(): number | null {
   }
 }
 
-const KEY = readFileSync(new URL("../local-gateway-key.txt", import.meta.url), "utf8").trim();
+/** C6: the gateway key file; the ui process holds no key. */
+const KEY = MODE === "ui" ? "" : readFileSync(flags["gateway-key-file"]!, "utf8").trim();
 const GATEWAY = flags.gateway!.replace(/\/+$/, "");
 const PAYWALL = flags.paywall!.replace(/\/+$/, "");
 const SPY = flags.spy!.replace(/\/+$/, "");
@@ -299,7 +368,7 @@ async function insideRoots(p: string, cfg: DataConfig): Promise<string> {
 const usableName = (file: string, cfg: DataConfig): boolean => cfg.extensions.includes(extname(file).toLowerCase()) && !cfg.exclude.some((re) => re.test(basename(file)));
 const capFor = (file: string, cfg: DataConfig): number => cfg.maxBytes[extname(file).toLowerCase()] ?? cfg.maxBytes["*"];
 /** Only this console's own address may use the data routes, so a site reached through DNS rebinding cannot read files. */
-const hostOk = (req: IncomingMessage): boolean => { const h = (req.headers.host ?? "").toLowerCase(); return h === `127.0.0.1:${PORT}` || h === `localhost:${PORT}`; };
+const hostOk = (req: IncomingMessage): boolean => ALLOWED_HOSTS.includes((req.headers.host ?? "").toLowerCase());
 const dataHeaders = { "x-content-type-options": "nosniff", "cache-control": "no-store" };
 function dataJson(res: ServerResponse, status: number, body: unknown): void {
   res.writeHead(status, { "content-type": "application/json", ...dataHeaders });
@@ -327,12 +396,14 @@ createServer(async (req, res) => {
     const [, api, name] = url.pathname.split("/");
     if (req.method === "GET" && url.pathname === "/") {
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-      if (!PAID_JOBS) { res.end(readFileSync(PAGE)); return; }
+      if (!PAGE_PAID) { res.end(readFileSync(PAGE)); return; }
       const page = readFileSync(PAGE, "utf8");
       const at = page.lastIndexOf("</body>");
       res.end(at === -1 ? page + readFileSync(PAID_JOBS_FRAGMENT, "utf8") : page.slice(0, at) + readFileSync(PAID_JOBS_FRAGMENT, "utf8") + page.slice(at));
       return;
     }
+    // ui mode (C1/C3): the page and the two browser bundles are served below; every other request goes to the api, byte for byte.
+    if (MODE === "ui" && !(req.method === "GET" && (api === "wallet.js" || api === "near-wallet.js") && !name)) return forward(req, res, url);
     // The pick list: every model the gateway serves now, plus this console's default.
     if (api === "gateway" && name === "models" && req.method === "GET") {
       const r = await fetch(GATEWAY + "/v1/models", { headers: { authorization: `Bearer ${KEY}` } });
@@ -488,7 +559,7 @@ createServer(async (req, res) => {
       catch (e) { return dataJson(res, 503, { error: `cannot read config/datasets.json: ${(e as Error).message}` }); }
       const rootId = url.searchParams.get("root") ?? "samples";
       if (!reg.roots?.[rootId]) return dataJson(res, 400, { error: `unknown root ${rootId} (known: ${Object.keys(reg.roots ?? {}).join(", ")})` });
-      const root = resolve(REPO, reg.roots[rootId]);
+      const root = resolve(REPO, DATASET_ROOTS[rootId] ?? reg.roots[rootId]);
       const allowed = config.allowedRoots.some((r) => within(root, r));
       const isData = (n: string) => config.extensions.includes(extname(n).toLowerCase()) && !config.exclude.some((re) => re.test(n));
       const filesIn = async (dir: string) => { try { return (await readdir(dir, { withFileTypes: true })).filter((e) => e.isFile() && isData(e.name)).map((e) => e.name).sort(); } catch { return null; } };
@@ -733,17 +804,25 @@ createServer(async (req, res) => {
       return;
     }
     if (api === "ledger") {
-      execFile("docker", ["exec", "ca-gateway", "sh", "-c", "tail -n 6 /data/ledger/*.jsonl"], (err, out) => {
-        const lines = err ? [] : out.trim().split("\n").filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return l; } });
+      const send = (out: string | null) => {
+        const lines = out === null ? [] : out.trim().split("\n").filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return l; } });
         json(res, 200, { lines });
-      });
+      };
+      if (LEDGER_SOURCE === "off") return send(null);
+      if (LEDGER_SOURCE.startsWith("dir:")) return send(await tailLedgerDir(LEDGER_SOURCE.slice(4), 6));
+      execFile("docker", ["exec", "ca-gateway", "sh", "-c", "tail -n 6 /data/ledger/*.jsonl"], (err, out) => send(err ? null : out));
       return;
     }
     json(res, 404, { error: "not found" });
   } catch (e) {
     json(res, 502, { error: (e as Error).message });
   }
-}).listen(PORT, "127.0.0.1", async () => {
+}).listen(PORT, flags.bind, async () => {
+  if (MODE === "ui") {
+    console.log(`[test-console] http://127.0.0.1:${PORT}  ui mode: page and browser bundles here, everything else forwarded to ${API}${PAGE_PAID ? "  (tab 03 pay box on)" : ""}${NEAR_WALLET ? `  NEAR wallet: ${NEAR_WALLET}` : ""}`);
+    return;
+  }
+  if (MODE === "api") console.log(`[test-console] api mode: listening on ${flags.bind}:${PORT}; hosts ${ALLOWED_HOSTS.join(",")}; ledger ${LEDGER_SOURCE}`);
   console.log(`[test-console] run log: ${RUN_LOG.opt.mode}${RUN_LOG.opt.mode === "off" ? "" : ` -> ${RUN_LOG.opt.dir} (keep ${RUN_LOG.opt.keepDays} days${RUN_LOG.opt.mode === "full" ? `, up to ${RUN_LOG.opt.maxRows} rows per run` : ""})`}`);
   console.log(`[test-console] http://127.0.0.1:${PORT}  default model: ${DEFAULT_MODEL}${NEAR_WALLET ? `  NEAR wallet: ${NEAR_WALLET}` : ""}`);
   // The internal listener for the paywall (ARCH-105), only with --paid-jobs on; the key is never shown.
@@ -762,3 +841,56 @@ createServer(async (req, res) => {
   if (!config) console.log(`[test-console] ${error}`);
   else console.log(`[test-console] data folders: ${config.allowedRoots.join(", ")}; default ${config.defaultFolder}${(await isFolder(config.defaultFolder)) ? "" : "  (NOT FOUND: create it)"}`);
 });
+
+/** tail -n <n> <dir>/*.jsonl, in name order, for --ledger-source dir:<path>; null when nothing can be read (as a failed docker exec). */
+async function tailLedgerDir(dir: string, n: number): Promise<string | null> {
+  let names: string[];
+  try { names = (await readdir(dir)).filter((x) => x.endsWith(".jsonl")).sort(); } catch { return null; }
+  if (!names.length) return null;
+  const parts: string[] = [];
+  for (const name of names) {
+    let text: string;
+    try { text = await readFile(join(dir, name), "utf8"); } catch { return null; }
+    const lines = text.replace(/\n$/, "").split("\n");
+    const last = lines.slice(-n).join("\n");
+    parts.push(names.length > 1 ? `==> ${join(dir, name)} <==\n${last}` : last);
+  }
+  return parts.join("\n\n") + "\n";
+}
+
+/** ui mode: one request forwarded to the api unchanged, after this process's own Host check (C4). */
+async function forward(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
+  if (!hostOk(req)) return dataJson(res, 403, { error: `open the console as http://127.0.0.1:${PORT}` });
+  const headers: Record<string, string> = {};
+  for (const name of FORWARD_IN) { const v = req.headers[name]; if (typeof v === "string") headers[name] = v; }
+  const body = req.method === "GET" || req.method === "HEAD" ? undefined : await readBodyBytes(req);
+  let r: Response;
+  try {
+    r = await fetch(API + url.pathname + url.search, { method: req.method, headers, ...(body ? { body } : {}), signal: AbortSignal.timeout(FORWARD_TIMEOUT_MS), redirect: "manual" });
+  } catch {
+    // A paid call may have been settled before the connection failed: never say "not charged" when a payment was attached.
+    return json(res, 502, { error: { message: headers["payment-signature"] ? "The connection to the console API failed after your payment was sent. Check your wallet's recent transactions before trying again." : `The console API is not answering at ${API}: start it (up.ps1) and try again.` } });
+  }
+  const back: Record<string, string> = {};
+  r.headers.forEach((value, name) => { if (FORWARD_BACK.test(name)) back[name] = value; });
+  let out: Buffer;
+  try { out = Buffer.from(await r.arrayBuffer()); }
+  catch {
+    const receipt = back["payment-response"];
+    res.writeHead(502, { "content-type": "application/json", ...(receipt ? { "payment-response": receipt } : {}) });
+    res.end(JSON.stringify({ error: { message: headers["payment-signature"] ? "The answer was lost after your payment went through. Check your wallet's recent transactions before trying again." : "Could not read the console API's answer." } }));
+    return;
+  }
+  res.writeHead(r.status, back);
+  res.end(out);
+}
+
+/** The request body's bytes, as a Uint8Array over its own ArrayBuffer (what fetch's body type takes). */
+function readBodyBytes(req: IncomingMessage): Promise<Uint8Array<ArrayBuffer>> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    req.on("data", (c: Buffer) => chunks.push(c));
+    req.on("end", () => resolve(new Uint8Array(Buffer.concat(chunks))));
+    req.on("error", reject);
+  });
+}

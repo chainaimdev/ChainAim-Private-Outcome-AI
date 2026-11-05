@@ -1,0 +1,28 @@
+{
+  "notes": "Data folders for the containers (DOCKERIZE-PLAN 4.4), read by console-api and the analyst with --data-config /app/config/data-sources.docker.json. The PC folder C:\\PRIV-AI-DATA is mounted read-only at /data/priv-ai-data and sample-data at /app/sample-data (relative = /app, the image's repository root). Otherwise as config/data-sources.example.json.",
+  "allowedRoots": [
+    "sample-data",
+    "/data/priv-ai-data"
+  ],
+  "defaultFolder": "sample-data/smb-fin/statements",
+  "defaultMode": "whole",
+  "extensions": [
+    ".csv",
+    ".tsv",
+    ".txt",
+    ".pdf"
+  ],
+  "maxBytes": {
+    ".pdf": 20000000,
+    "*": 2000000
+  },
+  "exclude": [
+    "~$*",
+    "*draft*",
+    ".*"
+  ],
+  "hideFolders": [
+    "_*"
+  ],
+  "maxFiles": 500
+}
