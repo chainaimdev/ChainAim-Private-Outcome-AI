@@ -1,0 +1,17 @@
+# Build context services/ for services/paywall/agent.Dockerfile only (BuildKit reads <Dockerfile>.dockerignore instead of a
+# .dockerignore in the context). Everything is left out except what the Dockerfile copies; no key, env file, test or data.
+*
+!paywall/package.json
+!paywall/package-lock.json
+!paywall/src
+!paywall/scripts
+!web/src/balance.ts
+!web/src/crossmark-signer.ts
+!web/src/near-payment.ts
+!web/src/xrpl-payment.ts
+!gateway/src/privacy/entities.ts
+!gateway/src/privacy/presidio.ts
+!gateway/src/privacy/residual.ts
+**/node_modules
+**/.env
+**/*.env

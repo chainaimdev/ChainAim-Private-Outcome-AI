@@ -23,7 +23,8 @@ Do the admin UI's one-time setup first (its `cmd.md`, PART 1: build the UI and c
 
 ### A1. Tools
 
-Git, Node.js 24 (22.22+), Docker Desktop running with at least 4 GB memory.
+Git, Node.js 24 (22.22+), Docker Desktop running with at least 4 GB memory. Ollama, for the local models of the team's
+model mode (a PC without Ollama: see A5).
 
 ```powershell
 node --version
@@ -85,6 +86,21 @@ Lines: `OPENROUTER_API_KEY=...` and `BEDROCK_API_KEY=...`.
 `C:\PRIV-AI-SECRETS\near-watch.env` is made by the admin UI's `cmd.md` (its `NEAR_WATCH_INGEST_KEY` is shared with
 this stack).
 
+Keep `chainaim.env` filled: after `down.ps1` no gateway container is left to take the model keys from, so `up.ps1`
+reads them from this file (it prints `WARN` naming a key it cannot find, and `-Agent on` stops without `BEDROCK_API_KEY`).
+
+**Agent mode only (optional):** the tenants' NEAR keys, copied from `near-testnet.env` into their own file without
+showing them (the owner adds `NEAR_BUYER_KEY_TESTNET`, `NEAR_T02_KEY_TESTNET`, `NEAR_T03_KEY_TESTNET` to
+`near-testnet.env` first; the relayer key is never copied):
+
+```powershell
+Get-Content C:\PRIV-AI-SECRETS\near-testnet.env | Where-Object { $_ -match '^\s*(NEAR_NETWORK|NEAR_RPC_URL_TESTNET|NEAR_USDC_CONTRACT_TESTNET|NEAR_BUYER_KEY_TESTNET|NEAR_T02_KEY_TESTNET|NEAR_T03_KEY_TESTNET)\s*=' } | Set-Content -Encoding ascii C:\PRIV-AI-SECRETS\agent-tenants.env
+Get-Content C:\PRIV-AI-SECRETS\agent-tenants.env | ForEach-Object { ($_ -split '=')[0] }
+```
+
+The second line prints names only: the three key names (and the network settings), never `NEAR_RELAYER_KEY_...`.
+Each key must be a full-access key of its tenant's account (MANUAL_SETUP.md, Tab 03 agent mode, M1).
+
 ### A5. Presidio image and the gateway's model mode (once; again only to change the mode)
 
 ```powershell
@@ -109,7 +125,11 @@ Start the admin UI first (its `cmd.md`, section B), then:
 ```
 
 `-ReplaceRunning` replaces the containers A5 made with the compose ones. `-PayTo` is the team's public XRPL TestNet
-pay-to address; it is needed only this first time (later runs read it from the running paywall).
+pay-to address; it is needed only this first time. Later runs read it from the running paywall or, after `down.ps1`,
+from `runtime\compose\last-start.json`, which `up.ps1` saves after every successful start (the gateway's model mode
+and the XRPL pay-to; public values only, no keys, git-ignored).
+
+The first start can take longer than 90 s while Presidio loads; if a service `did not answer`, see F.
 
 Expected, in order: `OK` lines for Docker, the gateway mode, the NEAR rail, `paid jobs on: prices from
 ...config\paid-jobs-prices.conf`, claims and job feed to near-watch, `compose configuration is valid`, `REPLACE` lines,
@@ -167,6 +187,26 @@ Source: `config\paid-jobs-prices.conf` (committed, the team default). To change 
 run `up.ps1` again. For one PC only, put a file with the same names at `C:\PRIV-AI-SECRETS\paid-jobs-settings.env`
 (it wins when present), or pass `-PaidJobsSettings <file>`. The start-up line `paid jobs on: prices from ...` says which
 file was used.
+
+### Tab 03 agent mode (optional; off unless `-Agent on`)
+
+An AI agent per tenant (t01, t02, t03) runs the tab 03 paid job and pays it by itself in USDC on NEAR from the tenant's
+own account (architecture-tab03-agent-mode.md). One-time: MANUAL_SETUP.md, "Tab 03 agent mode" (M1 to M4). Then:
+
+```powershell
+# 1. Admin UI repo: near-watch with a buyer card per tenant (the list is in config\near-watch-watch.conf; add the t02/t03 lines there once)
+cd C:\SATHYA\CHAINAIM3003\mcp-servers\chainaim-adminUI-NEAR
+.\up.ps1
+
+# 2. This repo: the six containers plus ca-agent, and the console UI
+cd C:\SATHYA\CHAINAIM3003\mcp-servers\chainiam-private-ai
+.\test-console\up.ps1 -Agent on -Build
+```
+
+In tab 03 tick "Pay with USDC · NEAR", then "Who pays? ( ) Me — Intear Wallet · ( ) AI agent [t02 ▾]". The agent's
+steps show live (masked, job run, quoted, signed, settled, released), then the result. "Me" is the Intear flow, unchanged.
+Without `-Agent on` (the default) there is no ca-agent container and no "Who pays?" choice. `.\test-console\down.ps1`
+stops ca-agent too.
 
 ---
 
@@ -235,8 +275,8 @@ npm --prefix services\chain-query test
 npm --prefix services\analyst test
 ```
 
-Expected (2026-11-06): 427, 274, 30, 133, 11, analyst 177 pass and 1 known failure (Windows exit crash in
-reconcile-explain). Run tests in a fresh window, never one with `NEAR_*` values loaded.
+Expected (2026-11-06, with tab 03 agent mode): 442, 292, 30, 133, 11, analyst 177 pass and 1 known failure (Windows
+exit crash in reconcile-explain). Run tests in a fresh window, never one with `NEAR_*` values loaded.
 
 ---
 
@@ -247,7 +287,11 @@ reconcile-explain). Run tests in a fresh window, never one with `NEAR_*` values 
 | One service's log | `docker logs ca-<name> --tail 40` (gateway, paywall, console-api, analyst, chain-query, presidio) |
 | `STOP port 8740 / 8750 / 8730 is in use` | An old `start-ui.ps1` window (analyst, chain-query, console) is open: close it, run `up.ps1` again |
 | `STOP these containers were started by stack.ps1 / switch-models.ps1` | Run `.\test-console\up.ps1 -ReplaceRunning` |
-| `STOP no ca-gateway to take the model mode from` | Run A5 (`switch-models.ps1 -To ollama-cpu-8gb-all`), then `up.ps1 -ReplaceRunning` |
+| `STOP no ca-gateway to take the model mode from, and no saved last start` | Only before the first successful start: run A5 (`switch-models.ps1 -To ollama-cpu-8gb-all`), then `up.ps1 -ReplaceRunning` |
+| `FAIL gateway did not answer ... within 90 s` | Usually Presidio still loading. `docker ps --filter name=ca-presidio` until `(healthy)`, then `.\test-console\up.ps1 -WaitSec 180` (add `-Agent on` if you use it) |
+| `ca-presidio` `(unhealthy)`, its log (`docker logs --tail 30 ca-presidio`) stops at `Control socket listening` with no Presidio banner | Its first start hung: `docker restart ca-presidio`, wait until `(healthy)`, then `up.ps1 -WaitSec 180` |
+| `switch-models.ps1`: `Presidio ... did not answer within 120000 ms` | Presidio is not running: `docker compose up -d presidio`, wait until `(healthy)`, run `switch-models.ps1` again |
+| `WARN OPENROUTER_API_KEY / BEDROCK_API_KEY is not in ...chainaim.env` | After `down.ps1` the keys come from `C:\PRIV-AI-SECRETS\chainaim.env` only (A4): add them there |
 | `HTTP 401` from the gateway | The key file changed after the gateway was made: do not regenerate it; run `switch-models.ps1` again, then `up.ps1 -ReplaceRunning` |
 | Paid-job prices not what you expect | Read the `paid jobs on: prices from ...` line; a file at `C:\PRIV-AI-SECRETS\paid-jobs-settings.env` overrides the team file |
 | Admin UI page does not open | Use `http://127.0.0.1:8800`, not `localhost` |

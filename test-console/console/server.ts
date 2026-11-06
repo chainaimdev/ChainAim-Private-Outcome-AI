@@ -97,6 +97,15 @@
  *   --dataset-root NAME=PATH   replace one root of config/datasets.json (repeatable), e.g. private=/data/priv-ai-data/chainaim3003
  *                              when the data is mounted at another path; default none = the file's own roots
  *
+ *   Tab 03 agent mode (architecture-tab03-agent-mode.md ARCH-307/308; off unless --agent-service, which needs --paid-jobs on):
+ *   a tenant's AI agent (services/paywall/scripts/agent-jobs.ts) runs the paid job and pays it from the tenant's NEAR
+ *   account. GET /agent/config lists the agent's tenants; POST /agent/crossask {folder, question, model?, answerModel?,
+ *   phrase?, sql?, tenant} is relayed to the agent's POST /run and its event stream passed back byte for byte as it
+ *   arrives. This server adds no key and logs only {route:"agent", tenant, jobId, status, ms}.
+ *   --agent-service URL        the agent service, e.g. http://agent:8760 (default unset = no /agent routes)
+ *   --agent-forward-timeout-sec N  one agent run through this server (default 330 = the agent's run timeout + 30); in ui
+ *                              mode the same limit applies to the streamed pass-through of POST /agent/crossask
+ *
  *   Pages are served at /view/<id> with a sandbox Content-Security-Policy: their scripts run in an opaque
  *   origin and connect-src is 'none', so model-written HTML cannot call this console, the gateway or any
  *   other address. Pages live in memory only (they can hold statement data) and vanish on restart.
@@ -174,6 +183,8 @@ const { values: flags } = parseArgs({
     "gateway-key-file": { type: "string", default: fileURLToPath(new URL("../local-gateway-key.txt", import.meta.url)) },
     "paid-jobs-page": { type: "string" },
     "dataset-root": { type: "string", multiple: true },
+    "agent-service": { type: "string" },
+    "agent-forward-timeout-sec": { type: "string", default: "330" },
   },
 });
 /** DOCKERIZE-PLAN C1: all (today), ui (page + forwarding) or api (backend in a container). */
@@ -202,7 +213,7 @@ for (const pair of flags["dataset-root"] ?? []) {
   if (!m) throw new Error(`--dataset-root must be NAME=PATH, got ${pair}`);
   DATASET_ROOTS[m[1]] = m[2];
 }
-function positiveInt(name: "view-max" | "view-ttl-min" | "view-max-bytes" | "paid-timeout-sec" | "crossask-timeout-sec" | "crossask-sql-retries" | "crossask-answer-rows", min = 1): number {
+function positiveInt(name: "view-max" | "view-ttl-min" | "view-max-bytes" | "paid-timeout-sec" | "crossask-timeout-sec" | "crossask-sql-retries" | "crossask-answer-rows" | "agent-forward-timeout-sec", min = 1): number {
   const n = Number(flags[name]);
   if (!Number.isInteger(n) || n < min) throw new Error(`--${name} must be a positive integer, got ${flags[name]}`);
   return n;
@@ -219,6 +230,14 @@ const NEAR_WALLET_BUNDLE = flags["near-wallet-bundle"]!;
 /** Paid jobs on tab 03 (ARCH-104/105/114): undefined unless --paid-jobs on; start-up stops here naming any missing flag. Never in ui mode. */
 const PAID_JOBS = MODE === "ui" ? undefined : paidJobsConfig(flags, process.env);
 if (PAID_JOBS && !NEAR_WALLET) throw new Error("--paid-jobs on needs --near-wallet intear-wallet: paid jobs are paid in USDC on NEAR from the page");
+/** Tab 03 agent mode (ARCH-307): the agent service; unset (default) = no /agent routes. Never in ui mode (it forwards /agent/* to --api). */
+const AGENT_SERVICE = flags["agent-service"]?.replace(/\/+$/, "");
+if (AGENT_SERVICE !== undefined) {
+  if (MODE === "ui") throw new Error("--agent-service belongs to the api process, not --mode ui (the ui forwards /agent/* to --api)");
+  if (!URL.canParse(AGENT_SERVICE) || !/^https?:$/.test(new URL(AGENT_SERVICE).protocol)) throw new Error(`--agent-service must be an http(s) URL, got ${flags["agent-service"]}`);
+  if (!PAID_JOBS) throw new Error("--agent-service needs --paid-jobs on: the agent runs and pays the paid job (/jobs/crossask)");
+}
+const AGENT_FORWARD_TIMEOUT_MS = positiveInt("agent-forward-timeout-sec") * 1000;
 /** The paid-job feed to near-watch (adminUI ARCH-205): undefined unless --job-feed-url; start-up stops here on a bad flag or key. */
 const JOB_FEED_CONFIG = MODE === "ui" ? undefined : jobFeedConfig(flags, process.env, PAID_JOBS !== undefined);
 const JOB_FEED = JOB_FEED_CONFIG ? new JobFeed(JOB_FEED_CONFIG) : undefined;
@@ -402,6 +421,8 @@ createServer(async (req, res) => {
       res.end(at === -1 ? page + readFileSync(PAID_JOBS_FRAGMENT, "utf8") : page.slice(0, at) + readFileSync(PAID_JOBS_FRAGMENT, "utf8") + page.slice(at));
       return;
     }
+    // ui mode, agent mode's run (ARCH-308): streamed through as it arrives, not buffered. Every other route is forward() below.
+    if (MODE === "ui" && req.method === "POST" && url.pathname === "/agent/crossask") return forwardStream(req, res, url);
     // ui mode (C1/C3): the page and the two browser bundles are served below; every other request goes to the api, byte for byte.
     if (MODE === "ui" && !(req.method === "GET" && (api === "wallet.js" || api === "near-wallet.js") && !name)) return forward(req, res, url);
     // The pick list: every model the gateway serves now, plus this console's default.
@@ -715,6 +736,14 @@ createServer(async (req, res) => {
       res.end(out);
       return;
     }
+    // ---- Tab 03 agent mode (ARCH-307): only with --agent-service ---------------------------------------------------
+    if (AGENT_SERVICE && api === "agent" && name === "config" && req.method === "GET") {
+      if (!hostOk(req)) return dataJson(res, 403, { error: `open the console as http://127.0.0.1:${PORT}` });
+      const t = await agentTenants();
+      if ("error" in t) return dataJson(res, 503, { error: t.error });
+      return dataJson(res, 200, { network: t.network, tenants: t.tenants });
+    }
+    if (AGENT_SERVICE && api === "agent" && name === "crossask" && req.method === "POST") return relayAgent(req, res);
     // ---- Paid chat ---------------------------------------------------------------------------------------------
     // The browser bundle that pays from the visitor's Crossmark wallet (services/web/public/wallet.js).
     if (api === "wallet.js" && req.method === "GET") {
@@ -823,6 +852,7 @@ createServer(async (req, res) => {
     return;
   }
   if (MODE === "api") console.log(`[test-console] api mode: listening on ${flags.bind}:${PORT}; hosts ${ALLOWED_HOSTS.join(",")}; ledger ${LEDGER_SOURCE}`);
+  if (AGENT_SERVICE) console.log(`[test-console] agent mode on: /agent/config and /agent/crossask relayed to ${AGENT_SERVICE} (up to ${AGENT_FORWARD_TIMEOUT_MS / 1000} s per run)`);
   console.log(`[test-console] run log: ${RUN_LOG.opt.mode}${RUN_LOG.opt.mode === "off" ? "" : ` -> ${RUN_LOG.opt.dir} (keep ${RUN_LOG.opt.keepDays} days${RUN_LOG.opt.mode === "full" ? `, up to ${RUN_LOG.opt.maxRows} rows per run` : ""})`}`);
   console.log(`[test-console] http://127.0.0.1:${PORT}  default model: ${DEFAULT_MODEL}${NEAR_WALLET ? `  NEAR wallet: ${NEAR_WALLET}` : ""}`);
   // The internal listener for the paywall (ARCH-105), only with --paid-jobs on; the key is never shown.
@@ -883,6 +913,102 @@ async function forward(req: IncomingMessage, res: ServerResponse, url: URL): Pro
   }
   res.writeHead(r.status, back);
   res.end(out);
+}
+
+/** The tenants the agent service pays for now (its GET /tenants): ids, names and NEAR accounts only. */
+async function agentTenants(): Promise<{ network: string; tenants: { id: string; name: string; accountId: string }[] } | { error: string }> {
+  try {
+    const r = await fetch(`${AGENT_SERVICE}/tenants`, { signal: AbortSignal.timeout(8000) });
+    const j = (await r.json()) as { network?: unknown; tenants?: unknown };
+    if (!r.ok || typeof j.network !== "string" || !Array.isArray(j.tenants)) throw new Error(`HTTP ${r.status}`);
+    const tenants = (j.tenants as Record<string, unknown>[]).filter((t) => typeof t?.id === "string" && typeof t.name === "string" && typeof t.accountId === "string")
+      .map((t) => ({ id: t.id as string, name: t.name as string, accountId: t.accountId as string }));
+    return { network: j.network, tenants };
+  } catch {
+    return { error: `the agent service is not answering at ${AGENT_SERVICE}: start it (up.ps1 -Agent on); nothing was run or paid` };
+  }
+}
+
+/** POST /agent/crossask in api/all mode (ARCH-307): the same body checks as /jobs/crossask plus the tenant, then the agent's run relayed as it arrives. */
+async function relayAgent(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  if (!hostOk(req)) return dataJson(res, 403, { error: `open the console as http://127.0.0.1:${PORT}` });
+  if (!/^application\/json\b/i.test(req.headers["content-type"] ?? "")) return dataJson(res, 415, { error: "send application/json" });
+  let b: Record<string, unknown>;
+  try { b = JSON.parse(await readBody(req)); } catch { return dataJson(res, 400, { error: "body must be JSON" }); }
+  if (typeof b !== "object" || b === null) return dataJson(res, 400, { error: "body must be a JSON object" });
+  const model = typeof b.model === "string" && b.model ? b.model : DEFAULT_MODEL;
+  if (!/^[\w.-]+\/[\w.:-]+$/.test(model)) return dataJson(res, 400, { error: `model must look like provider/name, got ${model}` });
+  if (typeof b.folder !== "string" || typeof b.question !== "string" || !b.question.trim()) return dataJson(res, 400, { error: "folder and question are required" });
+  const answerModel = typeof b.answerModel === "string" && b.answerModel ? b.answerModel : undefined;
+  if (answerModel && !/^[\w.-]+\/[\w.:-]+$/.test(answerModel)) return dataJson(res, 400, { error: `answerModel must look like provider/name, got ${answerModel}` });
+  const known = await agentTenants();
+  if ("error" in known) return dataJson(res, 503, { error: known.error });
+  if (typeof b.tenant !== "string" || !known.tenants.some((t) => t.id === b.tenant)) return dataJson(res, 400, { error: `unknown tenant ${String(b.tenant)} (the agent pays for: ${known.tenants.map((t) => t.id).join(", ")})` });
+  const tenant = b.tenant;
+  const run = { tenant, folder: b.folder, question: b.question, model, ...(answerModel ? { answerModel } : {}), phrase: b.phrase === "none" ? "none" : "llm", ...(typeof b.sql === "string" && b.sql.trim() ? { sql: b.sql } : {}) };
+  // A hang-up here is passed on: the agent cancels a run that has not signed yet, and completes one that has.
+  const hangUp = new AbortController();
+  res.on("close", () => { if (!res.writableEnded) hangUp.abort(); });
+  const started = Date.now();
+  let r: Response;
+  try {
+    r = await fetch(`${AGENT_SERVICE}/run`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(run), signal: AbortSignal.any([hangUp.signal, AbortSignal.timeout(AGENT_FORWARD_TIMEOUT_MS)]) });
+  } catch {
+    return dataJson(res, 502, { error: `the agent service is not answering at ${AGENT_SERVICE}; nothing was run or paid` });
+  }
+  // Only the job id and the last step's name are read from the stream, for the log line; the stream itself passes unchanged.
+  let tail = "", jobId: string | null = null, status: string | null = null;
+  const sniff = (text: string) => {
+    tail = (tail + text).slice(-4096);
+    jobId ??= /"jobId":"([0-9a-f]{32})"/.exec(tail)?.[1] ?? null;
+    for (const m of tail.matchAll(/^event: ([a-z_]+)$/gm)) status = m[1];
+  };
+  await pipeStream(r, res, { "content-type": r.headers.get("content-type") ?? "application/json", "cache-control": "no-store", "x-content-type-options": "nosniff" },
+    "the connection to the agent service broke during the run; if the payment was signed, check the tenant account's recent transactions", sniff);
+  // Tenant, job id, last step and timing only: never the question, the result or a key.
+  console.log(JSON.stringify({ ts: new Date().toISOString(), route: "agent", tenant, jobId, status: status ?? `http-${r.status}`, ms: Date.now() - started }));
+}
+
+/** ui mode (ARCH-308): POST /agent/crossask forwarded like forward(), with the response streamed to the browser as it arrives. */
+async function forwardStream(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
+  if (!hostOk(req)) return dataJson(res, 403, { error: `open the console as http://127.0.0.1:${PORT}` });
+  const headers: Record<string, string> = {};
+  for (const name of FORWARD_IN) { const v = req.headers[name]; if (typeof v === "string") headers[name] = v; }
+  const body = await readBodyBytes(req);
+  const hangUp = new AbortController();
+  res.on("close", () => { if (!res.writableEnded) hangUp.abort(); });
+  let r: Response;
+  try {
+    r = await fetch(API + url.pathname + url.search, { method: "POST", headers, body, signal: AbortSignal.any([hangUp.signal, AbortSignal.timeout(AGENT_FORWARD_TIMEOUT_MS)]), redirect: "manual" });
+  } catch {
+    return json(res, 502, { error: { message: `The console API is not answering at ${API}: start it (up.ps1) and try again.` } });
+  }
+  const back: Record<string, string> = {};
+  r.headers.forEach((value, name) => { if (FORWARD_BACK.test(name)) back[name] = value; });
+  await pipeStream(r, res, back, "the connection to the console API broke during the agent's run; if the payment was signed, check the tenant account's recent transactions");
+}
+
+/**
+ * Writes the status and headers at once, then each chunk of the body as it arrives. When the upstream breaks in the
+ * middle of an event stream, one last `error` event says so (the page would otherwise wait for a step that never comes).
+ */
+async function pipeStream(r: Response, res: ServerResponse, headers: Record<string, string>, brokenReason: string, onText?: (text: string) => void): Promise<void> {
+  res.writeHead(r.status, headers);
+  res.flushHeaders();
+  if (!r.body) { res.end(); return; }
+  const decoder = new TextDecoder();
+  const reader = r.body.getReader();
+  try {
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      onText?.(decoder.decode(value, { stream: true }));
+      if (!res.destroyed) res.write(value);
+    }
+  } catch {
+    if (!res.destroyed && /^text\/event-stream\b/i.test(headers["content-type"] ?? "")) res.write(`event: error\ndata: ${JSON.stringify({ reason: brokenReason })}\n\n`);
+  }
+  if (!res.writableEnded) res.end();
 }
 
 /** The request body's bytes, as a Uint8Array over its own ArrayBuffer (what fetch's body type takes). */

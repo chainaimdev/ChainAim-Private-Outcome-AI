@@ -34,6 +34,25 @@ cd C:\SATHYA\CHAINAIM3003\mcp-servers\chainiam-private-ai
 
 Stop: `.\test-console\down.ps1` here, then `.\down.ps1` in the admin UI repo.
 
+Tab 03 agent mode (optional, off by default): `.\test-console\up.ps1 -Agent on` adds `ca-agent`, and tab 03 offers
+"Who pays? Me — Intear Wallet / AI agent" ([cmd.md](cmd.md), "Tab 03 agent mode").
+
+## What a teammate needs
+
+The code, the team prices and the watch list are in the two repos. Keys and data are **not** (by design): the owner
+shares the values privately, each teammate puts them in `C:\PRIV-AI-SECRETS` (names in [cmd.md](cmd.md) A4).
+
+| Need | For | Where |
+|---|---|---|
+| Git, Node.js 24, Docker Desktop (4 GB+) | everything | installed on the PC |
+| Ollama with the team's local models | the default model mode (`ollama-cpu-8gb-all`); without it, see cmd.md A5 | installed on the PC |
+| `near-testnet.env`: NEAR pay-to, relayer account and key | every NEAR payment (the relayer pays the gas) | shared by the owner |
+| `chainaim.env`: `OPENROUTER_API_KEY`, `BEDROCK_API_KEY` | hosted and Bedrock models, and agent mode | shared by the owner |
+| `paid-jobs.env`, `near-watch.env` | paid jobs, payment claims, job feed | generated on the PC (cmd.md A4, admin UI cmd.md A3) |
+| An Intear Wallet TestNet account with TestNet USDC | paying by hand ("Me — Intear Wallet") | wallet.intear.tech, USDC from faucet.circle.com |
+| `agent-tenants.env`: the tenants' NEAR keys | agent mode only | shared by the owner (cmd.md A4) |
+| Data files in `C:\PRIV-AI-DATA` | tab 03 on your own data | copied by the teammate |
+
 Everything below is what runs and why.
 
 ## What runs where
@@ -51,6 +70,7 @@ The backend runs in Docker (one `docker-compose.yml`); only the 8730 UI runs on 
 | analyst | `ca-analyst` | 127.0.0.1:8740 | DuckDB relations and read-only SQL on your data folder |
 | chain-query | `ca-chain-query` | 127.0.0.1:8750 | Read-only blockchain queries for the "Blockchain queries" panel |
 | near-watch | `ca-near-watch` (from chainaim-adminUI-NEAR) | 127.0.0.1:8790 | Receives payment claims and job events; reconciles them with NEAR |
+| agent (optional) | `ca-agent`, only with `up.ps1 -Agent on` | 127.0.0.1:8760 | Tab 03 agent mode: masks the question, asks a Strands agent on Bedrock, runs the paid job and pays it from the tenant's NEAR account |
 
 ```
 Browser ── 8730 UI (PC) ──▶ console-api ──▶ analyst            (exact numbers from your files)
@@ -108,7 +128,7 @@ npm --prefix services\chain-query test
 npm --prefix services\analyst test
 ```
 
-Expected on 2026-11-06: 427, 274, 30, 133, 11, and analyst 177 pass with 1 known failure (a Windows-only crash when
+Expected on 2026-11-06 (with tab 03 agent mode): 442, 292, 30, 133, 11, and analyst 177 pass with 1 known failure (a Windows-only crash when
 the reconcile-explain test process exits; the check itself passes). `npm test` first runs a dependency check that has 5
 known, older findings, so the first line above runs the same suites without it.
 

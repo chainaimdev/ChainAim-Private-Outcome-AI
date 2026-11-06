@@ -10,6 +10,9 @@ this PC (server.ts --mode ui, which forwards every call to the console API in Do
                                                 chain-query, console)
   .\test-console\up.ps1 -Test                   also the OpenRouter stand-in (compose profile "test")
   .\test-console\up.ps1 -PaidJobs off           tab 03 free only (no paid-job settings needed)
+  .\test-console\up.ps1 -Agent on               also tab 03 agent mode (architecture-tab03-agent-mode.md ARCH-312): the agent
+                                                container ca-agent (compose profile "agent"), and the console API relays
+                                                /agent/* to it. Needs -PaidJobs on. Default off: nothing changes.
   .\test-console\down.ps1                       stop the UI and the compose stack (volumes kept)
 
 What it takes, from files outside the repository (NAME=value; values are never printed or written anywhere):
@@ -25,9 +28,21 @@ What it takes, from files outside the repository (NAME=value; values are never p
                        (default C:\PRIV-AI-SECRETS\near-watch.env; "none" = no claims and no job feed)
   -SecretsFile         the gateway's model keys OPENROUTER_API_KEY, BEDROCK_API_KEY (as switch-models.ps1); when a key
                        is not in it, the one the running ca-gateway holds is kept (default C:\PRIV-AI-SECRETS\chainaim.env)
+  -AgentEnvFile        -Agent on only: the agent's env file, mounted read-only into ca-agent and read by Node's --env-file
+                       (default C:\PRIV-AI-SECRETS\agent-tenants.env; MANUAL_SETUP.md M2). Checked to exist, never read here.
+                       The Bedrock key the agent uses is BEDROCK_API_KEY (from -SecretsFile or the running ca-gateway, as
+                       above), passed to ca-agent by name as AWS_BEARER_TOKEN_BEDROCK.
+  -AgentTenants, -AgentRegion, -AgentModelId, -AgentTimeoutSec, -AgentPort   the agent's tenants, Bedrock region and
+                       model, run timeout and port (defaults t01,t02,t03 / ap-southeast-2 / nvidia.nemotron-nano-3-30b / 300 / 8760)
 The gateway key is test-console\local-gateway-key.txt, mounted as a compose secret (as the console reads it today).
 The gateway runs the command the current ca-gateway runs (its model mode, from switch-models.ps1): change the mode with
 switch-models.ps1 first, or after (it then owns ca-gateway again).
+  -StateFile           after each successful start the gateway command and the XRPL pay-to (public values, no keys) are
+                       saved here, and used only when no ca-gateway / ca-paywall is left to read them from (after
+                       down.ps1). Default runtime\compose\last-start.json (git-ignored). Model keys are never saved.
+A container counts as this stack's own only when compose created it (labels com.docker.compose.project and
+com.docker.compose.config-hash); one run by hand from a compose-built image (switch-models.ps1) is replaced by
+-ReplaceRunning.
 ASCII only (Windows PowerShell 5.1).
 #>
 param(
@@ -55,7 +70,15 @@ param(
   [string]$ModelsFile = "config/local-models.cpu-all.json",
   [int]$UiPort = 8730,
   [int]$ApiPort = 8735,
-  [int]$WaitSec = 90
+  [int]$WaitSec = 90,
+  [ValidateSet("on", "off")][string]$Agent = "off",
+  [string]$AgentEnvFile = "C:\PRIV-AI-SECRETS\agent-tenants.env",
+  [string]$AgentTenants = "t01,t02,t03",
+  [string]$AgentRegion = "ap-southeast-2",
+  [string]$AgentModelId = "nvidia.nemotron-nano-3-30b",
+  [int]$AgentTimeoutSec = 300,
+  [int]$AgentPort = 8760,
+  [string]$StateFile = "runtime\compose\last-start.json"
 )
 $ErrorActionPreference = "Stop"
 $repo = [IO.Path]::GetFullPath((Split-Path $PSScriptRoot -Parent))
@@ -96,6 +119,10 @@ function Get-ContainerEnv([string]$name) {
 }
 $set = New-Object System.Collections.Generic.List[string]   # env names set in this process, cleared at the end
 function Set-Secret([string]$name, [string]$value) { Set-Item -Path "env:$name" -Value $value; $set.Add($name) | Out-Null }
+# The last successful start (public values only), used when no container is left to read them from.
+$statePath = if ([IO.Path]::IsPathRooted($StateFile)) { $StateFile } else { Join-Path $repo $StateFile }
+$saved = $null
+if (Test-Path $statePath) { try { $saved = Get-Content -Raw $statePath | ConvertFrom-Json } catch { Say "WARN" "$statePath is not valid JSON; not used" } }
 
 try {
   # 1. Docker, network, ledger volume
@@ -106,7 +133,7 @@ try {
   if ((Invoke-Quiet @("volume", "inspect", "chainaim-test-ledger")).Code -ne 0) { if ($DryRun) { Say "INFO" "volume chainaim-test-ledger would be created" } else { & docker volume create chainaim-test-ledger | Out-Null; Say "OK" "created volume chainaim-test-ledger" } }
 
   # 2. Containers with the compose names that compose does not own (started by stack.ps1 / switch-models.ps1)
-  $names = @("ca-presidio", "ca-gateway", "ca-paywall", "ca-analyst", "ca-chain-query", "ca-console-api") + $(if ($Test) { @("ca-openrouter-stub") } else { @() })
+  $names = @("ca-presidio", "ca-gateway", "ca-paywall", "ca-analyst", "ca-chain-query", "ca-console-api") + $(if ($Test) { @("ca-openrouter-stub") } else { @() }) + $(if ($Agent -eq "on") { @("ca-agent") } else { @() })
   $foreign = @()
   foreach ($n in $names) {
     # Labels as JSON: Windows PowerShell 5.1 drops quotes inside a native argument, so no quoted template here.
@@ -114,22 +141,28 @@ try {
     if ($r.Code -ne 0) { continue }
     $labels = if ($r.Out -and $r.Out -ne "null") { ConvertFrom-Json -InputObject $r.Out } else { $null }
     $project = if ($labels) { $labels.'com.docker.compose.project' } else { $null }
-    if ($project -ne "chainaim-private-ai") { $foreign += $n }
+    # Only compose puts config-hash on a container it created. A container run by hand from a compose-built image
+    # (switch-models.ps1's ca-gateway) inherits the image's project and service labels, but not this one.
+    $hash = if ($labels) { $labels.'com.docker.compose.config-hash' } else { $null }
+    if ($project -ne "chainaim-private-ai" -or -not $hash) { $foreign += $n }
   }
 
   # 3. The gateway's current mode: the command switch-models.ps1 gave ca-gateway, kept exactly.
   $gwCmd = $null
+  $gwFrom = "ca-gateway"
   $r = Invoke-Quiet @("inspect", "--format", "{{json .Config.Cmd}}", "ca-gateway")
   # Windows PowerShell 5.1 hands a parsed JSON array over as ONE object; foreach walks its items (as stack.ps1 does).
   if ($r.Code -eq 0 -and $r.Out -and $r.Out -ne "null") { $parsed = ConvertFrom-Json -InputObject $r.Out; $gwCmd = [string[]]@(foreach ($x in $parsed) { [string]$x }) }
-  if (-not $gwCmd) { Stop-Here "no ca-gateway to take the model mode from. Run .\test-console\switch-models.ps1 -To <mode> once (it asks for the model keys), then run this again." }
-  Say "OK" "gateway mode from ca-gateway: $((@($gwCmd) | Where-Object { $_ -like '/config/*' }) -join ' ')"
+  if (-not $gwCmd -and $saved -and $saved.gatewayCmd) { $gwCmd = [string[]]@(foreach ($x in $saved.gatewayCmd) { [string]$x }); $gwFrom = "the last start ($statePath)" }
+  if (-not $gwCmd) { Stop-Here "no ca-gateway to take the model mode from, and no saved last start ($statePath). Run .\test-console\switch-models.ps1 -To <mode> once (it asks for the model keys), then run this again." }
+  Say "OK" "gateway mode from ${gwFrom}: $((@($gwCmd) | Where-Object { $_ -like '/config/*' }) -join ' ')"
   $gwEnv = Get-ContainerEnv "ca-gateway"
   $fromFile = @{}
   if (Test-Path $SecretsFile) { $fromFile = (Read-EnvFile $SecretsFile '^(OPENROUTER_API_KEY|BEDROCK_API_KEY)$').Values }
   foreach ($k in @("OPENROUTER_API_KEY", "BEDROCK_API_KEY")) {
     if ($fromFile[$k]) { Set-Secret $k $fromFile[$k]; Say "OK" "$k from $SecretsFile" }
     elseif ($gwEnv[$k]) { Set-Secret $k $gwEnv[$k]; Say "OK" "$k kept from the running ca-gateway (not printed)" }
+    elseif ($gwFrom -ne "ca-gateway" -and -not (Get-Item -Path "env:$k" -ErrorAction SilentlyContinue)) { Say "WARN" "$k is not in $SecretsFile and no ca-gateway holds it: models that need it will not answer (add it to $SecretsFile, or run switch-models.ps1)" }
   }
   $keyFile = Join-Path $PSScriptRoot "local-gateway-key.txt"
   if (-not (Test-Path $keyFile)) { Stop-Here "Missing $keyFile (the gateway key the console, gateway and paywall share)." }
@@ -140,6 +173,7 @@ try {
   $pay = $PayTo
   if (-not $pay) { $pay = [Environment]::GetEnvironmentVariable($payName) }
   if (-not $pay) { $pay = (Get-ContainerEnv "ca-paywall")[$payName] }
+  if (-not $pay -and $saved -and $saved.xrplPayTo -and $saved.xrplPayTo.$XrplNetwork) { $pay = [string]$saved.xrplPayTo.$XrplNetwork; Say "INFO" "XRPL pay-to from the last start ($statePath)" }
   if (-not $pay) { Stop-Here "No ${payName}: pass -PayTo r..., or set it in this window (stack.ps1 uses the same)." }
   if ($pay -notmatch '^r[1-9A-HJ-NP-Za-km-z]{24,34}$') { Stop-Here "Pay-to '$pay' is not an XRPL classic address." }
   Set-Secret "XRPL_NETWORK" $XrplNetwork; Set-Secret $payName $pay
@@ -195,21 +229,40 @@ try {
     if ($ps["JOB_MAX"]) { $consoleCmd += "--job-max=$($ps['JOB_MAX'])" }
     if ($ingest -and $JobFeedUrl -ne "none") { $consoleCmd += "--job-feed-url=$JobFeedUrl" }
   }
+  # Tab 03 agent mode (ARCH-311, ARCH-312): only with -Agent on; without it the commands file is exactly as before.
+  $agentCmd = $null
+  if ($Agent -eq "on") {
+    if ($PaidJobs -ne "on") { Stop-Here "-Agent on needs -PaidJobs on: the agent runs and pays the paid job" }
+    if (-not (Test-Path $AgentEnvFile)) { Stop-Here "-AgentEnvFile $AgentEnvFile does not exist: create it with the tenants' NEAR keys (MANUAL_SETUP.md, Tab 03 agent mode, M2)" }
+    if (-not $env:BEDROCK_API_KEY) { Stop-Here "-Agent on needs BEDROCK_API_KEY (in $SecretsFile, or held by the running ca-gateway) for the agent's Bedrock model" }
+    if ($AgentTenants -notmatch '^[A-Za-z0-9_-]+(,[A-Za-z0-9_-]+)*$') { Stop-Here "-AgentTenants must be tenant ids separated by commas, e.g. t01,t02,t03" }
+    if ($AgentTimeoutSec -lt 1) { Stop-Here "-AgentTimeoutSec must be at least 1" }
+    Set-Secret "AWS_BEARER_TOKEN_BEDROCK" $env:BEDROCK_API_KEY
+    Set-Secret "AGENT_ENV_FILE" ($AgentEnvFile.Replace("\", "/"))
+    $consoleCmd += @("--agent-service=http://agent:$AgentPort", "--agent-forward-timeout-sec=$($AgentTimeoutSec + 30)",
+      "--allowed-hosts=127.0.0.1:$ApiPort,localhost:$ApiPort,console-api:$ApiPort")
+    $agentCmd = @("--host=0.0.0.0", "--port=$AgentPort", "--allowed-hosts=agent:$AgentPort,127.0.0.1:$AgentPort,localhost:$AgentPort",
+      "--tenants=/app/rig/tenants", "--agent-tenants=$AgentTenants", "--console=http://console-api:$ApiPort", "--paywall=http://paywall:8080",
+      "--region=$AgentRegion", "--model-id=$AgentModelId", "--aws-auth=bearer", "--presidio-url=http://presidio.railway.internal:3000",
+      "--run-timeout-sec=$AgentTimeoutSec")
+    Say "OK" "agent mode on: tenants $AgentTenants, Bedrock $AgentModelId in $AgentRegion; keys from $AgentEnvFile (mounted, not read here); Bedrock key passed by name"
+  }
   $port = "127.0.0.1:${ApiPort}:${ApiPort}"
   $override = [ordered]@{ services = [ordered]@{ gateway = [ordered]@{ command = @($gwCmd) }; "console-api" = [ordered]@{ command = $consoleCmd; ports = @($port) } } }
+  if ($agentCmd) { $override.services["agent"] = [ordered]@{ command = $agentCmd; ports = @("127.0.0.1:${AgentPort}:${AgentPort}") } }
   $outDir = Join-Path $repo "runtime\compose"
   New-Item -ItemType Directory -Force -Path $outDir | Out-Null
   $cmdFile = Join-Path $outDir "commands.yml"
   # JSON is YAML: compose reads this file as an override of docker-compose.yml.
   [IO.File]::WriteAllText($cmdFile, ($override | ConvertTo-Json -Depth 6), (New-Object Text.UTF8Encoding($false)))
   Say "OK" "wrote $cmdFile (commands only, no secrets)"
-  $composeArgs = @("compose", "-f", "docker-compose.yml", "-f", $cmdFile) + $(if ($Test) { @("--profile", "test") } else { @() })
+  $composeArgs = @("compose", "-f", "docker-compose.yml", "-f", $cmdFile) + $(if ($Test) { @("--profile", "test") } else { @() }) + $(if ($agentCmd) { @("--profile", "agent") } else { @() })
   $check = Invoke-Quiet ($composeArgs + @("config", "-q"))
   if ($check.Code -ne 0) { Stop-Here "docker compose rejected the configuration; run: docker compose -f docker-compose.yml -f runtime\compose\commands.yml config -q   (do NOT run it without -q: it prints the values)" }
   Say "OK" "compose configuration is valid"
 
   # 6. Ports this stack publishes must be free, or held by this stack's own containers
-  foreach ($p in @(8740, 8750, $ApiPort)) {
+  foreach ($p in @(8740, 8750, $ApiPort) + $(if ($agentCmd) { @($AgentPort) } else { @() })) {
     $own = (Invoke-Quiet @("ps", "--filter", "label=com.docker.compose.project=chainaim-private-ai", "--filter", "publish=$p", "-q")).Out
     if ((Listening $p) -and -not $own) { Stop-Here "port $p is in use on this PC (the analyst / chain-query / console windows of start-ui.ps1?). Close that window, then run this again." }
   }
@@ -225,7 +278,15 @@ try {
         (Wait-Http "http://127.0.0.1:8740/healthz" @{} "analyst") -and
         (Wait-Http "http://127.0.0.1:8750/healthz" @{} "chain-query") -and
         (Wait-Http "http://127.0.0.1:$ApiPort/data/config" @{} "console-api")
+  if ($ok -and $agentCmd) { $ok = Wait-Http "http://127.0.0.1:$AgentPort/healthz" @{} "agent" }
   if (-not $ok) { Stop-Here "a service did not come up: docker compose logs --tail 40 <service>" }
+  # Saved for the next start (public values only, no keys): read only when no ca-gateway / ca-paywall is left.
+  $newState = [ordered]@{ note = "Written by test-console\up.ps1 after a successful start. Public values only: the gateway command and the XRPL pay-to. No keys."; gatewayCmd = @($gwCmd); xrplPayTo = [ordered]@{} }
+  if ($saved -and $saved.xrplPayTo) { foreach ($kv in $saved.xrplPayTo.PSObject.Properties) { $newState.xrplPayTo[$kv.Name] = [string]$kv.Value } }
+  $newState.xrplPayTo[$XrplNetwork] = $pay
+  New-Item -ItemType Directory -Force -Path (Split-Path $statePath -Parent) | Out-Null
+  [IO.File]::WriteAllText($statePath, ($newState | ConvertTo-Json -Depth 4), (New-Object Text.UTF8Encoding($false)))
+  Say "OK" "saved the gateway mode and XRPL pay-to for the next start: $statePath (no secrets)"
 } finally {
   foreach ($n in $set) { Remove-Item "env:$n" -ErrorAction SilentlyContinue }
 }

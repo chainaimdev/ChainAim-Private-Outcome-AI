@@ -23,6 +23,8 @@
 
 **Docker (DOCKERIZE-PLAN.md, 2026-11-06):** P1 (analyst/chain-query bind + Host flags) and P3 (console --mode ui|api and C2-C7, --dataset-root) done with tests; images for analyst, chain-query and console-api built and smoke-run on a throwaway network; docker-compose.yml, test-console/up.ps1 / down.ps1 written, up.ps1 -DryRun passes. Not done: the switch itself (owner: up.ps1 -ReplaceRunning -Build, then the P5 end-to-end) and C:PRIV-AI-SECRETSpaid-jobs-settings.env (owner prices). Open, not from this work: check-deps fails on scripts/test/console-notes.test.ts importing test-console (owner: move that test or add an allow entry).
 
+**Tab 03 agent mode (architecture-tab03-agent-mode.md ARCH-301..314, 2026-11-06):** ARCH-301..313 built and tested (services/paywall/scripts/agent-jobs(-core).ts, agent.Dockerfile, compose service `agent` in profile `agent`, console `--agent-service` relay and ui streaming, tab 03 "Who pays?", up.ps1/down.ps1 `-Agent`, adminUI near-watch watch list from config/near-watch-watch.conf). V1 (Bedrock bearer token inside the container) and V2 (ca-presidio masking) passed live. Off by default: without `-Agent on`, commands.yml, the six containers and the page are as before. Open (owner): M1 full-access keys, M2 agent-tenants.env, M4 watch lines, M5 `up.ps1 -Agent on -Build`, M6 / ARCH-314 live proof (MANUAL_SETUP.md "Tab 03 agent mode"). No spending limits yet (`--agent-max-amount` unset).
+
 **Deviation from the design:** the buyer signs a NEP-366 SignedDelegate (relayer pays gas), not a full transaction with a `memo`, because that is the official x402 NEAR scheme. The invoice binding the memo would have given is replaced by claiming each delegate once by its hash (`SeenPayments`), tested.
 
 ---

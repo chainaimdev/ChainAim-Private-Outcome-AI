@@ -2,7 +2,11 @@
      --near-wallet); without it the page is served exactly as index.html is. Ticked, "Ask" runs the job as a paid job:
      POST /jobs/crossask runs, meters, prices and holds it and shows only the total; "Pay" pays exactly that total in
      USDC on NEAR (services/web nearPayAndRelease, through POST /paid/jobs/<id>/release, which relays to the paywall
-     without the gateway key); the released result is drawn by tab 03's own renderer. The result stays in page memory. -->
+     without the gateway key); the released result is drawn by tab 03's own renderer. The result stays in page memory.
+     Agent mode (architecture-tab03-agent-mode.md ARCH-309): only when GET /agent/config answers (the console was started
+     with --agent-service), "Who pays?" offers "AI agent" and a tenant picker. Then Ask posts to /agent/crossask: the
+     tenant's agent runs the job, pays it from the tenant's NEAR account, and the page shows its steps live, then the
+     released result in the same renderer. "Me" is the Intear flow above, unchanged. -->
 <script>
 (() => {
   const ask = document.getElementById("xaskGo");
@@ -20,21 +24,114 @@
   info.textContent = "Off: Ask runs the job free, as before.";
   const pay = document.createElement("div");
   pay.id = "xpayQuote";
-  box.append(label, info, pay);
+  // Who pays (agent mode): built here, shown only once /agent/config has answered with at least one tenant.
+  const who = document.createElement("div");
+  who.id = "xpayWho"; who.hidden = true;
+  const choice = (id, text, checked) => {
+    const l = document.createElement("label");
+    const r = document.createElement("input");
+    r.type = "radio"; r.name = "xpayWho"; r.id = id; r.checked = checked;
+    l.append(r, ` ${text} `);
+    return { l, r };
+  };
+  const me = choice("xpayWhoMe", "Me — Intear Wallet", true);
+  const bot = choice("xpayWhoAgent", "AI agent", false);
+  const tenantPick = document.createElement("select");
+  tenantPick.id = "xpayTenant"; tenantPick.disabled = true;
+  who.append("Who pays? ", me.l, "· ", bot.l, tenantPick);
+  box.append(label, who, info, pay);
   ask.closest(".row-actions").after(box);
 
   let config = null;
+  let agent = null;
+  const agentChosen = () => agent !== null && bot.r.checked;
   const say = (text, isErr = false) => { info.textContent = text; info.className = isErr ? "err" : "muted"; };
+  const tenantOf = () => agent.tenants.find((t) => t.id === tenantPick.value);
+  const explain = () => {
+    if (!tick.checked || !config) return;
+    if (agentChosen()) { const t = tenantOf(); say(`On, AI agent: Ask runs the job, and the agent for ${t.name} pays its total from ${t.accountId} by itself (no pop-up); its steps show below, then the result.`); return; }
+    say(`On: Ask runs the job and shows its total; nothing is shown or charged until you press Pay in ${config.walletName}. A quote stays payable ${config.ttlMin} minutes.`);
+  };
   tick.onchange = async () => {
     pay.replaceChildren();
+    who.hidden = !tick.checked || agent === null;
     if (!tick.checked) { say("Off: Ask runs the job free, as before."); return; }
     try {
       const r = await fetch("/jobs/config");
       config = await r.json();
       if (!r.ok) throw new Error(config.error ?? `HTTP ${r.status}`);
-      say(`On: Ask runs the job and shows its total; nothing is shown or charged until you press Pay in ${config.walletName}. A quote stays payable ${config.ttlMin} minutes.`);
-    } catch (e) { say(e.message, true); }
+      me.l.lastChild.textContent = ` Me — ${config.walletName} `;
+      explain();
+    } catch (e) { config = null; say(e.message, true); }
   };
+  for (const r of [me.r, bot.r]) r.onchange = () => { tenantPick.disabled = !bot.r.checked; pay.replaceChildren(); explain(); };
+  tenantPick.onchange = explain;
+  // The agent's tenants, when the console relays to an agent service; without one, /agent/config is 404 and nothing changes.
+  fetch("/agent/config").then(async (r) => {
+    if (!r.ok) return;
+    const j = await r.json();
+    if (!Array.isArray(j.tenants) || j.tenants.length === 0) return;
+    agent = j;
+    tenantPick.replaceChildren(...j.tenants.map((t) => { const o = document.createElement("option"); o.value = t.id; o.textContent = `${t.id} · ${t.accountId}`; return o; }));
+    who.hidden = !tick.checked;
+  }).catch((e) => console.info("[tab 03] agent mode is not available:", e.message));
+  // The browser can restore the box as ticked when the page is reloaded: load the wallet config then too, not only on a click.
+  if (tick.checked) tick.onchange();
+  window.addEventListener("pageshow", () => { if (tick.checked && !config) tick.onchange(); });
+
+  const explorerLink = (network, transaction) => {
+    const link = document.createElement("a");
+    link.href = `https://${network === "near:mainnet" ? "" : "testnet."}nearblocks.io/txns/${transaction}`;
+    link.target = "_blank"; link.rel = "noopener";
+    link.textContent = `${transaction.slice(0, 8)}…${transaction.slice(-6)} ↗`;
+    return link;
+  };
+
+  /** Agent mode: the run's steps as they arrive, then the released result; rejects with one plain sentence. */
+  async function agentStep(body) {
+    const t = tenantOf();
+    const steps = document.createElement("ol");
+    steps.id = "xagentSteps";
+    pay.replaceChildren(steps);
+    const step = (...parts) => { const li = document.createElement("li"); li.append(...parts); steps.append(li); };
+    say(`The AI agent for ${t.name} is running and paying the job…`);
+    const r = await fetch("/agent/crossask", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ...body, tenant: t.id }) });
+    if (!r.ok || !/^text\/event-stream/i.test(r.headers.get("content-type") ?? "")) {
+      const j = await r.json().catch(() => ({}));
+      throw new Error((typeof j.error === "string" ? j.error : j.error?.message) ?? `HTTP ${r.status}`);
+    }
+    const reader = r.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "", result, quoted = null, settled = null;
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      for (let at = buffer.indexOf("\n\n"); at >= 0; at = buffer.indexOf("\n\n")) {
+        const frame = buffer.slice(0, at);
+        buffer = buffer.slice(at + 2);
+        const type = /^event: (.+)$/m.exec(frame)?.[1];
+        let d;
+        try { d = JSON.parse(/^data: (.*)$/m.exec(frame)?.[1] ?? "{}"); } catch { d = {}; }
+        if (type === "masked") {
+          const found = Object.entries(d.counts ?? {});
+          step(found.length ? `Question masked on this PC before the agent's model saw it: ${found.map(([k, n]) => `${k} ×${n}`).join(", ")}` : "Question checked on this PC before the agent's model saw it: nothing to mask");
+        } else if (type === "tool_called") step("The agent asked ChainAim to run the job");
+        else if (type === "job_ran") step(`Job run and held (id ${String(d.jobId).slice(0, 8)}…); the result stays hidden until paid`);
+        else if (type === "quoted") { quoted = d; step(`Quoted ${Number(d.totalUsd)} USDC on ${d.network} to ${d.payTo}`); }
+        else if (type === "signed") step(`Payment signed by ${d.account} (ChainAim's relayer pays the gas)`);
+        else if (type === "settled") { settled = d; step("Settled on NEAR · ", explorerLink(d.network, d.transaction)); }
+        else if (type === "released") { result = d.result; step(`Result released: ${d.rows} row(s)`); }
+        else if (type === "done") step("Done");
+        else if (type === "refused") throw new Error(`Not paid: ${d.reason}`);
+        else if (type === "error") throw new Error(`${d.reason}${d.transaction ? ` (transaction ${d.transaction})` : ""}`);
+      }
+    }
+    if (result === undefined || !settled) throw new Error(`The agent's steps ended before the result arrived${settled ? ` (transaction ${settled.transaction}: it was paid)` : ""}.`);
+    info.replaceChildren(`Paid ${Number(quoted?.totalUsd)} USDC by the AI agent from ${t.accountId} on ${settled.network} · receipt `, explorerLink(settled.network, settled.transaction));
+    info.className = "muted";
+    return result;
+  }
 
   /** Shows the total and a Pay button; resolves with the released result, or rejects with one plain sentence. */
   function payStep(job) {
@@ -77,6 +174,7 @@
   postData = async (url, body) => {
     if (url !== "/crossask" || !tick.checked) return free(url, body);
     pay.replaceChildren();
+    if (agentChosen()) return agentStep(body);
     const job = await free("/jobs/crossask", body);
     return payStep(job);
   };

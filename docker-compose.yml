@@ -176,3 +176,24 @@ services:
     ports: ["127.0.0.1:8735:8735"]
     networks: [chainaim-test]
     depends_on: [gateway, analyst, chain-query]
+
+  # Tab 03 agent mode (architecture-tab03-agent-mode.md ARCH-310): started only by up.ps1 -Agent on (profile "agent").
+  # The tenants' NEAR keys are in the env file mounted read-only and read by Node's --env-file (not in the container's
+  # configuration); the Bedrock key arrives by name (AWS_BEARER_TOKEN_BEDROCK, up.ps1 ARCH-311). up.ps1 writes the command.
+  agent:
+    profiles: [agent]
+    build: { context: services, dockerfile: paywall/agent.Dockerfile, labels: *source }
+    image: chainaim-agent:local
+    container_name: ca-agent
+    labels: *source
+    environment:
+      - AWS_BEARER_TOKEN_BEDROCK
+    volumes:
+      - ./rig/tenants:/app/rig/tenants:ro
+      - type: bind
+        source: ${AGENT_ENV_FILE:-C:/PRIV-AI-SECRETS/agent-tenants.env}
+        target: /run/secrets/agent-tenants.env
+        read_only: true
+    ports: ["127.0.0.1:8760:8760"]
+    networks: { chainaim-test: { aliases: [agent] } }
+    depends_on: [console-api, paywall, presidio]
