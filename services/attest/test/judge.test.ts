@@ -1,0 +1,177 @@
+/**
+ * ARCH-409 / ARCH-410 decision rules (src/judge.ts), Node built-ins only. The inputs are the shapes the official
+ * verifier's checks and NEAR AI's signature endpoint produce; the recorded real report and signature are exercised end to
+ * end in official.test.ts (inside the ca-attest image).
+ */
+import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import { describe, it } from "node:test";
+import { judgeAttestation, judgeCall, pruneHistory, type AttestationChecks, type CallEvidence, type ReportFetch, type SignatureOutcome } from "../src/judge.ts";
+
+const MODEL = "deepseek-ai/DeepSeek-V4.1-Flash-1017";
+const SIGNER = "0xfe0071895500a9755c18044948ab4f4e1a7f337e";
+const OTHER = "0x1111111111111111111111111111111111111111";
+const h = (s: string) => createHash("sha256").update(s).digest("hex");
+const REQ = h("request bytes");
+const RESP = h("response bytes");
+const OPTS = { signingAlgo: "ecdsa", attestedModels: [MODEL] };
+
+const passing = (over: Partial<AttestationChecks> = {}): AttestationChecks => ({
+  tdxVerified: true, bindsAddress: true, embedsNonce: true, composeMatchesMrConfig: true, modelNameMatches: true,
+  gpu: { checked: true, nonceMatches: true, verdict: true }, ...over,
+});
+const fetchAt = (fetchedAt: string, attest = [judgeAttestation(SIGNER, "ecdsa", passing(), true)], model = MODEL): ReportFetch => ({ model, nonce: "a".repeat(64), fetchedAt, attestations: attest });
+const call = (over: Partial<CallEvidence> = {}): CallEvidence => ({ chatId: "chatcmpl-1", servedModel: MODEL, requestSha256: REQ, responseSha256: RESP, calledAt: "2026-11-06T14:00:00.000Z", ...over });
+const sig = (over: Partial<Extract<SignatureOutcome, { available: true }>> = {}): SignatureOutcome => ({
+  available: true, text: `${MODEL}:${REQ}:${RESP}`, signature: "0xsig", signingAddress: SIGNER, signingAlgo: "ecdsa", signatureKind: "provider_tee", ...over,
+});
+const BEFORE = "2026-11-06T13:50:00.000Z";
+const AFTER = "2026-11-06T14:05:00.000Z";
+
+describe("ARCH-409 judgeAttestation", () => {
+  it("ARCH-409: every check passing is verified, signer and algo lower-cased", () => {
+    const r = judgeAttestation(SIGNER.toUpperCase().replace("0X", "0x"), "ECDSA", passing(), true);
+    assert.equal(r.verified, true);
+    assert.deepEqual(r.reasons, []);
+    assert.equal(r.signingAddress, SIGNER);
+    assert.equal(r.signingAlgo, "ecdsa");
+  });
+
+  it("ARCH-409: each failed check is a reason and the attestation is not verified", () => {
+    const cases: [Partial<AttestationChecks>, RegExp][] = [
+      [{ tdxVerified: false, tdxError: "collateral fetch failed" }, /TDX quote not verified: collateral fetch failed/],
+      [{ tdxVerified: false, tdxStatus: "Revoked" }, /TDX quote not verified \(status Revoked\)/],
+      [{ bindsAddress: false }, /does not bind the signing address/],
+      [{ embedsNonce: false }, /does not hold the request nonce/],
+      [{ composeMatchesMrConfig: false }, /app_compose\) is not in mr_config/],
+      [{ composeMatchesMrConfig: null }, /no app_compose/],
+      [{ modelNameMatches: false }, /names another model/],
+      [{ gpu: { checked: true, nonceMatches: false, verdict: true } }, /GPU evidence nonce differs/],
+      [{ gpu: { checked: true, nonceMatches: true, verdict: false } }, /NVIDIA attestation verdict is not true/],
+      [{ gpu: { checked: false, reason: "NRAS 503" } }, /GPU not checked: NRAS 503/],
+    ];
+    for (const [over, re] of cases) {
+      const r = judgeAttestation(SIGNER, "ecdsa", passing(over), true);
+      assert.equal(r.verified, false, String(re));
+      assert.match(r.reasons.join("; "), re);
+    }
+  });
+
+  it("ARCH-409: with --gpu-check off the GPU is not required, and the checks still say it was not checked", () => {
+    const r = judgeAttestation(SIGNER, "ecdsa", passing({ gpu: { checked: false, reason: "--gpu-check off" } }), false);
+    assert.equal(r.verified, true);
+    assert.deepEqual(r.checks.gpu, { checked: false, reason: "--gpu-check off" });
+  });
+});
+
+describe("ARCH-410 judgeCall", () => {
+  it("ARCH-410: provider_tee, exact text, recovered signer, signer in the report that arrived before the call: verified", () => {
+    const r = judgeCall(call(), sig(), SIGNER, [fetchAt(BEFORE)], OPTS);
+    assert.equal(r.status, "verified");
+    assert.equal(r.reason, null);
+    assert.deepEqual([r.signature, r.hashes, r.tdx, r.gpu], [true, true, true, true]);
+    assert.equal(r.reportFetchedAt, BEFORE);
+    assert.equal(r.signatureKind, "provider_tee");
+    assert.equal(r.signingAddress, SIGNER);
+  });
+
+  it("ARCH-410: one changed byte in either body -> unverified: hash mismatch", () => {
+    for (const changed of [call({ requestSha256: h("request bytes!") }), call({ responseSha256: h("response bytes!") })]) {
+      const r = judgeCall(changed, sig(), SIGNER, [fetchAt(BEFORE)], OPTS);
+      assert.equal(r.status, "unverified");
+      assert.match(r.reason!, /^hash mismatch/);
+      assert.equal(r.hashes, false);
+    }
+  });
+
+  it("ARCH-410: a signed text for another model id -> unverified, hashes equal", () => {
+    const r = judgeCall(call(), sig({ text: `other/model:${REQ}:${RESP}` }), SIGNER, [fetchAt(BEFORE)], OPTS);
+    assert.equal(r.status, "unverified");
+    assert.match(r.reason!, /model id differs/);
+    assert.equal(r.hashes, true);
+  });
+
+  it("ARCH-410: a report that arrived after the call is not used", () => {
+    const onlyAfter = judgeCall(call(), sig(), SIGNER, [fetchAt(AFTER)], OPTS);
+    assert.equal(onlyAfter.status, "unavailable");
+    assert.match(onlyAfter.reason!, /no report for this model arrived before the call/);
+    const both = judgeCall(call(), sig(), SIGNER, [fetchAt(AFTER), fetchAt(BEFORE)], OPTS);
+    assert.equal(both.status, "verified");
+    assert.equal(both.reportFetchedAt, BEFORE);
+  });
+
+  it("ARCH-410: the LATEST report before the call decides; a signer only in an older one does not pass", () => {
+    const older = fetchAt("2026-11-06T13:00:00.000Z");
+    const newer = fetchAt(BEFORE, [judgeAttestation(OTHER, "ecdsa", passing(), true)]);
+    const r = judgeCall(call(), sig(), SIGNER, [older, newer], OPTS);
+    assert.equal(r.status, "unverified");
+    assert.match(r.reason!, /signer is not in the report/);
+  });
+
+  it("ARCH-410: a failed fetch is never the report used", () => {
+    const failed: ReportFetch = { model: MODEL, nonce: "b".repeat(64), fetchedAt: "2026-11-06T13:55:00.000Z", attestations: [], error: "attestation report: HTTP 502" };
+    const r = judgeCall(call(), sig(), SIGNER, [fetchAt(BEFORE), failed], OPTS);
+    assert.equal(r.status, "verified");
+    assert.equal(r.reportFetchedAt, BEFORE);
+  });
+
+  it("ARCH-410: the signer must match exactly one attestation", () => {
+    const twice = fetchAt(BEFORE, [judgeAttestation(SIGNER, "ecdsa", passing(), true), judgeAttestation(SIGNER, "ecdsa", passing(), true)]);
+    assert.match(judgeCall(call(), sig(), SIGNER, [twice], OPTS).reason!, /more than one attestation/);
+  });
+
+  it("ARCH-410: the signer's attestation failing makes the call unverified with its reasons", () => {
+    const bad = fetchAt(BEFORE, [judgeAttestation(SIGNER, "ecdsa", passing({ composeMatchesMrConfig: false }), true)]);
+    const r = judgeCall(call(), sig(), SIGNER, [bad], OPTS);
+    assert.equal(r.status, "unverified");
+    assert.match(r.reason!, /attestation failed: sha256\(app_compose\) is not in mr_config/);
+    assert.equal(r.tdx, false);
+  });
+
+  it("ARCH-410: recovery to another address, or no recovery, is unverified", () => {
+    assert.match(judgeCall(call(), sig(), OTHER, [fetchAt(BEFORE)], OPTS).reason!, /does not recover to signing_address/);
+    assert.match(judgeCall(call(), sig(), undefined, [fetchAt(BEFORE)], OPTS).reason!, /could not be recovered/);
+  });
+
+  it("ARCH-410: a gateway signature is never verified (NEAR's gateway re-signs; the model is not attested)", () => {
+    const r = judgeCall(call(), sig({ signatureKind: "gateway", text: `${REQ}:${RESP}` }), SIGNER, [fetchAt(BEFORE)], OPTS);
+    assert.equal(r.status, "unverified");
+    assert.match(r.reason!, /gateway, not by the model's TEE/);
+    assert.equal(r.signature, null, "nothing past the kind is reported as checked");
+  });
+
+  it("ARCH-410: the kind is never inferred from the text: absent or unknown kind is unverified even with the 3-part text", () => {
+    for (const kind of [null, "something_else"]) assert.match(judgeCall(call(), sig({ signatureKind: kind }), SIGNER, [fetchAt(BEFORE)], OPTS).reason!, /unknown signature kind/);
+  });
+
+  it("ARCH-410: another signing algorithm is unverified", () => {
+    assert.match(judgeCall(call(), sig({ signingAlgo: "ed25519" }), SIGNER, [fetchAt(BEFORE)], OPTS).reason!, /signing algorithm ed25519 is not ecdsa/);
+  });
+
+  it("ARCH-410: no signature after the retry window is unavailable, with the fetch's reason", () => {
+    const r = judgeCall(call(), { available: false, reason: "signature not available after 30 s (HTTP 404)" }, undefined, [fetchAt(BEFORE)], OPTS);
+    assert.deepEqual([r.status, r.reason], ["unavailable", "signature not available after 30 s (HTTP 404)"]);
+  });
+
+  it("ARCH-410: no chat id, bad hashes, or a model ca-attest does not attest: unverified before anything is fetched", () => {
+    assert.match(judgeCall(call({ chatId: undefined }), sig(), SIGNER, [fetchAt(BEFORE)], OPTS).reason!, /no provider chat id/);
+    assert.match(judgeCall(call({ requestSha256: "ABC" }), sig(), SIGNER, [fetchAt(BEFORE)], OPTS).reason!, /not SHA-256 hex/);
+    assert.match(judgeCall(call({ servedModel: "other/model" }), sig(), SIGNER, [fetchAt(BEFORE)], OPTS).reason!, /not attested by ca-attest/);
+  });
+
+  it("ARCH-410 / ARCH-412: a result carries ids, addresses, booleans and reasons only", () => {
+    const r = judgeCall(call(), sig(), SIGNER, [fetchAt(BEFORE)], OPTS);
+    assert.deepEqual(Object.keys(r).sort(), ["chatId", "gpu", "hashes", "reason", "reportFetchedAt", "servedModel", "signature", "signatureKind", "signingAddress", "signingAlgo", "status", "tdx"]);
+    assert.ok(!JSON.stringify(r).includes("0xsig"), "the signature itself is not echoed");
+  });
+});
+
+describe("ARCH-409 report history", () => {
+  it("ARCH-409: pruneHistory keeps the newest N fetches per model", () => {
+    const list = ["01", "02", "03", "04"].map((m) => fetchAt(`2026-11-06T${m}:00:00.000Z`));
+    const other = fetchAt("2026-11-06T00:30:00.000Z", undefined, "x/other");
+    const kept = pruneHistory([...list, other], 2);
+    assert.deepEqual(kept.filter((r) => r.model === MODEL).map((r) => r.fetchedAt), ["2026-11-06T04:00:00.000Z", "2026-11-06T03:00:00.000Z"]);
+    assert.equal(kept.filter((r) => r.model === "x/other").length, 1);
+  });
+});

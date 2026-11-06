@@ -199,3 +199,20 @@ services:
     ports: ["127.0.0.1:8760:8760"]
     networks: { chainaim-test: { aliases: [agent] } }
     depends_on: [console-api, paywall, presidio]
+
+  # NEAR AI model attestation (PLAN-private-ai-nearai-attestation.md ARCH-409/410): profile "attest". The image builds the
+  # official nearai-cloud-verifier at the pinned commit with our lockfile (services/attest/Dockerfile). It reads the models
+  # to attest from the gateway's generated catalog (config/generated/catalog.local.json, deployments with "attest": "nearai")
+  # and calls NEAR AI (report, signature), Intel PCS and NVIDIA NRAS. Holds NEARAI_API_KEY, by name; receives ids and hashes only.
+  attest:
+    profiles: [attest]
+    build: { context: services/attest, labels: *source }
+    image: chainaim-attest:local
+    container_name: ca-attest
+    labels: *source
+    environment:
+      - NEARAI_API_KEY
+    volumes:
+      - ./config:/config:ro
+    ports: ["127.0.0.1:8770:8770"]
+    networks: { chainaim-test: { aliases: [attest] } }

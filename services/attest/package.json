@@ -1,0 +1,14 @@
+{
+  "name": "chainaim-attest",
+  "version": "0.1.0",
+  "private": true,
+  "description": "ca-attest (PLAN-private-ai-nearai-attestation.md ARCH-409/410): checks NEAR AI Cloud's report and per-reply signature for each model call with the official nearai-cloud-verifier (pinned commit, built in the image). Our code has no npm dependencies; the verifier and its dependencies live in --verifier-dir.",
+  "type": "module",
+  "engines": { "node": ">=22.22" },
+  "scripts": {
+    "start": "node src/main.ts",
+    "test": "node --test \"test/judge.test.ts\" \"test/nearai.test.ts\" \"test/config.test.ts\"",
+    "test:official": "node --test \"test/official.test.ts\"",
+    "record-fixture": "node scripts/record-fixture.ts --out test/fixtures/nearai-recorded.json"
+  }
+}

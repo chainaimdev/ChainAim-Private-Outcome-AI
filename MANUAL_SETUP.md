@@ -370,3 +370,22 @@ The build stopped at the plan's verify-first gate (section 4); nothing was chang
 - **Approval to run the official verifier** (V3): `github.com/nearai/nearai-cloud-verifier` at commit `94554726fd548676842b7ea603a8173a60c31341` with its npm dependencies (`@phala/dcap-qvl-node`, `ethers` 5, `tweetnacl`, `ed2curve`), built and run inside a throwaway `node:24-slim` container. This session's permission policy refuses running external code until you allow it.
 - **Decision — how the key is asked for.** `switch-models.ps1` stops ("No NAME entered, so nothing changed") when a `secretEnv` key is missing, so adding `NEARAI_API_KEY` to `test-console/modes/ollama-cpu-8gb-all.json` as the plan says would stop that mode on every PC without a NEAR AI key. Choose: (a) a new mode file (e.g. `ollama-cpu-8gb-all-nearai.json`) that asks for it, the current mode unchanged; or (b) an optional-key list in the mode file that switch-models.ps1 uses only when the key is present.
 - **Decided 2026-11-06: (a).** Built: `config/local-models.cpu-all-nearai.json` (cpu-all's entries unchanged + `nearai/deepseek-v4.1-flash`) and `test-console/modes/ollama-cpu-8gb-all-nearai.json` (asks for `NEARAI_API_KEY`); `ollama-cpu-8gb-all` is unchanged. `NEARAI_API_KEY` is passed to ca-gateway by name (compose) and taken by up.ps1 from `chainaim.env` or the running ca-gateway, silently skipped when absent. Once M1/M2 are done: `.\test-console\switch-models.ps1 -To ollama-cpu-8gb-all-nearai`, then `.\test-console\up.ps1 -ReplaceRunning`. Still pending before tab 03 can rely on it: V1 (does NEAR AI accept the gateway's `provider` field, and does DeepSeek's reasoning fit the shared 2048-token output budget, ARCH-405), the B part (attestation) after V2/V3.
+
+## 2026-11-06 — NEAR AI attestation, ca-attest (ARCH-409/410): one-time setup (owner)
+ca-attest (`services/attest`, compose service `attest`, profile `attest`, container `ca-attest`, 127.0.0.1:8770) reads
+**`NEARAI_API_KEY`** (by name, the same key as the gateway; `--key-env` to change the name) and calls: NEAR AI
+(`GET /v1/attestation/report`, `GET /v1/signature/{chat id}`), Intel PCS (`api.trustedservices.intel.com`, TDX collateral)
+and NVIDIA NRAS (`nras.attestation.nvidia.com`, GPU evidence), all from inside the container. The image builds the official
+`nearai-cloud-verifier` at commit `94554726fd548676842b7ea603a8173a60c31341` with OUR lockfile. Decision 2026-11-06 (option a):
+no RTMR3 event-log replay is added; ca-attest relies on the official verifier's checks.
+One time, in order:
+1. **Lockfile.** From the repository root (writes `services\attest\verifier\package-lock.json`; runs the verifier's npm
+   resolution in a throwaway container, nothing installed on the PC):
+   `docker run --rm -v "${PWD}\services\attest\verifier:/out" node:24-slim sh -c "apt-get update -qq && apt-get install -y -qq git >/dev/null && git clone -q https://github.com/nearai/nearai-cloud-verifier.git /v && cd /v && git checkout -q 94554726fd548676842b7ea603a8173a60c31341 && npm install --package-lock-only --no-audit --no-fund && cp package-lock.json /out/"`
+   Commit the lockfile: the image refuses to build without it (`npm ci`).
+2. **Fixture** (one real call, a fraction of a cent of NEAR AI credit; the prompt and answer are not saved):
+   `node --env-file=C:\PRIV-AI-SECRETS\chainaim.env services/attest/scripts/record-fixture.ts` -> `services/attest/test/fixtures/nearai-recorded.json`. Commit it (public evidence: quotes, addresses, hashes, the signature). Before the image: the image copies `test/` in.
+3. **Image.** `docker compose --profile attest build attest`.
+4. **Tests.** `npm --prefix services/attest test` (on the PC) and, in the image (needs no key),
+   `docker compose --profile attest run --rm --entrypoint npm attest run test:official`.
+Rollback: do not start the `attest` profile; nothing else depends on it until ARCH-411 (`--attest-url`, off by default).

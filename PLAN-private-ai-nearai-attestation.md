@@ -132,7 +132,8 @@ no message text.
 
 **ARCH-409 — `ca-attest` preflight reports.** Fetch with a fresh random nonce, `provider=near`, `x-no-aliasing: true`;
 verify TDX quote (dcap-qvl), nonce and signer binding, RTMR3 replay, app-compose hash vs MRCONFIGID, GPU evidence (NRAS)
-via the official verifier. Keeps the last verified report per model with its fetch time. Acceptance: `ARCH-409:` tests on a
+via the official verifier. **Owner decision 2026-11-06 (option a): no RTMR3 replay** — the official verifier @ 94554726 has
+none (read 2026-11-06), and ca-attest adds no unaudited check of its own; the other checks are the official verifier's. Keeps the last verified report per model with its fetch time. Acceptance: `ARCH-409:` tests on a
 recorded real report (fixture saved from a live call, as near-watch's tests use a recorded real tx); V3/V4 live.
 
 **ARCH-410 — Verify one call.** Signature fetched with bounded retry; EIP-191 recover = `signing_address`; text's hashes =

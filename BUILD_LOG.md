@@ -952,3 +952,37 @@ Built in the AI's workspace on a snapshot of the owner's repo (main = e8626e8, v
 - Owner PC 08:45: `npm run test:paywall` -> tests 294, pass 294, fail 0.
 - Next: ARCH-409/410 services/attest (ca-attest) on nearai-cloud-verifier @ 94554726 (read its ts sources first; note from the
   gate read: it has no RTMR3 event-log replay, so ARCH-409's RTMR3 item needs an owner decision or our own replay).
+
+## 2026-11-06 — NEAR AI attestation part B: ARCH-409 / ARCH-410 built (ca-attest)
+- Read first (raw.githubusercontent.com @ 94554726fd548676842b7ea603a8173a60c31341): package.json (0.1.0, ethers 5, @phala/dcap-qvl-node,
+  Apache-2.0), tsconfig.json (module commonjs, rootDir ./, outDir dist), ts/model_verifier.ts, ts/chat_verifier.ts. Used unchanged:
+  checkTdxQuote, checkReportData, checkGpu, recoverSigner. Not used: their fetchReport (sends neither provider=near nor x-no-aliasing).
+  Computed here with their showCompose formula (it only logs): mr_config starts with "01" + sha256(app_compose).
+- Owner decision (option a): no RTMR3 replay (none in the official verifier); recorded in the plan's ARCH-409.
+- New services/attest: src/judge.ts (rules, built-ins), src/nearai.ts (report: fresh nonce, provider=near, x-no-aliasing; signature:
+  404 / error_code = retry within --signature-retry-sec), src/official.ts (loads the verifier's dist/ from --verifier-dir), src/main.ts
+  (flags, preflight refresh every --report-refresh-sec, GET /healthz, GET /reports, POST /verify, Host check; verifier console output
+  muted unless --verifier-log on), scripts/record-fixture.ts, Dockerfile (verifier stage: fetch the commit, check the SHA, npm ci with
+  verifier/package-lock.json, npm run build, check dist/ts/*.js), compose service attest (profile attest, NEARAI_API_KEY by name,
+  ./config:/config:ro, 127.0.0.1:8770, default --catalog /config/generated/catalog.local.json, as switch-models.ps1 generates it).
+  MANUAL_SETUP.md: dated section (key, third-party calls, 4 one-time steps).
+- Rules: verified only for provider_tee with text == "<servedModel>:<req>:<resp>", algo ecdsa, EIP-191 recovery == signing_address, and
+  exactly one attestation with that signer+algo in the LATEST report that arrived before calledAt, that attestation verified (TDX,
+  report_data binds signer + nonce, compose in mr_config, model name, and the NVIDIA verdict with --gpu-check on). gateway kind ->
+  unverified (model not attested); unknown/absent kind -> unverified (never inferred); no signature in the window -> unavailable.
+- One fix during the run: TypeScript constructor parameter properties are not supported by Node's type stripping (config.test.ts
+  failed to load main.ts) -> plain fields.
+- Owner PC: `npm --prefix services/attest test` -> tests 35, pass 35, fail 0 (judge 19, nearai 7, config 9).
+- Owner PC: lockfile from the pinned commit in node:24-slim (`npm install --package-lock-only`) -> services/attest/verifier/package-lock.json
+  50578 bytes (npm 11.19 notes esbuild's postinstall not approved: esbuild only serves tsx, which ca-attest does not use).
+- Owner PC 09:04: scripts/record-fixture.ts -> test/fixtures/nearai-recorded.json: chat chatcmpl-b7ebcb11-168a-4cb9-9c9e-4ea15cffa91b,
+  provider_tee, signer 0xfe0071895500a9755c18044948ab4f4e1a7f337e (the gate's), 1 model attestation; checked: no key, no prompt, no answer.
+- Owner PC: `docker compose --profile attest build attest` -> chainaim-attest:local Built (npm ci + npm run build + dist checks passed).
+- Owner PC: `docker compose --profile attest run --rm --entrypoint npm attest run test:official` -> tests 12, pass 12, fail 0: TDX UpToDate
+  (no advisories), report_data = signer + recorded nonce, compose in mr_config (mr_config_id 01ae66f8...), another nonce fails the nonce
+  binding, EIP-191 recovery = signer, the recorded call verified, one changed byte -> hash mismatch, report after the call -> unavailable,
+  a changed signature -> unverified, POST /verify verified / unavailable (unknown id), 400s, /healthz, /reports without quotes, Host 403.
+  The GPU check is not replayed on recorded evidence (gpu-check off in these tests); the live run (ARCH-414, gpu-check on) covers it.
+- Owner PC: `npm test` -> check-deps OK (327 files, 49 cross-unit imports, no new allow); tests 454, pass 454, fail 0.
+- Next: ARCH-411 console --attest-url (off by default, never blocks a job), up.ps1 -Attest + desk.ps1 row, ARCH-412 job_attested,
+  ARCH-413 tab 03 badge, ARCH-414 live.
