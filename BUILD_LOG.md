@@ -909,3 +909,19 @@ Built in the AI's workspace on a snapshot of the owner's repo (main = e8626e8, v
 - Root suite `node --test "services/gateway/test/*.test.ts" "scripts/test/*.test.ts" "test-console/test/*.test.ts"` → 444/444. Expected 445 (442 + 3): scripts/test/desk.test.ts was edited by someone else at 12:05 today and now has 5 tests (likely one fewer than before; not checked further: no git). Paywall, web, crossask, analyst untouched by this change.
 - Rule slip: one read-only `git diff --no-index` was run to compare the two registry files; CLAUDE.md forbids git. Nothing was changed by it.
 - Still blocked (unchanged): V1/V2/V5 and ARCH-404..406, 410..414 need NEARAI_API_KEY (M1) and credits (M2); V3 and ca-attest (ARCH-409..413) need approval to run nearai-cloud-verifier @ 94554726 and @phala/dcap-qvl-node.
+
+## 2026-11-06 — NEAR AI attestation: verify-first gate (plan §4) PASSED on the owner PC (owner approval for V3 given 08:17)
+- V1/V5 live via tab 03 07:58 (job 09ebdf3d: nearai/deepseek-v4.1-flash wrote the query, agent t01 paid 0.01 USDC) and via
+  scripts/nearai-v2-probe.ts (new; Node built-ins; key from --env-file, never printed; follows docs.near.ai response-signatures).
+- V2 08:21 (probe, gateway body shape incl. provider.data_collection=deny, stream false, x-no-aliasing, Accept-Encoding identity):
+  signature_kind provider_tee, signed text == "<model>:sha256(req):sha256(resp)" of the exact bytes, signer == the single
+  preflight model-report candidate.
+- V3 08:27: github.com/nearai/nearai-cloud-verifier @ 94554726 in a throwaway node:24 container, `npm install` (pnpm 12 refused
+  esbuild's build script; owner chose npm; no npm lockfile upstream -> ca-attest must commit its own), `npm run model` + `npm run
+  chat` for deepseek-ai/DeepSeek-V4.1-Flash-1017: Intel TDX quote verified (UpToDate, no advisories), report_data binds signer
+  0xfe0071895500a9755c18044948ab4f4e1a7f337e and the request nonce, NVIDIA verdict true, mr_config == compose hash, Sigstore
+  links 200. Non-streaming chat: provider_tee, hashes match, signature valid, signer == attested address. Streaming chat:
+  signature_kind gateway (NEAR's gateway re-signs streams), no model attestation -> must be shown as "not attested", never passed.
+- V4: NRAS and Intel collateral reachable (verdicts returned). Output pasted with a key mask; no key in it.
+- Next: build part B (ARCH-407..414) as planned: gateway exact-byte hashes for attest:"nearai" deployments, ca-attest with the
+  official verifier (pinned commit + our own lockfile), console --attest-url, job_attested feed event, tab 03 / admin Jobs badge.

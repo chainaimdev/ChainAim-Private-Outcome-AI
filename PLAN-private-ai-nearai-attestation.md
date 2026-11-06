@@ -67,6 +67,11 @@ PC (UI only)                         Docker, network chainaim-test
 | V4 | NVIDIA NRAS and Intel collateral reachable from a container on this PC. | GPU / TDX shown as "not checked: unreachable", never as passed. |
 | V5 | Which `signature_kind` the DeepSeek replies carry (`provider_tee` or `gateway`). | Both are handled (F4); the badge says which one. |
 
+**Gate results (owner PC, 2026-11-06; BUILD_LOG):** V1 PASS (tab 03 job + probe) · V2 PASS (provider_tee, exact-byte hashes,
+signer = preflight candidate; scripts/nearai-v2-probe.ts) · V3 PASS (official verifier @ 94554726 via npm in node:24: TDX
+UpToDate, report binds signer + nonce, NVIDIA true, mr_config = compose hash; non-streaming chat provider_tee valid; streaming
+chat = gateway kind, not model-attested) · V4 PASS (NRAS, Intel reachable) · V5 provider_tee for non-streaming.
+
 ## 5. Components
 
 | Component | Change | Responsibility |
