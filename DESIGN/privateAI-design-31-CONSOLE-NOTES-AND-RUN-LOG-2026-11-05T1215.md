@@ -60,3 +60,17 @@ not be traced afterwards (only `dental-test.ps1` writes `sample-data/prms/_runs/
   paid-jobs listener and the paywall->console reachability (401) checked; one READY / NOT READY table with each fix or log.
 - -Restart, -Stop, -Check, -Test, -RebuildPaywall, -NoBrowser, -Settings, -WaitSec. Guard: scripts/test/desk.test.ts (5).
 - Not run in the workspace (no PowerShell); first run on the owner PC.
+
+### 5b. 2026-11-06: desk.ps1 rewritten as a conductor (owner: "putting it all together so I can run 1 script, not intertwine")
+- New upstream (Nisha, v1.3.5-v1.3.7; adminUI e87028e): private test-console/up.ps1 + down.ps1 run the backend in Docker
+  (compose: gateway, paywall, presidio, analyst, chain-query, console-api 8735) and the 8730 page on the PC; adminUI
+  nearadminup.ps1 + down.ps1 run near-watch in Docker (ca-near-watch on network chainaim-test, so http://near-watch:8790
+  works from the private stack) and the 8800 admin UI; watch list from -Watch / -WatchFile.
+- desk.ps1 v1.3.4 started the same services as PC processes and stopped port owners: collides with compose (same ports;
+  a Docker-published port's owner is Docker Desktop's relay). Rewritten: pre-flight checks (Docker, launchers present,
+  secrets files by name, NEAR_RPC_URL_TESTNET present) -> stop leftover node processes only on 8730/8740/8750/8790/8800 ->
+  nearadminup.ps1 -Secrets -Watch -GasPerPaymentNear (this PC's accounts from desk.json) -> up.ps1 -ReplaceRunning -PaidJobs
+  -> one table incl. the paywall's NEAR RPC tested from inside ca-paywall and near-watch RUN + honesty note while not live.
+  -Stop = both down.ps1. No secret value is read; no secrets file is edited; prices only in up.ps1's files; nothing renamed.
+- The RPC failover of 5 (candidates, rebuild) is gone: compose owns the paywall, so the RPC is a one-time line in
+  near-testnet.env / near-watch.env, checked on every run. Guard: scripts/test/desk.test.ts (5).

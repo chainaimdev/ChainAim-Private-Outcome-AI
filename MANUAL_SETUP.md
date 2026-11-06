@@ -347,3 +347,18 @@ Optional and **off by default**: without `-Agent on` nothing starts or changes (
 - **M6** ARCH-314 live proof: in tab 03, one agent-paid job per tenant (t01, t02, t03) and one manual Intear job in the same session. For each: the timeline reaches `Done` and the result shows; nearblocks shows the quoted USDC from that tenant's account to `chainaim-payto-seller.testnet`, submitted by the relayer; `docker logs ca-paywall` has `payment_settled`; the admin UI Reconcile shows `matched` with the tenant as payer. Record the results in BUILD_LOG.md.
 
 **Rollback:** `.\test-console\up.ps1` without `-Agent` (ca-agent is not started; the console has no `--agent-service`); `.\test-console\down.ps1` stops ca-agent too.
+
+## 2026-11-06 — desk.ps1 is now the one command over BOTH Docker launchers (supersedes the 2026-11-05 desk.ps1 section)
+`.\test-console\desk.ps1` checks, then runs the adminUI's `nearadminup.ps1` (near-watch in Docker + the 8800 admin UI) and
+this repo's `test-console\up.ps1 -ReplaceRunning` (the compose stack + the 8730 page), then prints one READY table.
+`-Stop` runs both `down.ps1`; `-Check` reports only; `-Test` runs the terminal suites; `-Build`, `-WithStub`, `-NoBrowser`.
+It no longer starts services itself (that collided with the Docker stacks: same ports).
+One time:
+1. `config\local\repos.json` nearWatchDir -> the adminUI checkout's `services\near-watch` (section above).
+2. `config\local\desk.json` from `desk.example.json`: secretsDir, paidJobs.enabled, adminUi.watch (YOUR buyer and relayer
+   accounts; passed as nearadminup.ps1 -Watch, so its committed watch file with another PC's accounts is not used) and gasPerPaymentNear.
+   Prices: test-console\up.ps1's own files (config\paid-jobs-prices.conf or <secretsDir>\paid-jobs-settings.env).
+3. NEAR RPC (FastNEAR rate-limits when the paywall and near-watch share it): in `near-testnet.env` add
+   `NEAR_RPC_URL_TESTNET=https://near-testnet.drpc.org`; in `near-watch.env` set `NEAR_RPC_FALLBACK_URL_TESTNET` to the same.
+   Public URLs, but both files hold keys: edit in Notepad, never paste them. desk.ps1 tests the paywall's RPC from inside
+   ca-paywall and says so in the table.

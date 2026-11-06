@@ -877,3 +877,16 @@ Built in the AI's workspace on a snapshot of the owner's repo (main = e8626e8, v
 - Runs after: root `node --test "services/gateway/test/*.test.ts" "scripts/test/*.test.ts" "test-console/test/*.test.ts"` → 442/442 (427 + 15 new); services/paywall 292/292 (274 + 18 new); packages/crossask 30/30; services/web 133/133; services/chain-query 11/11; services/analyst 177 pass, 1 fail (the known reconcile-explain Windows exit crash), 16 skipped; near-watch 50/50; admin-console 43/43. Typecheck (tsc 5.9.3 strict, @types/node) over agent-jobs-core.ts, agent-jobs.ts, server.ts: 0 errors except the pre-existing services/web/src/xrpl-payment.ts(102,73). check-deps: the same 5 problems as before this work, no new allow entry.
 - Live stack untouched: ca-agent was never started on it (only throwaway containers, removed); the compose stack and ca-near-watch kept running as they were.
 - Not done (owner): M1 (full-access keys, public keys only), M2 (C:\PRIV-AI-SECRETS\agent-tenants.env), M4 (tenant watch lines), M5 (`up.ps1 -Agent on -Build`), M6 / ARCH-314 live proof per tenant (MANUAL_SETUP.md, "Tab 03 agent mode").
+
+## 2026-11-06 — desk.ps1 rewritten as the conductor over both Docker launchers (design-31 §5b)
+- After pulling Nisha's Docker launchers (private v1.3.7: test-console/up.ps1, down.ps1, docker-compose.yml; adminUI e87028e:
+  nearadminup.ps1, down.ps1, config/near-watch-watch.conf): desk.ps1 v1.3.4 would collide with them (same ports; it stopped
+  port owners, which for container ports is Docker's relay). Rewritten to call nearadminup.ps1 then up.ps1 -ReplaceRunning,
+  stop only leftover node processes, check secrets files by name, test the paywall's NEAR RPC from inside ca-paywall, and
+  print one READY table; -Stop calls both down.ps1. desk.example.json without prices; owner desk.json with own watch accounts.
+- Aligned with Nisha's 95f036b (up.ps1 -Agent defaults on, auto-off without agent-tenants.env or a Bedrock key): desk.json
+  agent.enabled auto|on|off (auto = up.ps1 decides; the table shows the agent row 'off' then, not DOWN), agent.tenants -> -AgentTenants.
+  Agent tenants are the committed rig/tenants/t01..t03 accounts (chainaim-buyer-seller / -t02-seller / -t03-seller.testnet):
+  their full-access keys go in <secretsDir>\agent-tenants.env (Nisha's MANUAL_SETUP M2), shared out of band, never in chat.
+- Workspace: scripts/test/desk.test.ts 5/5; no PowerShell here. Owner PC: guard test + PowerShell parse check in the commit step;
+  a full desk.ps1 -Build run (both stacks READY) is still to be reported.

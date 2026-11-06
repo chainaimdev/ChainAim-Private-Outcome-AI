@@ -1,7 +1,8 @@
 /**
- * privateAI-design-31 §5: test-console/desk.ps1, the one command for the desk, read as text (no PowerShell needed). Guards
- * what must not regress: ASCII only (Windows PowerShell 5.1), keys never printed, the paywall's paid-jobs keys passed by
- * name, no "$name:" parse traps, every service logged, and the settings example complete.
+ * privateAI-design-31 §5 (rewritten 2026-11-06): test-console/desk.ps1 is a CONDUCTOR over the two repositories' own Docker
+ * launchers (adminUI nearadminup.ps1, private test-console/up.ps1). Read as text (no PowerShell needed). Guards: it starts no
+ * service itself, stops only node processes (never Docker's port owners), never reads a secret value, calls the launchers in
+ * order with this PC's watch list, ASCII only, no "$name:" parse traps.
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -9,49 +10,42 @@ import { readFileSync } from "node:fs";
 
 const ps = readFileSync(new URL("../../test-console/desk.ps1", import.meta.url), "utf8");
 const ex = JSON.parse(readFileSync(new URL("../../config/local/desk.example.json", import.meta.url), "utf8"));
+const code = ps.slice(ps.indexOf("#>") + 2); // without the help comment
 
-test("ASCII only, and no PowerShell parse traps: \"$name:\" outside $env:/$script:, a -Profile parameter, a Start-Service function", () => {
+test("ASCII only, and no PowerShell parse traps (\"$name:\" outside $env:/$script:, $Profile, cmdlet-name clashes)", () => {
   assert.ok(/^[\x00-\x7F]*$/.test(ps), "desk.ps1 must be ASCII");
-  const traps = [...ps.matchAll(/"[^"\n]*\$([A-Za-z_][A-Za-z0-9_]*):(?!:)/g)].map((m) => m[1]).filter((v) => !["env", "script", "global"].includes(v));
+  const traps = [...code.matchAll(/"[^"\r\n]*"/g)].flatMap((m) => [...m[0].matchAll(/\$([A-Za-z_][A-Za-z0-9_]*):(?!:)/g)].map((v) => v[1])).filter((v) => !["env", "script", "global"].includes(v));
   assert.deepEqual(traps, []);
-  assert.ok(!/\[string\]\$Profile\b/.test(ps), "$Profile is PowerShell's own variable");
-  assert.ok(!/function Start-Service\(/.test(ps), "Start-Service is a Windows cmdlet");
+  assert.ok(!/\[string\]\$Profile\b/.test(code));
+  assert.ok(!/function (Start-Service|Stop-Service|Get-Service)\b/.test(code));
 });
 
-test("keys are never printed: no output line names a key variable; secrets are read by name into the process only", () => {
-  for (const line of ps.split(/\r?\n/)) {
-    if (/\b(Say|Write-Host|Fail|Stop-Here)\b/.test(line)) assert.ok(!/\$env:[A-Z_]*KEY/.test(line), `prints a key: ${line.trim()}`);
-  }
-  assert.match(ps, /SetEnvironmentVariable\(\$Matches\[1\], \$Matches\[2\]\.Trim\(\), "Process"\)/);
-  assert.match(ps, /\$lines = \$null/, "the paywall's env lines are dropped after the in-memory comparison");
+test("a conductor: runs nearadminup.ps1 then test-console\\up.ps1, and their down.ps1 for -Stop; starts no service itself", () => {
+  const a = code.indexOf("& $adminUp @adminArgs"), b = code.indexOf("& $privUp @privArgs");
+  assert.ok(a > 0 && b > a, "admin side first, then the private side");
+  assert.match(code, /\$adminUp = Join-Path \$adminRoot "nearadminup\.ps1"/);
+  assert.match(code, /\$privUp = Join-Path \$repo "test-console\\up\.ps1"/);
+  assert.match(code, /ReplaceRunning = \$true/);
+  assert.match(code, /& \$privDown/); assert.match(code, /& \$adminDown/);
+  assert.ok(!/Start-Process -FilePath\s+(\$exe|"node")/.test(code), "no service started by this script");
+  assert.ok(!/&\s*\(?[^\n]*stack\.ps1/.test(code), "never calls stack.ps1 (compose owns the containers)");
 });
 
-test("the paywall is rebuilt with the paid-jobs names passed by name, and only when missing or asked", () => {
-  assert.match(ps, /-PassEnv FACILITATOR_URL_TESTNET, FACILITATOR_URL_MAINNET, RLUSD_ISSUER_TESTNET, RLUSD_ISSUER_MAINNET, PRICE_SCAN, PRICE_MASK, PRICE_CHAT, PUBLIC_BASE_URL, PAID_JOBS, PAID_JOBS_KEY, PAID_JOBS_RESULT_URL, NEAR_RPC_URL_TESTNET/);
-  assert.match(ps, /if \(\$RebuildPaywall\) \{ \$reasons \+= /);
-  assert.match(ps, /if \(\$reasons\.Count\) \{/, "one rebuild covers every reason");
+test("leftovers: only node processes on the old ports are stopped, never Docker's port owners", () => {
+  assert.match(code, /if \(\$p -and \$p\.ProcessName -eq "node"\) \{ Stop-Process/);
+  assert.equal((code.match(/Stop-Process/g) ?? []).length, 1);
 });
 
-test("the paywall's NEAR RPC is tested from inside the container and switched to the first answering candidate (FastNEAR -429, 2026-11-05)", () => {
-  assert.match(ps, /function RpcAnswers\(/);
-  assert.match(ps, /docker exec ca-paywall node -e \$js/);
-  assert.match(ps, /foreach \(\$u in \$cands\) \{ if \(RpcAnswers \$u\) \{ \$rpcWant = \$u; break \} \}/);
-  assert.match(ps, /\$reasons \+= "NEAR RPC"/);
-  assert.ok(Array.isArray(ex.paywall.nearRpcCandidates) && ex.paywall.nearRpcCandidates.every((u: string) => /^https:\/\//.test(u)));
+test("secrets: files checked by name only; no value read, set or printed", () => {
+  assert.ok(!/SetEnvironmentVariable/.test(code));
+  assert.ok(!/Get-Content[^\n]*PRIV-AI-SECRETS|Get-Content[^\n]*\$secrets/.test(code), "no secrets file is read");
+  assert.match(code, /Select-String -Path \(Join-Path \$secrets "near-testnet\.env"\) -Pattern '\^\\s\*NEAR_RPC_URL_TESTNET\\s\*=\\s\*\\S'/);
+  for (const line of code.split(/\r?\n/)) if (/\b(Say|Write-Host|Problem|Stop-Here)\b/.test(line)) assert.ok(!/\$env:[A-Z_]*KEY/.test(line), line.trim());
 });
 
-test("every service runs hidden with its own log; the READY table and the paywall-to-console reachability check are there", () => {
-  assert.match(ps, /-WindowStyle Hidden -RedirectStandardOutput \$out -RedirectStandardError \$err/);
-  for (const s of ["analyst", "chainQuery", "nearWatch", "adminUi", "console"]) assert.match(ps, new RegExp(`Start-DeskService "${s}"`));
-  assert.match(ps, /docker exec ca-paywall node -e/);
-  assert.match(ps, /Say "READY"/);
-  for (const sw of ["Restart", "Stop", "Check", "Test", "RebuildPaywall", "NoBrowser"]) assert.match(ps, new RegExp(`\\[switch\\]\\$${sw}\\b`));
-});
-
-test("models follow the gateway (summary.json) unless set; fees are required and never defaulted", () => {
-  assert.match(ps, /config\\generated\\summary\.json/);
-  assert.match(ps, /must be a number written as text/);
-  assert.deepEqual(Object.keys(ex.paidJobs).sort(), ["enabled", "feeAnalystUsd", "feePerModelCallUsd", "marginPct", "minPriceUsd", "nearGasFeeUsd", "pricingCatalog", "secretsFile"]);
-  for (const k of ["feePerModelCallUsd", "feeAnalystUsd", "marginPct", "minPriceUsd"]) assert.ok(!/^[0-9.]+$/.test(ex.paidJobs[k]), `${k}: the example must not ship a price`);
-  assert.equal(ex.console.modelsFile, "auto"); assert.ok(Array.isArray(ex.adminUi.watch));
+test("this PC's watch list and gas go to nearadminup.ps1; the paywall's NEAR RPC is tested from inside ca-paywall", () => {
+  assert.match(code, /\$adminArgs\.Watch = \$watch/); assert.match(code, /\$adminArgs\.GasPerPaymentNear =/);
+  assert.match(code, /docker exec ca-paywall node -e \$js/);
+  assert.ok(Array.isArray(ex.adminUi.watch) && ex.adminUi.watch.length > 0);
+  assert.equal(ex.paidJobs.feePerModelCallUsd, undefined, "prices live in up.ps1's price files, not here");
 });
