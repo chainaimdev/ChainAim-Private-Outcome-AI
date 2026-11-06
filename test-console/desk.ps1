@@ -73,8 +73,13 @@ if ($Test) {
 
 # ---------------------------------------------------------------- settings and paths
 $settingsPath = Join-Path $repo $Settings
-if (-not (Test-Path $settingsPath)) { Stop-Here "no $Settings. Copy config\local\desk.example.json to $Settings and edit it (it is git-ignored)." }
-try { $P = Get-Content -Raw $settingsPath | ConvertFrom-Json } catch { Stop-Here "$Settings is not valid JSON: $($_.Exception.Message)" }
+if (Test-Path $settingsPath) {
+  try { $P = Get-Content -Raw $settingsPath | ConvertFrom-Json } catch { Stop-Here "$Settings is not valid JSON: $($_.Exception.Message)" }
+} else {
+  # No settings file (a fresh clone): the defaults below, the same as an empty desk.json.
+  Say "NOTE" "no ${Settings}: defaults (secrets C:\PRIV-AI-SECRETS, paid jobs on, admin UI on, agent auto, watch list from the admin repo's config\near-watch-watch.conf). To change them copy config\local\desk.example.json to $Settings."
+  $P = [pscustomobject]@{}
+}
 $secrets = if ($P.secretsDir) { [string]$P.secretsDir } else { "C:\PRIV-AI-SECRETS" }
 $paid = -not ($P.paidJobs -and $P.paidJobs.enabled -eq $false)
 $admin = -not ($P.adminUi -and $P.adminUi.enabled -eq $false)
@@ -173,7 +178,12 @@ if (-not ((Quiet { & docker info *> $null; $LASTEXITCODE }) -eq 0)) { Stop-Here 
 Say "OK" "Docker is running"
 if (-not (Test-Path $privUp)) { Stop-Here "missing $privUp (git pull in chainaim-private-ai)" }
 if ($admin -and -not (Test-Path $adminUp)) { Stop-Here "missing ${adminUp}; set nearWatchDir in config\local\repos.json to the adminUI checkout's services\near-watch, or git pull there" }
-$need = @("near-testnet.env", "chainaim.env")
+$need = @("near-testnet.env")
+# Model keys: chainaim.env, or the existing ca-gateway (up.ps1 keeps the keys it holds). Neither = no keys to start with.
+if (-not (Test-Path (Join-Path $secrets "chainaim.env"))) {
+  if ((Quiet { & docker inspect ca-gateway *> $null; $LASTEXITCODE }) -eq 0) { Say "NOTE" "no $secrets\chainaim.env: the model keys are kept from the existing ca-gateway (after -Stop they are gone; put them in chainaim.env, cmd.md A4)" }
+  else { Stop-Here "no ca-gateway and no $secrets\chainaim.env, so no model keys: run .\test-console\switch-models.ps1 -To ollama-cpu-8gb-all once (it asks for them), or create chainaim.env (cmd.md A4), then run this again" }
+}
 if ($paid) { $need += "paid-jobs.env" }
 if ($admin -or $paid) { $need += "near-watch.env" }
 if ($agentMode -eq "on") { $need += "agent-tenants.env" }

@@ -30,7 +30,8 @@ What it takes, from files outside the repository (NAME=value; values are never p
   -NearWatchEnvFile    NEAR_WATCH_INGEST_KEY: the paywall's claims (PAYMENT_LOG_KEY) and the console's job feed
                        (default C:\PRIV-AI-SECRETS\near-watch.env; "none" = no claims and no job feed)
   -SecretsFile         the gateway's model keys OPENROUTER_API_KEY, BEDROCK_API_KEY (as switch-models.ps1); when a key
-                       is not in it, the one the running ca-gateway holds is kept (default C:\PRIV-AI-SECRETS\chainaim.env)
+                       is not in it, the one the running ca-gateway holds is kept (default C:\PRIV-AI-SECRETS\chainaim.env).
+                       Optional NEARAI_API_KEY (mode ollama-cpu-8gb-all-nearai) the same way; nothing is said when absent.
   -AgentEnvFile        -Agent on only: the agent's env file, mounted read-only into ca-agent and read by Node's --env-file
                        (default C:\PRIV-AI-SECRETS\agent-tenants.env; MANUAL_SETUP.md M2). Checked to exist, never read here.
                        The Bedrock key the agent uses is BEDROCK_API_KEY (from -SecretsFile or the running ca-gateway, as
@@ -167,6 +168,12 @@ try {
     elseif ($gwEnv[$k]) { Set-Secret $k $gwEnv[$k]; Say "OK" "$k kept from the running ca-gateway (not printed)" }
     elseif ($gwFrom -ne "ca-gateway" -and -not (Get-Item -Path "env:$k" -ErrorAction SilentlyContinue)) { Say "WARN" "$k is not in $SecretsFile and no ca-gateway holds it: models that need it will not answer (add it to $SecretsFile, or run switch-models.ps1)" }
   }
+  # NEARAI_API_KEY (PLAN-private-ai-nearai-attestation.md ARCH-403): optional, only the ollama-cpu-8gb-all-nearai mode uses it.
+  # Passed on when found, by name only; when absent nothing is said or set, so every other mode starts exactly as before.
+  $k = "NEARAI_API_KEY"
+  $nearaiFile = if (Test-Path $SecretsFile) { (Read-EnvFile $SecretsFile '^NEARAI_API_KEY$').Values[$k] } else { $null }
+  if ($nearaiFile) { Set-Secret $k $nearaiFile; Say "OK" "$k from $SecretsFile" }
+  elseif ($gwEnv[$k]) { Set-Secret $k $gwEnv[$k]; Say "OK" "$k kept from the running ca-gateway (not printed)" }
   $keyFile = Join-Path $PSScriptRoot "local-gateway-key.txt"
   if (-not (Test-Path $keyFile)) { Stop-Here "Missing $keyFile (the gateway key the console, gateway and paywall share)." }
   Set-Secret "CHAINAIM_GATEWAY_KEY" ((Get-Content -Raw $keyFile).Trim())
@@ -282,6 +289,18 @@ try {
   $upArgs = $composeArgs + @("up", "-d") + $(if ($Build) { @("--build") } else { @() })
   & docker @upArgs
   if ($LASTEXITCODE -ne 0) { Stop-Here "docker compose up failed; see the message above. Rollback: DOCKERIZE-PLAN.md section 8." }
+  # The console API reads the price catalog once, at start: restart it when switch-models.ps1 rewrote the catalog since
+  # (otherwise a newly added model is quoted as "no price in the pricing catalog", seen 2026-11-06).
+  if ($PaidJobs -eq "on") {
+    $catPath = Join-Path $repo $cat
+    $started = (Invoke-Quiet @("inspect", "--format", "{{.State.StartedAt}}", "ca-console-api")).Out
+    if ($started -and (Test-Path $catPath)) {
+      try {
+        $startedAt = [DateTimeOffset]::Parse(($started -replace '(\.\d{7})\d+', '$1')).UtcDateTime
+        if ((Get-Item $catPath).LastWriteTimeUtc -gt $startedAt) { Say "INFO" "the price catalog changed after ca-console-api started: restarting it"; & docker restart ca-console-api | Out-Null }
+      } catch { Say "INFO" "could not compare the catalog time with ca-console-api's start time; restart it by hand after a model switch: docker restart ca-console-api" }
+    }
+  }
   $ok = (Wait-Http "http://127.0.0.1:8720/healthz" @{} "gateway") -and
         (Wait-Http "http://127.0.0.1:8740/healthz" @{} "analyst") -and
         (Wait-Http "http://127.0.0.1:8750/healthz" @{} "chain-query") -and

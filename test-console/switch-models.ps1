@@ -23,6 +23,8 @@ Mode file fields:
                   --max-output-tokens are generated from it (scripts\local-models.ts) on every switch
   mountConfig     true = mount config\ read-only at /config, so catalog edits need no image rebuild
   secretEnv       env var NAMES the mode needs; asked for hidden when not set; never written to a file
+  optionalSecretEnv  env var NAMES asked for the same way, but Enter at the prompt skips one: the registry's hosted
+                  models that need a skipped key are left out of this switch (scripts/local-models.ts --skip-key-env)
   staticEnv       non-secret env values, { "NAME": "value" }
   flags           extra gateway flags, appended last (they override the base flags)
   testTimeoutSec  how long the test question may take
@@ -86,13 +88,42 @@ $volArgs = @("-v", "chainaim-test-ledger:/data")
 $flags = @("--host", "::", "--port", "8700", "--api-key-env", "CHAINAIM_GATEWAY_KEY",
   "--model-source", $mode.modelSource, "--presidio-url", $PresidioUrl, "--ledger", "/data/ledger")
 
+# Optional keys (mode field optionalSecretEnv): environment, then -SecretsFile, then a hidden prompt where Enter skips the
+# key. A skipped key's models are left out of the generated catalog, so the rest of the mode still runs.
+$skipKeys = @()
+foreach ($name in @($mode.optionalSecretEnv)) {
+  if (-not $name) { continue }
+  $val = (Get-Item -Path "env:$name" -ErrorAction SilentlyContinue).Value
+  if ($val) { Write-Host "Using $name from your environment." }
+  elseif (Test-Path $SecretsFile) {
+    Import-Module (Join-Path $PSScriptRoot "lib\settings.psm1") -Force
+    $val = (Read-SecretsFile $SecretsFile)[$name]
+    if ($val) { Set-Item -Path "env:$name" -Value $val; Write-Host "Using $name from $SecretsFile." }
+  }
+  if (-not $val) {
+    $secure = Read-Host "Paste $name and press Enter, or press Enter alone to skip it (it stays hidden)" -AsSecureString
+    $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
+    try { $val = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr).Trim() } finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }
+    if ($val) { Set-Item -Path "env:$name" -Value $val }
+  }
+  if (-not $val) { $skipKeys += $name; Write-Host "WARN: $name not given, so the models that need it are left out of this switch."; continue }
+  # Same check as the required keys: a Ctrl+V at a hidden prompt types one control character instead of pasting.
+  if ($val.Length -lt 16 -or $val -match '[\x00-\x1F\x7F]') {
+    Remove-Item -Path "env:$name" -ErrorAction SilentlyContinue
+    throw "$name does not look like a key ($($val.Length) characters, or it holds a control character), so nothing changed. Run again and paste with a RIGHT-CLICK (Ctrl+V does not paste at a hidden prompt in Windows PowerShell), or press Enter alone to skip it."
+  }
+  $envArgs += @("-e", $name)
+}
+Remove-Variable val -ErrorAction SilentlyContinue
+$skipArgs = @(foreach ($k in $skipKeys) { "--skip-key-env"; $k })
+
 # Local model registry: generate the catalog and scores from the one file you edit (skipped when -Catalog is given).
 $generated = $null
 if ($mode.modelSource -eq "catalog" -and $mode.localModels -and -not $Catalog) {
   Write-Host "Generating local models from $($mode.localModels) (per-model context variants: $OllamaVariants)..."
   Push-Location $repo
   try {
-    & node scripts/local-models.ts --in $mode.localModels --out-dir config/generated --create-variants $OllamaVariants --check-context $OllamaVariants
+    & node scripts/local-models.ts --in $mode.localModels --out-dir config/generated --create-variants $OllamaVariants --check-context $OllamaVariants @skipArgs
     $genExit = $LASTEXITCODE
   } finally { Pop-Location }
   if ($genExit -ne 0) { throw "Generating the local models failed; see the message above." }

@@ -1,0 +1,118 @@
+{
+  "notes": "Same as config/local-models.cpu-all.json (local Ollama + OpenRouter + Bedrock in one gateway), PLUS nearai/deepseek-v4.1-flash: NEAR AI Cloud deepseek-ai/DeepSeek-V4.1-Flash-1017 (reasoning, served from NEAR AI's attested TEE), zone private-cloud, key NEARAI_API_KEY (PLAN-private-ai-nearai-attestation.md ARCH-402, owner choice (a) 2026-11-06: its own registry and mode, so cpu-all and its mode stay unchanged). Used by test-console/modes/ollama-cpu-8gb-all-nearai.json (--auto-zones local --phi-zones local: chainaim/auto and health data never reach it; it answers only when named). Values read from GET https://cloud-api.near.ai/v1/model/list on 2026-11-06: verifiable true, contextLength 1048576, input 300e-9 / output 1200e-9 USD per token = 0.30 / 1.20 per 1M. Do NOT use the look-alike deepseek/deepseek-v4.1-flash* ids (forwarded to OpenRouter, verifiable false). maxOutputTokens is the shared default until V1 measures what its reasoning needs (ARCH-405). Keys are read from the environment, never written.",
+  "ollamaUrl": "http://host.docker.internal:11434/v1",
+  "defaultModel": "local/qwen2.5-3b",
+  "defaults": {
+    "numCtx": 8192,
+    "maxOutputTokens": 2048,
+    "supportsTools": false,
+    "quality": 5,
+    "tasks": [
+      "chat"
+    ],
+    "speed": "medium"
+  },
+  "models": [
+    {
+      "id": "local/qwen2.5-3b",
+      "servedModel": "qwen2.5:3b",
+      "supportsTools": true,
+      "quality": 6,
+      "tasks": [
+        "chat",
+        "extraction",
+        "rewrite",
+        "tool_use",
+        "long_document"
+      ]
+    },
+    {
+      "id": "local/qwen2.5-1.5b",
+      "servedModel": "qwen2.5:1.5b-instruct",
+      "supportsTools": true,
+      "quality": 4,
+      "tasks": [
+        "chat",
+        "extraction",
+        "rewrite"
+      ],
+      "speed": "fast"
+    },
+    {
+      "id": "local/deepseek-r1-1.5b",
+      "servedModel": "deepseek-r1:1.5b",
+      "quality": 4,
+      "tasks": [
+        "chat",
+        "reasoning"
+      ],
+      "speed": "slow"
+    },
+    {
+      "id": "hosted/nemotron-nano-reasoning",
+      "servedModel": "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+      "baseUrl": "https://openrouter.ai/api/v1",
+      "apiKeyEnv": "OPENROUTER_API_KEY",
+      "zone": "public-api",
+      "numCtx": 32768,
+      "supportsTools": false,
+      "quality": 7,
+      "tasks": [
+        "chat",
+        "reasoning",
+        "extraction",
+        "rewrite",
+        "long_document"
+      ],
+      "speed": "medium"
+    },
+    {
+      "id": "bedrock/nemotron-nano-3-30b",
+      "servedModel": "nvidia.nemotron-nano-3-30b",
+      "baseUrl": "https://bedrock-runtime.ap-southeast-2.amazonaws.com/openai/v1",
+      "apiKeyEnv": "BEDROCK_API_KEY",
+      "zone": "private-cloud",
+      "numCtx": 32768,
+      "supportsTools": true,
+      "quality": 8,
+      "tasks": [
+        "chat",
+        "extraction",
+        "rewrite",
+        "code",
+        "reasoning",
+        "tool_use",
+        "long_document"
+      ],
+      "speed": "fast",
+      "pricing": {
+        "inputPerM": 0.0618,
+        "outputPerM": 0.2472
+      }
+    },
+    {
+      "id": "nearai/deepseek-v4.1-flash",
+      "servedModel": "deepseek-ai/DeepSeek-V4.1-Flash-1017",
+      "baseUrl": "https://cloud-api.near.ai/v1",
+      "apiKeyEnv": "NEARAI_API_KEY",
+      "zone": "private-cloud",
+      "numCtx": 1048576,
+      "supportsTools": true,
+      "quality": 8,
+      "tasks": [
+        "chat",
+        "extraction",
+        "rewrite",
+        "code",
+        "reasoning",
+        "tool_use",
+        "long_document"
+      ],
+      "speed": "medium",
+      "pricing": {
+        "inputPerM": 0.3,
+        "outputPerM": 1.2
+      }
+    }
+  ]
+}

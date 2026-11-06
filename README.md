@@ -34,7 +34,11 @@ cd C:\SATHYA\CHAINAIM3003\mcp-servers\chainiam-private-ai
 
 Stop: `.\test-console\down.ps1` here, then `.\down.ps1` in the admin UI repo.
 
-Tab 03 agent mode (optional, off by default): `.\test-console\up.ps1 -Agent on` adds `ca-agent`, and tab 03 offers
+**Or one command for both repos** (runs `nearadminup.ps1`, then `test-console\up.ps1` with the team prices, agent mode
+and the saved model mode, then prints one READY table): `.\test-console\desk.ps1` · stop: `.\test-console\desk.ps1 -Stop` ·
+report only: `-Check` · rebuild images: `-Build`. It needs no settings file; `config\local\desk.json` is optional.
+
+Tab 03 agent mode (on by default when `agent-tenants.env` and a Bedrock key exist; `-Agent off` skips it) adds `ca-agent`, and tab 03 offers
 "Who pays? Me — Intear Wallet / AI agent" ([cmd.md](cmd.md), "Tab 03 agent mode").
 
 ## What a teammate needs

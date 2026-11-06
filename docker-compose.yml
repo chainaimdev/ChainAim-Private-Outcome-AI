@@ -61,6 +61,8 @@ services:
       - CHAINAIM_GATEWAY_KEY
       - OPENROUTER_API_KEY
       - BEDROCK_API_KEY
+      # Only the ollama-cpu-8gb-all-nearai mode uses it (PLAN-private-ai-nearai-attestation.md ARCH-403); unset = not passed.
+      - NEARAI_API_KEY
     volumes:
       - chainaim-test-ledger:/data
       - ./config:/config:ro

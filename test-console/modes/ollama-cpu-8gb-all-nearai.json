@@ -1,0 +1,26 @@
+{
+  "description": "ollama-cpu-8gb-all PLUS NEAR AI Cloud: nearai/deepseek-v4.1-flash (DeepSeek V4.1 Flash in NEAR AI's TEE, zone private-cloud). Everything else as ollama-cpu-8gb-all (that mode is unchanged and needs no NEAR AI key). chainaim/auto and health data stay local (--auto-zones local --phi-zones local); a hosted model answers only when named. Asks for OPENROUTER_API_KEY, BEDROCK_API_KEY and NEARAI_API_KEY (hidden) unless they are in C:PRIV-AI-SECRETSchainaim.env. PLAN-private-ai-nearai-attestation.md ARCH-402/403.",
+  "modelSource": "catalog",
+  "localModels": "config/local-models.cpu-all-nearai.json",
+  "mountConfig": true,
+  "secretEnv": [
+    "OPENROUTER_API_KEY",
+    "BEDROCK_API_KEY",
+    "NEARAI_API_KEY"
+  ],
+  "staticEnv": {},
+  "flags": [
+    "--attempt-timeout-ms",
+    "280000",
+    "--max-attempts",
+    "1",
+    "--auto-zones",
+    "local",
+    "--phi-zones",
+    "local",
+    "--expose-entity-counts",
+    "on"
+  ],
+  "testTimeoutSec": 600,
+  "doneMessage": "Local + OpenRouter + Bedrock + NEAR AI are on in one gateway. Name a model to use it: local/qwen2.5-3b, hosted/nemotron-nano-reasoning, bedrock/nemotron-nano-3-30b, nearai/deepseek-v4.1-flash (chainaim/auto stays local). Console: node test-consoleconsoleserver.ts --models-file configlocal-models.cpu-all-nearai.json"
+}

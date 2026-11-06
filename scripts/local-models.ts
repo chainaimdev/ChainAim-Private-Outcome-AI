@@ -11,6 +11,8 @@
  *   --create-variants on|off  per-model context via `ollama create`  (default on)
  *   --check-context on|off    cap numCtx at the trained maximum      (default on)
  *   --ollama-bin NAME         the ollama command                     (default ollama)
+ *   --skip-key-env NAME       leave out the hosted entries whose apiKeyEnv is NAME (repeatable; switch-models.ps1 passes
+ *                             it for an optional key the person skipped, so the rest of the mode still runs)
  *
  * Writes <out-dir>/catalog.local.json, scores.local.json, summary.json and, with
  * variants on, ollama/<variant>.Modelfile. With variants on, each model is served
@@ -57,8 +59,11 @@ const { values: f } = parseArgs({
     "create-variants": { type: "string", default: "on" },
     "check-context": { type: "string", default: "on" },
     "ollama-bin": { type: "string", default: "ollama" },
+    "skip-key-env": { type: "string", multiple: true, default: [] },
   },
 });
+const skipKeyEnv = new Set(f["skip-key-env"] ?? []);
+for (const n of skipKeyEnv) if (!/^[A-Z_][A-Z0-9_]*$/.test(n)) fail(`--skip-key-env must be an environment variable NAME, got ${n}`);
 const createVariants = onOff("create-variants", f["create-variants"]!);
 const checkContext = onOff("check-context", f["check-context"]!);
 const api = f["ollama-api"]!.replace(/\/+$/, "");
@@ -76,7 +81,7 @@ if (typeof ollamaUrl !== "string" || !URL.canParse(ollamaUrl)) fail(`${f.in}: ol
 const defaults = isObj(raw.defaults) ? raw.defaults : {};
 if (!Array.isArray(raw.models) || raw.models.length === 0) fail(`${f.in}: models must be a non-empty array`);
 
-const entries: Entry[] = raw.models.map((m: unknown, i: number) => {
+const allEntries: Entry[] = raw.models.map((m: unknown, i: number) => {
   const at = `${f.in}: models[${i}]`;
   if (!isObj(m)) fail(`${at} must be an object`);
   const e = { ...defaults, ...m } as Record<string, unknown>;
@@ -98,6 +103,10 @@ const entries: Entry[] = raw.models.map((m: unknown, i: number) => {
   }
   return e as unknown as Entry;
 });
+// Entries whose key was skipped (--skip-key-env) are left out; every other entry is generated exactly as before.
+const entries: Entry[] = allEntries.filter((e) => !(e.apiKeyEnv && skipKeyEnv.has(e.apiKeyEnv)));
+for (const e of allEntries) if (!entries.includes(e)) console.log(`[local-models] ${e.id} left out: ${e.apiKeyEnv} was not given (--skip-key-env)`);
+if (entries.length === 0) fail(`${f.in}: every model was left out by --skip-key-env`);
 const ids = entries.map((e) => e.id);
 if (new Set(ids).size !== ids.length) fail(`${f.in}: model ids must be unique`);
 const defaultModel = typeof raw.defaultModel === "string" ? raw.defaultModel : ids[0];

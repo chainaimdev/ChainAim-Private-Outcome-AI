@@ -113,6 +113,12 @@ stand-in on a new PC; that is expected here. `switch-models.ps1` starts the gate
 OpenRouter + Bedrock; `chainaim/auto` and health data stay local) and writes `config\generated\catalog.local.json`,
 the catalog the paid-job prices use.
 
+Optional, with a NEAR AI key (PLAN-private-ai-nearai-attestation.md): `.\test-console\switch-models.ps1 -To
+ollama-cpu-8gb-all-nearai` is the same mode plus `nearai/deepseek-v4.1-flash` (DeepSeek V4.1 Flash in NEAR AI's TEE, zone
+private-cloud, $0.30 / $1.20 per 1M tokens; it answers only when named in tab 03). It asks for `NEARAI_API_KEY` too
+(hidden), unless it is in `C:\PRIV-AI-SECRETS\chainaim.env`; then `.\test-console\up.ps1 -ReplaceRunning`. The mode above
+needs no NEAR AI key and is unchanged. Not live-tested yet: MANUAL_SETUP.md, "NEAR AI model + attestation".
+
 **PC without Ollama:** add `-OllamaVariants off -SkipTest`. Bedrock and OpenRouter answer when named; `chainaim/auto`
 needs a local model. (Not yet verified on a PC without Ollama.)
 
@@ -160,6 +166,13 @@ cd C:\SATHYA\CHAINAIM3003\mcp-servers\chainiam-private-ai
 Open http://127.0.0.1:8730 and http://127.0.0.1:8800 (`127.0.0.1`, not `localhost`).
 
 Stop both (PART 3, D): `.\test-console\down.ps1` here, then `.\down.ps1` in the admin UI repo.
+
+**Or the same with ONE command** (from this repo): `.\test-console\desk.ps1`. It runs the admin repo's
+`nearadminup.ps1`, then `.\test-console\up.ps1 -ReplaceRunning` (team prices, agent mode when possible, the gateway's
+model mode from the running gateway or `runtime\compose\last-start.json`), then prints one READY table across both.
+`-Stop` stops both, `-Check` reports only, `-Build` rebuilds the images, `-Agent` requires agent mode. No settings file is
+needed (`config\local\desk.json` is optional). It stops with the fix named when there are no model keys (no
+`chainaim.env` and no gateway container): run A5 once, or fill `chainaim.env` (A4).
 
 | Situation | Command |
 |---|---|
