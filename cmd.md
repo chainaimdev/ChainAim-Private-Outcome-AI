@@ -145,7 +145,7 @@ the image build, `OK gateway / analyst / chain-query / console-api / UI answers`
 ```powershell
 # 1. Admin UI repo: near-watch container + admin UI (8800)
 cd C:\SATHYA\CHAINAIM3003\mcp-servers\chainaim-adminUI-NEAR
-.\up.ps1
+.\nearadminup.ps1
 
 # 2. This repo: the six backend containers + the console UI (8730)
 cd C:\SATHYA\CHAINAIM3003\mcp-servers\chainiam-private-ai
@@ -154,7 +154,7 @@ cd C:\SATHYA\CHAINAIM3003\mcp-servers\chainiam-private-ai
 
 | Command | Containers it starts | UI it starts |
 |---|---|---|
-| 1. admin UI `.\up.ps1` | `ca-near-watch` | admin UI http://127.0.0.1:8800 (own window) |
+| 1. admin UI `.\nearadminup.ps1` | `ca-near-watch` | admin UI http://127.0.0.1:8800 (own window) |
 | 2. private-ai `.\test-console\up.ps1` | `ca-presidio`, `ca-gateway`, `ca-paywall`, `ca-analyst`, `ca-chain-query`, `ca-console-api` | console UI http://127.0.0.1:8730 (own window, opens the browser) |
 
 Open http://127.0.0.1:8730 and http://127.0.0.1:8800 (`127.0.0.1`, not `localhost`).
@@ -196,7 +196,7 @@ own account (architecture-tab03-agent-mode.md). One-time: MANUAL_SETUP.md, "Tab 
 ```powershell
 # 1. Admin UI repo: near-watch with a buyer card per tenant (the list is in config\near-watch-watch.conf; add the t02/t03 lines there once)
 cd C:\SATHYA\CHAINAIM3003\mcp-servers\chainaim-adminUI-NEAR
-.\up.ps1
+.\nearadminup.ps1
 
 # 2. This repo: the six containers plus ca-agent, and the console UI
 cd C:\SATHYA\CHAINAIM3003\mcp-servers\chainiam-private-ai

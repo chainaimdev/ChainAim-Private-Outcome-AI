@@ -27,7 +27,7 @@ the secrets files in `C:\PRIV-AI-SECRETS`, the gateway's model mode, and the fir
 
 ```powershell
 cd C:\SATHYA\CHAINAIM3003\mcp-servers\chainaim-adminUI-NEAR
-.\up.ps1                       # ca-near-watch + admin UI http://127.0.0.1:8800
+.\nearadminup.ps1              # ca-near-watch + admin UI http://127.0.0.1:8800
 cd C:\SATHYA\CHAINAIM3003\mcp-servers\chainiam-private-ai
 .\test-console\up.ps1          # six backend containers + console UI http://127.0.0.1:8730
 ```
