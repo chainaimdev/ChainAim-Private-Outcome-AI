@@ -30,8 +30,19 @@ export const MAX_BODY_BYTES = 4 * 1024 * 1024;
 
 /** Gateway response headers passed back to the caller; everything else is dropped. */
 const PASS_BACK = /^(content-type|retry-after|x-chainaim-[a-z-]+)$/;
-/** Masking counts the gateway sends with --expose-entity-counts (adminUI ARCH-203): for the operator, never the public caller. */
-const NEVER_PASS_BACK = new Set(["x-chainaim-entity-counts", "x-chainaim-residual"]);
+/**
+ * Operator-only gateway headers, never passed to the public caller: the masking counts of --expose-entity-counts (adminUI
+ * ARCH-203) and the provider attestation evidence of attested deployments (PLAN-private-ai-nearai-attestation.md ARCH-408;
+ * the gateway's server.ts ATTEST_HEADERS).
+ */
+export const NEVER_PASS_BACK: ReadonlySet<string> = new Set([
+  "x-chainaim-entity-counts",
+  "x-chainaim-residual",
+  "x-chainaim-provider-id",
+  "x-chainaim-served-model",
+  "x-chainaim-req-sha256",
+  "x-chainaim-resp-sha256",
+]);
 
 export type PaywallDeps = {
   log?: (line: string) => void;

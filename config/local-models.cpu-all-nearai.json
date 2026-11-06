@@ -112,7 +112,8 @@
       "pricing": {
         "inputPerM": 0.3,
         "outputPerM": 1.2
-      }
+      },
+      "attest": "nearai"
     }
   ]
 }

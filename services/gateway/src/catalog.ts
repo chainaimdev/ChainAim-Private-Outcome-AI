@@ -20,6 +20,14 @@ export type Zone = (typeof ZONES)[number];
 export const ADAPTERS = ["openai"] as const;
 export type AdapterKind = (typeof ADAPTERS)[number];
 
+/**
+ * Provider attestation a deployment takes part in (PLAN-private-ai-nearai-attestation.md ARCH-407). "nearai": NEAR AI
+ * Cloud signs each reply over SHA-256 of the exact request and response bytes, so the gateway sends those bytes as-is
+ * with Accept-Encoding: identity and x-no-aliasing: true, and exports only the hashes and the provider's chat id.
+ */
+export const ATTEST_KINDS = ["nearai"] as const;
+export type AttestKind = (typeof ATTEST_KINDS)[number];
+
 export type Deployment = {
   /** Unique across the whole catalog, e.g. "qwen-small@cpu-a". */
   id: string;
@@ -34,6 +42,8 @@ export type Deployment = {
   healthUrl?: string;
   /** false = never probed (OpenRouter models): request outcomes and the cooldown are its only health signal. */
   probe?: boolean;
+  /** Provider attestation (ARCH-407); unset = none, and the request is sent exactly as for any other deployment. */
+  attest?: AttestKind;
 };
 
 export type ModelEntry = {
@@ -129,6 +139,7 @@ export function validateCatalog(raw: unknown): Catalog {
         need(typeof d.healthUrl === "string" && URL.canParse(d.healthUrl), `${dat}.healthUrl: valid URL`);
       }
       if (d.probe !== undefined) need(typeof d.probe === "boolean", `${dat}.probe: boolean`);
+      if (d.attest !== undefined) need(ATTEST_KINDS.includes(d.attest as AttestKind), `${dat}.attest: one of ${ATTEST_KINDS.join(", ")}`);
     });
   });
 

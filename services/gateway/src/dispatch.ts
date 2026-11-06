@@ -3,12 +3,33 @@
  * (chat.ts) walks the chain, applying the quota and the deny-unavailable
  * cache between attempts.
  */
+import { createHash } from "node:crypto";
 import type { HealthEffect, Pool } from "./pool.ts";
 import { categorize, REQUEST_FAULTS, type DataCollection, type Outcome } from "./openrouter.ts";
 
 /** One try of one model, as the ledger records it (never an error body). */
 export type ModelAttempt = { model: string; outcome: Outcome; status?: number; ms: number };
-export type AttemptResult = { attempt: ModelAttempt; completion?: Record<string, unknown>; accountScope?: "minute" | "day" };
+
+/**
+ * What an attested deployment's answered call yields (ARCH-407/408): the provider's chat id and SHA-256 of the exact
+ * request and response bytes. Ids and hashes only, never text. `providerId` is absent when the reply carried no usable
+ * id (the attestation service then reports the call unverified).
+ */
+export type AttestEvidence = { kind: "nearai"; providerId?: string; servedModel: string; requestSha256: string; responseSha256: string };
+
+export type AttemptResult = { attempt: ModelAttempt; completion?: Record<string, unknown>; accountScope?: "minute" | "day"; attest?: AttestEvidence };
+
+/**
+ * Request headers NEAR AI's response signatures require (docs.near.ai/cloud/verification/cloud-api/response-signatures,
+ * read 2026-11-06; gate V2 passed with exactly these): no compression, so the hashed bytes are the bytes on the wire, and
+ * no model aliasing, so the signed model id is the one requested.
+ */
+export const NEARAI_ATTEST_REQUEST_HEADERS: Readonly<Record<string, string>> = { "accept-encoding": "identity", "x-no-aliasing": "true" };
+
+/** A provider chat id that is safe in a response header and a URL path segment. */
+const PROVIDER_ID = /^[A-Za-z0-9._:-]{1,200}$/;
+
+export const sha256Hex = (bytes: Uint8Array): string => createHash("sha256").update(bytes).digest("hex");
 
 /**
  * What an outcome says about the deployment's health (spec section 7 and plan
@@ -79,17 +100,27 @@ export async function attemptChat(
   const key = pool.apiKeyFor(deployment);
   if (key) headers.authorization = `Bearer ${key}`;
   const timeout = AbortSignal.timeout(timeoutMs);
+  const payload = JSON.stringify({ ...body, model: deployment.servedModel, stream: false, provider: { data_collection: dataCollection } });
+  // Attested deployments only: the request is encoded once and those same bytes are sent and hashed; the response is
+  // read as bytes and hashed before decoding. Every other deployment is called exactly as before.
+  const attested = deployment.attest === "nearai";
+  if (attested) Object.assign(headers, NEARAI_ATTEST_REQUEST_HEADERS);
+  const requestBytes = attested ? new TextEncoder().encode(payload) : undefined;
   let status: number;
   let text: string;
+  let responseBytes: Uint8Array | undefined;
   try {
     const res = await fetch(`${deployment.baseUrl.replace(/\/+$/, "")}/chat/completions`, {
       method: "POST",
       headers,
-      body: JSON.stringify({ ...body, model: deployment.servedModel, stream: false, provider: { data_collection: dataCollection } }),
+      body: requestBytes ?? payload,
       signal: AbortSignal.any([clientSignal, timeout]),
     });
     status = res.status;
-    text = await res.text();
+    if (attested) {
+      responseBytes = new Uint8Array(await res.arrayBuffer());
+      text = new TextDecoder().decode(responseBytes);
+    } else text = await res.text();
   } catch {
     if (clientSignal.aborted) return finish("client_abort");
     return finish(timeout.aborted ? "timeout" : "network_error");
@@ -99,5 +130,14 @@ export async function attemptChat(
   if (outcome !== "ok") return finish(outcome, status, accountScope ? { accountScope } : {});
   const completion = parseCompletion(text);
   if (!completion) return finish("upstream_error", status);
-  return finish("ok", status, { completion });
+  if (!attested || !requestBytes || !responseBytes) return finish("ok", status, { completion });
+  const id = completion.id;
+  const attest: AttestEvidence = {
+    kind: "nearai",
+    ...(typeof id === "string" && PROVIDER_ID.test(id) ? { providerId: id } : {}),
+    servedModel: deployment.servedModel,
+    requestSha256: sha256Hex(requestBytes),
+    responseSha256: sha256Hex(responseBytes),
+  };
+  return finish("ok", status, { completion, attest });
 }

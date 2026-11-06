@@ -42,6 +42,17 @@ export type ServerOptions = {
 export const ENTITY_COUNTS_HEADER = "x-chainaim-entity-counts";
 export const RESIDUAL_HEADER = "x-chainaim-residual";
 
+/**
+ * Provider attestation evidence of a served reply from an attested deployment (ARCH-408): the provider's chat id, the
+ * model id it served, and SHA-256 of the exact request and response bytes. For the operator's console and its
+ * attestation service only; the paywall strips all four (ARCH-408). Absent for every other deployment.
+ */
+export const PROVIDER_ID_HEADER = "x-chainaim-provider-id";
+export const SERVED_MODEL_HEADER = "x-chainaim-served-model";
+export const REQ_SHA256_HEADER = "x-chainaim-req-sha256";
+export const RESP_SHA256_HEADER = "x-chainaim-resp-sha256";
+export const ATTEST_HEADERS = [PROVIDER_ID_HEADER, SERVED_MODEL_HEADER, REQ_SHA256_HEADER, RESP_SHA256_HEADER] as const;
+
 function sendJson(res: ServerResponse, status: number, body: unknown, headers: Record<string, string> = {}): void {
   if (res.headersSent) {
     res.end();
@@ -153,6 +164,13 @@ export function createGateway(deps: GatewayDeps, opts: ServerOptions): Server {
     if (result.record.zone) headers["x-chainaim-zone"] = result.record.zone;
     headers["x-chainaim-restored"] = result.record.restored === false ? "no" : "yes";
     if (result.record.unresolvedPlaceholders !== undefined) headers["x-chainaim-unresolved"] = String(result.record.unresolvedPlaceholders);
+    const attest = result.record.attest;
+    if (attest) {
+      if (attest.providerId) headers[PROVIDER_ID_HEADER] = attest.providerId;
+      headers[SERVED_MODEL_HEADER] = attest.servedModel;
+      headers[REQ_SHA256_HEADER] = attest.requestSha256;
+      headers[RESP_SHA256_HEADER] = attest.responseSha256;
+    }
     if (opts.exposeEntityCounts) {
       headers[ENTITY_COUNTS_HEADER] = JSON.stringify(result.record.entityCounts ?? {});
       // A served reply passed the residual check; with --residual-guard off there was no check, so no header.

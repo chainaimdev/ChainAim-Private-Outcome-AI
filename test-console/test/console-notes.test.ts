@@ -9,9 +9,9 @@ import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { RunLog, runRecord } from "../../test-console/console/run-log.ts";
+import { RunLog, runRecord } from "../console/run-log.ts";
 
-const page = readFileSync(new URL("../../test-console/console/index.html", import.meta.url), "utf8");
+const page = readFileSync(new URL("../console/index.html", import.meta.url), "utf8");
 
 test("note contract: two labelled kinds, styled calmly; the old alarming wording is gone", () => {
   assert.match(page, /\.note\.curation \{ border-left-color: var\(--ok\); \}/);

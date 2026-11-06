@@ -50,6 +50,24 @@ describe("ARCH-402 the NEAR AI registry entry", () => {
   });
 });
 
+describe("ARCH-407 attest pass-through", () => {
+  it("ARCH-407: the NEAR AI deployment carries attest nearai; no other deployment carries attest", () => {
+    const { catalog } = generate(read("config", "local-models.cpu-all-nearai.json"));
+    const v = validateCatalog(catalog);
+    for (const m of v.models) assert.equal(m.deployments[0].attest, m.id === ID ? "nearai" : undefined, m.id);
+  });
+
+  it("ARCH-407: an unknown attest value, or attest on an Ollama entry, is refused", () => {
+    const reg = read("config", "local-models.cpu-all-nearai.json");
+    const nearai = reg.models.at(-1);
+    assert.throws(() => generate({ ...reg, models: [...reg.models.slice(0, -1), { ...nearai, attest: "phala" }] }), /attest must be one of nearai/);
+    const i = reg.models.findIndex((m: { baseUrl?: string }) => m.baseUrl === undefined);
+    assert.ok(i >= 0, "the registry has an Ollama entry");
+    const models = reg.models.map((m: Record<string, unknown>, j: number) => (j === i ? { ...m, attest: "nearai" } : m));
+    assert.throws(() => generate({ ...reg, models }), /attest needs baseUrl/);
+  });
+});
+
 describe("ARCH-403 key plumbing", () => {
   it("ARCH-403: the -nearai mode requires NEARAI_API_KEY; ollama-cpu-8gb-all still requires only OpenRouter and Bedrock", () => {
     const mode = read("test-console", "modes", "ollama-cpu-8gb-all-nearai.json");

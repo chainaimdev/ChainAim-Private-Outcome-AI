@@ -925,3 +925,30 @@ Built in the AI's workspace on a snapshot of the owner's repo (main = e8626e8, v
 - V4: NRAS and Intel collateral reachable (verdicts returned). Output pasted with a key mask; no key in it.
 - Next: build part B (ARCH-407..414) as planned: gateway exact-byte hashes for attest:"nearai" deployments, ca-attest with the
   official verifier (pinned commit + our own lockfile), console --attest-url, job_attested feed event, tab 03 / admin Jobs badge.
+
+## 2026-11-06 — NEAR AI attestation part B: ARCH-407 / ARCH-408 built (gateway exact-byte hashes, headers, ledger, paywall strip)
+- Written through the owner's filesystem MCP (no workspace shell this session: the device folder grant was refused), tests run
+  by the owner on the PC.
+- services/gateway/src/catalog.ts: ATTEST_KINDS ["nearai"]; Deployment.attest? validated (any other value refused).
+- services/gateway/src/dispatch.ts: for attest "nearai" deployments only, the request is encoded once and those bytes are sent and
+  hashed; the response is read as bytes and hashed before decoding; headers accept-encoding: identity and x-no-aliasing: true
+  (NEARAI_ATTEST_REQUEST_HEADERS, as gate V2). AttemptResult.attest = {kind, providerId? (completion id, only if
+  /^[A-Za-z0-9._:-]{1,200}$/), servedModel, requestSha256, responseSha256}. Other deployments: the same JSON.stringify payload.
+- services/gateway/src/chat.ts: ChatRecord.attest from the served attempt (so the ledger line carries it; ids and hashes only).
+  services/gateway/src/server.ts: ATTEST_HEADERS x-chainaim-provider-id, -served-model, -req-sha256, -resp-sha256 on served
+  replies with evidence. services/paywall/src/app.ts: NEVER_PASS_BACK exported, + those four.
+- scripts/local-models.ts: registry field attest ("nearai" only, hosted entries only) copied to the deployment.
+  config/local-models.cpu-all-nearai.json: the nearai entry gains "attest": "nearai".
+- Tests: services/gateway/test/attest-hashes.test.ts (7: loopback model recording exact bytes, non-ASCII indented reply; hashes,
+  request headers, non-attested body byte-identical, ledger line, no text in headers, missing/invalid chat id, catalog field);
+  local-models-nearai.test.ts +2 (ARCH-407 pass-through, refusals); services/paywall/test/attest-strip.test.ts (2).
+- Repo fixes needed for the root run (none caused by this change): check-deps failed on (a) _to_delete/.chiro-sanity.ts (stray
+  chiro file, deleted by the owner); (b) scripts/test/console-notes.test.ts importing test-console (gateway unit -> app; made a
+  4-unit cycle) -> moved to test-console/test/console-notes.test.ts, paths ../console/...; (c) two stale allows for
+  services/ledger-watch and apps/admin-console (not in this repo) removed from config/deps/rules.json. One pre-existing failure:
+  local-models-hosted.test.ts still expected the ollama-cpu-8gb-all mode to read local-models.cpu-all.json; updated to the owner's
+  option 2 (cpu-all-nearai.json, NEARAI_API_KEY in optionalSecretEnv, now also asserted), matching local-models-nearai ARCH-403.
+- Owner PC 08:44: `npm test` -> check-deps OK (318 files, 49 cross-unit imports); tests 454, pass 454, fail 0.
+- Owner PC 08:45: `npm run test:paywall` -> tests 294, pass 294, fail 0.
+- Next: ARCH-409/410 services/attest (ca-attest) on nearai-cloud-verifier @ 94554726 (read its ts sources first; note from the
+  gate read: it has no RTMR3 event-log replay, so ARCH-409's RTMR3 item needs an owner decision or our own replay).

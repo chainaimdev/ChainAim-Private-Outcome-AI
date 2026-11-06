@@ -62,8 +62,11 @@ describe("local-models.ts hosted entries", () => {
     assert.deepEqual([zones["local/qwen2.5-3b"], zones["hosted/nemotron-nano-reasoning"], zones["bedrock/nemotron-nano-3-30b"]], ["local", "public-api", "private-cloud"]);
     assert.deepEqual(v.models.find((m) => m.id === "bedrock/nemotron-nano-3-30b")!.deployments[0].apiKeyEnv, "BEDROCK_API_KEY");
     const mode = JSON.parse(readFileSync(join(ROOT, "test-console", "modes", "ollama-cpu-8gb-all.json"), "utf8"));
-    assert.equal(mode.localModels, "config/local-models.cpu-all.json");
+    // Owner option 2 (2026-11-06, PLAN-private-ai-nearai-attestation.md ARCH-403): the mode reads the -nearai registry with
+    // NEARAI_API_KEY optional; skipped, it yields exactly this registry's models (local-models-nearai.test.ts ARCH-403).
+    assert.equal(mode.localModels, "config/local-models.cpu-all-nearai.json");
     assert.deepEqual(mode.secretEnv, ["OPENROUTER_API_KEY", "BEDROCK_API_KEY"]);
+    assert.deepEqual(mode.optionalSecretEnv, ["NEARAI_API_KEY"]);
     const at = (flag: string) => mode.flags[mode.flags.indexOf(flag) + 1];
     assert.equal(at("--auto-zones"), "local");
     assert.equal(at("--phi-zones"), "local");

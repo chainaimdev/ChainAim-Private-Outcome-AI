@@ -4,7 +4,7 @@
  * leaves: messages are rebuilt field by field, and only the fields in
  * PASSTHROUGH are copied from the request.
  */
-import { attemptChat, type ModelAttempt } from "./dispatch.ts";
+import { attemptChat, type AttestEvidence, type ModelAttempt } from "./dispatch.ts";
 import { HttpError } from "./errors.ts";
 import { REQUEST_FAULTS, shapeBody } from "./openrouter.ts";
 import type { Pool } from "./pool.ts";
@@ -82,6 +82,8 @@ export type ChatRecord = {
   restored?: boolean;
   /** What the residual check found after masking: kinds and counts, never values. */
   residual?: ResidualHit[];
+  /** The served attempt's provider attestation evidence (ARCH-408): chat id, served model and byte hashes, never text. */
+  attest?: AttestEvidence;
 };
 
 export type ChatResult =
@@ -333,6 +335,7 @@ async function callChain(d: Decision, p: Prepared, deps: ChatDeps, signal: Abort
     attempts.push(r.attempt);
     switch (r.attempt.outcome) {
       case "ok":
+        if (r.attest) record.attest = r.attest;
         return { ok: true, model, completion: r.completion! };
       case "client_abort":
         return { ok: false, ...CLIENT_CLOSED };

@@ -24,10 +24,8 @@
   "allow": [
     { "from": "services/paywall", "to": "services/web", "reason": "paywall scripts and tests use web's XRPL balance, payment and signer code", "until": "Phase 5 (packages/x402-xrpl)" },
     { "from": "services/web", "to": "services/paywall", "reason": "web/src/mask.ts re-exports paywall/scripts/client-mask.ts", "until": "Phase 5 (browser masking package)" },
-    { "from": "services/ledger-watch", "to": "services/web", "fromPath": "services/ledger-watch/test/", "reason": "test fixtures use web's XRPL helpers", "until": "Phase 5" },
     { "from": "test-console", "to": "services/web", "reason": "console server reads web's NETWORKS and its allowed NEAR wallets (near-wallets.ts)", "until": "Phase 5" },
-    { "from": "services/paywall", "to": "services/gateway", "reason": "prompt-scan.ts uses the gateway's privacy detection", "until": "Phase 6 (owner decides: package or HTTP)" },
-    { "from": "apps/admin-console", "to": "services/ledger-watch", "fromPath": "apps/admin-console/test/", "reason": "integration tests start ledger-watch code", "until": "owner decision: declared integration tests or a contract package" }
+    { "from": "services/paywall", "to": "services/gateway", "reason": "prompt-scan.ts uses the gateway's privacy detection", "until": "Phase 6 (owner decides: package or HTTP)" }
   ],
   "allowCycles": [
     { "units": ["services/paywall", "services/web"], "reason": "client-mask lives in paywall, re-exported by web", "until": "Phase 5" }

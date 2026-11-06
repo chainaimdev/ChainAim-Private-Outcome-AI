@@ -37,8 +37,11 @@ type Entry = { id: string; servedModel: string; numCtx: number; maxOutputTokens:
   zone?: string;
   /** USD per million tokens (input, output). Default 0 (local, or a free hosted model); set it for a paid hosted model so the
    * gateway knows the real cost (e.g. Bedrock on-demand rates). */
-  pricing?: { inputPerM: number; outputPerM: number } };
+  pricing?: { inputPerM: number; outputPerM: number };
+  /** Hosted entry: provider attestation the gateway takes part in (PLAN-private-ai-nearai-attestation.md ARCH-407); only "nearai". */
+  attest?: string };
 const ZONE_NAMES = ["local", "private-cloud", "public-api"];
+const ATTEST_NAMES = ["nearai"];
 const isHosted = (e: Entry): boolean => typeof e.baseUrl === "string";
 
 function fail(message: string): never {
@@ -97,6 +100,10 @@ const allEntries: Entry[] = raw.models.map((m: unknown, i: number) => {
     if (e.apiKeyEnv !== undefined && (typeof e.apiKeyEnv !== "string" || !/^[A-Z_][A-Z0-9_]*$/.test(e.apiKeyEnv))) fail(`${at}.apiKeyEnv must be an environment variable NAME, not a key`);
   } else if (e.apiKeyEnv !== undefined) fail(`${at}.apiKeyEnv needs baseUrl (only hosted entries carry a key)`);
   if (e.zone !== undefined && !ZONE_NAMES.includes(e.zone as string)) fail(`${at}.zone must be one of ${ZONE_NAMES.join(", ")}`);
+  if (e.attest !== undefined) {
+    if (!ATTEST_NAMES.includes(e.attest as string)) fail(`${at}.attest must be one of ${ATTEST_NAMES.join(", ")}`);
+    if (e.baseUrl === undefined) fail(`${at}.attest needs baseUrl (only a hosted provider signs its replies)`);
+  }
   if (e.pricing !== undefined) {
     const p = e.pricing as { inputPerM?: unknown; outputPerM?: unknown };
     if (typeof p !== "object" || p === null || typeof p.inputPerM !== "number" || typeof p.outputPerM !== "number" || p.inputPerM < 0 || p.outputPerM < 0) fail(`${at}.pricing must be {"inputPerM": number >= 0, "outputPerM": number >= 0} (USD per million tokens)`);
@@ -140,6 +147,7 @@ for (const e of entries) {
     if (e.maxOutputTokens >= ctx) fail(`${e.id}: maxOutputTokens ${e.maxOutputTokens} must be below its context ${ctx}, or no prompt fits`);
     const deployment: Record<string, unknown> = { id: `${e.id.split("/")[1]}@hosted`, adapter: "openai", baseUrl: e.baseUrl, servedModel: e.servedModel, probe: false };
     if (e.apiKeyEnv) deployment.apiKeyEnv = e.apiKeyEnv;
+    if (e.attest) deployment.attest = e.attest;
     models.push({
       id: e.id,
       zone: e.zone ?? "public-api",
@@ -148,7 +156,7 @@ for (const e of entries) {
       deployments: [deployment],
     });
     scoreModels[e.id] = { quality: e.quality, tasks: e.tasks, speed: e.speed, domains: [] };
-    console.log(`[local-models] ${e.id} -> hosted ${e.servedModel} at ${e.baseUrl} (zone ${e.zone ?? "public-api"}${e.apiKeyEnv ? `, key from ${e.apiKeyEnv}` : ""})`);
+    console.log(`[local-models] ${e.id} -> hosted ${e.servedModel} at ${e.baseUrl} (zone ${e.zone ?? "public-api"}${e.apiKeyEnv ? `, key from ${e.apiKeyEnv}` : ""}${e.attest ? `, attest ${e.attest}` : ""})`);
     continue;
   }
   if (checkContext || createVariants) {
