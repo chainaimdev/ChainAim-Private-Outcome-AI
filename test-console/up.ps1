@@ -12,7 +12,10 @@ this PC (server.ts --mode ui, which forwards every call to the console API in Do
   .\test-console\up.ps1 -PaidJobs off           tab 03 free only (no paid-job settings needed)
   .\test-console\up.ps1 -Agent on               also tab 03 agent mode (architecture-tab03-agent-mode.md ARCH-312): the agent
                                                 container ca-agent (compose profile "agent"), and the console API relays
-                                                /agent/* to it. Needs -PaidJobs on. Default off: nothing changes.
+                                                /agent/* to it. Needs -PaidJobs on. Default on (owner decision 2026-11-06):
+                                                without -Agent it is switched off, with an INFO line, when -PaidJobs is off,
+                                                -AgentEnvFile does not exist or no BEDROCK_API_KEY is found; -Agent on
+                                                stops instead, -Agent off turns it off.
   .\test-console\down.ps1                       stop the UI and the compose stack (volumes kept)
 
 What it takes, from files outside the repository (NAME=value; values are never printed or written anywhere):
@@ -70,8 +73,8 @@ param(
   [string]$ModelsFile = "config/local-models.cpu-all.json",
   [int]$UiPort = 8730,
   [int]$ApiPort = 8735,
-  [int]$WaitSec = 90,
-  [ValidateSet("on", "off")][string]$Agent = "off",
+  [int]$WaitSec = 180,
+  [ValidateSet("on", "off")][string]$Agent = "on",
   [string]$AgentEnvFile = "C:\PRIV-AI-SECRETS\agent-tenants.env",
   [string]$AgentTenants = "t01,t02,t03",
   [string]$AgentRegion = "ap-southeast-2",
@@ -231,6 +234,11 @@ try {
   }
   # Tab 03 agent mode (ARCH-311, ARCH-312): only with -Agent on; without it the commands file is exactly as before.
   $agentCmd = $null
+  # Default on: when -Agent was not passed, a PC without what agent mode needs runs without it (manual pay still works).
+  if ($Agent -eq "on" -and -not $PSBoundParameters.ContainsKey("Agent")) {
+    $why = if ($PaidJobs -ne "on") { "-PaidJobs off" } elseif (-not (Test-Path $AgentEnvFile)) { "no $AgentEnvFile" } elseif (-not $env:BEDROCK_API_KEY) { "no BEDROCK_API_KEY" } else { $null }
+    if ($why) { Say "INFO" "agent mode off: $why (pass -Agent on to require it, -Agent off to skip this check)"; $Agent = "off" }
+  }
   if ($Agent -eq "on") {
     if ($PaidJobs -ne "on") { Stop-Here "-Agent on needs -PaidJobs on: the agent runs and pays the paid job" }
     if (-not (Test-Path $AgentEnvFile)) { Stop-Here "-AgentEnvFile $AgentEnvFile does not exist: create it with the tenants' NEAR keys (MANUAL_SETUP.md, Tab 03 agent mode, M2)" }
