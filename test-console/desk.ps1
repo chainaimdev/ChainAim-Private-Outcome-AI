@@ -28,6 +28,26 @@ one READY table across both. Neither launcher is changed or renamed; each team k
                 its stored transfer went to exactly ACCOUNT, ACCOUNT is near-watch's pay-to now, and amount, payer and
                 token agree with the paywall's claim; any other row stays a mismatch and is listed. TEXT (1-200
                 characters, no double quotes) is kept in each re-judged row's detail. The admin key stays inside ca-near-watch.
+  -Logs NAME[,NAME]  [-LogLines 40]
+                print the last lines of these services' logs and stop (changes nothing). NAME is one of: gateway, paywall,
+                presidio, analyst, chain-query, console-api, agent, attest, near-watch. Logs carry ids, model names, error
+                kinds and counts, not keys; still look before pasting them anywhere.
+  -Memory  [-MemoryModel deepseek-r1:8b] [-MemoryNeedGb 7]
+                print this PC's memory and stop (changes nothing): total and free RAM, Docker's VM limit and each
+                container's use, the models Ollama has loaded (ollama ps: size and CPU/GPU split), whether MemoryModel is
+                pulled, and whether free RAM covers MemoryNeedGb. 7 GB: deepseek-r1:8b at numCtx 12288 loaded at 6.0 GB
+                (q8_0 K/V) and 7.2 GB (f16) in DESIGN/2026-10-17T1948-0500_local-gpu-models-session.md D14.
+  -Smoke  [-SmokeModel bedrock/nemotron-nano-3-30b] [-SmokeSets default|all] [-SmokeDatasets all|ID,ID]
+         [-SmokeAnswerModel none|ID] [-SmokeDryRun]
+                UI template smoke check (scripts\ui-smoke.ts): every tab-03 template of config\datasets.json, run against its
+                sample-data folder through the running console API with the page's own requests; one line per template,
+                PASS/WARN/SKIP/FAIL, a report in test-console\runs (no rows or answers), exit 1 on any FAIL. Needs the desk
+                started; changes nothing. Sample root only. A local/ model must be pulled first (-Memory shows it).
+  -SmbSample  [-SmbSeed 1]
+                write the synthetic open receivables and payables of smb-fin-1 (tools\smb-synth\gen_ar_ap.py --force, tied
+                to the sample bank statement's deposits) into sample-data\smb-fin\statements, then check them
+                (verify_ar_ap.py). Same seed, same files. Changes only those two files and their _answer-key.
+  Stray words are refused (no positional parameters), so a typo such as "-Check memor" stops instead of running -Logs.
   -NoBrowser    do not open the pages
   -Settings     settings file (default config\local\desk.json; copy config\local\desk.example.json)
 
@@ -41,6 +61,7 @@ NEAR RPC: the paywall and near-watch take theirs from near-testnet.env (NEAR_RPC
 from inside the paywall that its RPC answers and says which line to set if not. It never edits a secrets file.
 ASCII only (Windows PowerShell 5.1).
 #>
+[CmdletBinding(PositionalBinding = $false)]
 param(
   [switch]$Check,
   [switch]$Stop,
@@ -50,6 +71,19 @@ param(
   [switch]$Agent,
   [switch]$Attest,
   [switch]$NoBrowser,
+  [string[]]$Logs = @(),
+  [int]$LogLines = 40,
+  [switch]$Memory,
+  [string]$MemoryModel = "deepseek-r1:8b",
+  [double]$MemoryNeedGb = 7,
+  [switch]$Smoke,
+  [string]$SmokeModel = "bedrock/nemotron-nano-3-30b",
+  [string]$SmokeSets = "default",
+  [string]$SmokeDatasets = "all",
+  [string]$SmokeAnswerModel = "none",
+  [switch]$SmokeDryRun,
+  [switch]$SmbSample,
+  [int]$SmbSeed = 1,
   [string]$RejudgeReceiver = "",
   [string]$RejudgeReason = "",
   [string]$Settings = "config\local\desk.json"
@@ -82,6 +116,84 @@ if ($RejudgeReceiver -or $RejudgeReason) {
   if ($RejudgeReceiver -notmatch '^[a-z0-9]([a-z0-9._-]{0,62}[a-z0-9])?$') { Stop-Here "-RejudgeReceiver must be a NEAR account id, e.g. chainaim-payto-seller.testnet" }
   if ($RejudgeReason.Length -gt 200 -or $RejudgeReason -match '["\x00-\x1f]') { Stop-Here "-RejudgeReason must be 1-200 characters on one line, without double quotes" }
   if ($Check -or $Stop -or $Test) { Stop-Here "-RejudgeReceiver runs after a start; leave out -Check, -Stop and -Test" }
+}
+
+# ---------------------------------------------------------------- -Logs: read-only, needs nothing else
+if ($Logs.Count) {
+  $known = [ordered]@{ "gateway" = "ca-gateway"; "paywall" = "ca-paywall"; "presidio" = "ca-presidio"; "analyst" = "ca-analyst"; "chain-query" = "ca-chain-query"; "console-api" = "ca-console-api"; "agent" = "ca-agent"; "attest" = "ca-attest"; "near-watch" = "ca-near-watch" }
+  $names = @($Logs | ForEach-Object { $_ -split "," } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+  foreach ($n in $names) { if (-not $known.Contains($n)) { Stop-Here "-Logs $n is not a service here; use one of: $($known.Keys -join ', ')" } }
+  if ($LogLines -lt 1 -or $LogLines -gt 2000) { Stop-Here "-LogLines must be 1-2000" }
+  foreach ($n in $names) {
+    Write-Host ""
+    Say "LOGS" "$n ($($known[$n]), last $LogLines lines)"
+    $lines = @(Quiet { & docker logs --tail $LogLines $known[$n] 2>&1 })
+    if ($LASTEXITCODE) { Say "FAIL" "no container $($known[$n]) (is the stack running? .\test-console\desk.ps1 -Check)"; continue }
+    foreach ($l in $lines) { Write-Host "  $l" }
+  }
+  exit 0
+}
+
+# ---------------------------------------------------------------- -Memory: read-only, needs nothing else
+if ($Memory) {
+  if ($MemoryNeedGb -le 0 -or $MemoryNeedGb -gt 512) { Stop-Here "-MemoryNeedGb must be above 0 and at most 512" }
+  if ($MemoryModel -notmatch '^[A-Za-z0-9._/-]+(:[A-Za-z0-9._-]+)?$') { Stop-Here "-MemoryModel must be an Ollama model name, e.g. deepseek-r1:8b" }
+  $cs = Get-CimInstance Win32_ComputerSystem
+  $os = Get-CimInstance Win32_OperatingSystem
+  $totalGb = [math]::Round($cs.TotalPhysicalMemory / 1GB, 1)
+  $idleGb = [math]::Round(($os.FreePhysicalMemory * 1KB) / 1GB, 1)
+  # Available = free + standby cache (what Task Manager calls Available): what a new model can actually get. The WMI
+  # class name is the same on every Windows language, unlike Get-Counter's counter names.
+  $perf = Get-CimInstance Win32_PerfFormattedData_PerfOS_Memory -ErrorAction SilentlyContinue
+  $freeGb = if ($perf -and $perf.AvailableBytes) { [math]::Round([double]$perf.AvailableBytes / 1GB, 1) } else { $idleGb }
+  Say "MEM" "this PC: $totalGb GB total, $freeGb GB available now ($idleGb GB completely unused; the rest of available is cache Windows gives back)"
+  $vm = @(Get-Process -Name vmmem, vmmemWSL -ErrorAction SilentlyContinue)
+  if ($vm.Count) { Say "MEM" ("Docker's VM process ({0}) holds {1} GB (containers below plus the VM's own cache)" -f (($vm | ForEach-Object { $_.ProcessName }) -join ", "), [math]::Round((($vm | Measure-Object WorkingSet64 -Sum).Sum) / 1GB, 1)) }
+  Say "MEM" "largest users now (process name, GB, all its processes together):"
+  $top = Get-Process -ErrorAction SilentlyContinue | Group-Object ProcessName | ForEach-Object { [pscustomobject]@{ Name = $_.Name; Gb = [math]::Round((($_.Group | Measure-Object WorkingSet64 -Sum).Sum) / 1GB, 2) } } | Sort-Object Gb -Descending | Select-Object -First 8
+  foreach ($t in $top) { Write-Host ("  {0,-28} {1,6} GB" -f $t.Name, $t.Gb) }
+  $dockerMem = "$(Quiet { & docker info --format '{{.MemTotal}}' 2>$null })".Trim()
+  if ($dockerMem -match '^\d+$') {
+    Say "MEM" ("Docker VM limit: {0} GB; containers now (docker stats):" -f [math]::Round([double]$dockerMem / 1GB, 1))
+    foreach ($l in @(Quiet { & docker stats --no-stream --format '{{.Name}}  {{.MemUsage}}' 2>$null })) { if ("$l".Trim()) { Write-Host "  $l" } }
+  } else { Say "NOTE" "Docker is not answering: no container figures" }
+  if (-not (Get-Command ollama -ErrorAction SilentlyContinue)) { Say "NOTE" "ollama is not on PATH here: no loaded-model figures" }
+  else {
+    Say "MEM" "Ollama models loaded now (ollama ps: SIZE is memory in use, PROCESSOR the CPU/GPU split; a loaded model is already in use above)"
+    foreach ($l in @(Quiet { & ollama ps 2>&1 })) { Write-Host "  $l" }
+    $have = @(@(Quiet { & ollama list 2>$null }) | Where-Object { "$_" -match ('^' + [regex]::Escape($MemoryModel) + '\s') })
+    if ($have.Count) { Say "OK" "$MemoryModel is pulled" } else { Say "NOTE" "$MemoryModel is not pulled yet" }
+  }
+  if ($freeGb -ge $MemoryNeedGb) { Say "OK" "$freeGb GB available covers the $MemoryNeedGb GB $MemoryModel needs next to what runs now" }
+  else { Say "WARN" "$freeGb GB available is under the $MemoryNeedGb GB $MemoryModel needs: close some of the largest users above before loading it, or it will swap and time out" }
+  exit 0
+}
+
+# ---------------------------------------------------------------- -SmbSample: synthetic receivables and payables for smb-fin-1
+if ($SmbSample) {
+  if (-not (Get-Command python -ErrorAction SilentlyContinue)) { Stop-Here "python is not on PATH (tools\smb-synth needs Python 3)" }
+  if ($SmbSeed -lt 0) { Stop-Here "-SmbSeed must be 0 or more" }
+  $smbDir = Join-Path $repo "sample-data\smb-fin\statements"
+  if (-not (Test-Path $smbDir)) { Stop-Here "no folder $smbDir (the smb-fin-1 sample bank statement goes there first)" }
+  Say "RUN" "synthetic receivables and payables for smb-fin-1 (tools\smb-synth, seed $SmbSeed)"
+  & python tools\smb-synth\gen_ar_ap.py --out-dir $smbDir --seed $SmbSeed --force
+  if ($LASTEXITCODE) { Stop-Here "gen_ar_ap.py failed (exit $LASTEXITCODE): its message is above" }
+  & python tools\smb-synth\verify_ar_ap.py --dir $smbDir
+  exit $LASTEXITCODE
+}
+
+# ---------------------------------------------------------------- -Smoke: every tab-03 template through the console API (reads only)
+if ($Smoke) {
+  if (@("default", "all") -notcontains $SmokeSets) { Stop-Here "-SmokeSets must be default or all" }
+  if ($SmokeModel -notmatch '^[\w.-]+/[\w.:-]+$') { Stop-Here "-SmokeModel must look like provider/name, e.g. bedrock/nemotron-nano-3-30b" }
+  if ($SmokeAnswerModel -ne "none" -and $SmokeAnswerModel -notmatch '^[\w.-]+/[\w.:-]+$') { Stop-Here "-SmokeAnswerModel must be none or provider/name" }
+  if ($SmokeDatasets -notmatch '^[A-Za-z0-9_,-]+$') { Stop-Here "-SmokeDatasets must be all or dataset ids separated by commas" }
+  if ((HttpStatus "http://127.0.0.1:8735/") -eq 0) { Stop-Here "the console API (127.0.0.1:8735) is not running: start the desk first (.\test-console\desk.ps1), then run -Smoke" }
+  $smokeArgs = @("scripts\ui-smoke.ts", "--api", "http://127.0.0.1:8735", "--root", "samples", "--model", $SmokeModel, "--answer-model", $SmokeAnswerModel, "--datasets", $SmokeDatasets, "--sets", $SmokeSets)
+  if ($SmokeDryRun) { $smokeArgs += "--dry-run" }
+  Say "RUN" "UI template smoke check: model $SmokeModel, sets $SmokeSets, datasets $SmokeDatasets (sample data; report in test-console\runs)"
+  & node @smokeArgs
+  exit $LASTEXITCODE
 }
 
 # ---------------------------------------------------------------- -Test needs nothing else
@@ -242,6 +354,18 @@ foreach ($port in @(8730, 8740, 8750, 8790, 8800)) {
 
 # 3. the admin side: near-watch in Docker + the 8800 admin UI, with this PC's watch list
 if ($admin) {
+  # The 8800 admin UI is a Next.js build that nearadminup.ps1 starts but never builds: rebuild it when its source is newer
+  # than the last build, so this one command always serves the current code (CLAUDE.md rule 8). The old 8800 process was
+  # stopped in step 2, so the new build is what starts.
+  $consoleDir = Join-Path $adminRoot "apps\admin-console"
+  $buildId = Join-Path $consoleDir ".next\BUILD_ID"
+  $srcDirs = @(@("app", "components", "lib", "hooks") | ForEach-Object { Join-Path $consoleDir $_ } | Where-Object { Test-Path $_ })
+  $newest = @(Get-ChildItem -Path $srcDirs -Recurse -File -ErrorAction SilentlyContinue | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1)
+  if (-not (Test-Path $buildId) -or ($newest.Count -and $newest[0].LastWriteTimeUtc -gt (Get-Item $buildId).LastWriteTimeUtc)) {
+    Say "RUN" "admin UI build (npm --prefix apps\admin-console run build): its source changed since the last build"
+    & npm --prefix $consoleDir run build
+    if ($LASTEXITCODE) { Stop-Here "the admin UI build failed (exit $LASTEXITCODE): its error is above" }
+  } else { Say "OK" "admin UI build is current" }
   $adminArgs = @{ Secrets = $secrets }
   $watch = @(@($P.adminUi.watch) | Where-Object { $_ })
   if ($watch.Count) { $adminArgs.Watch = $watch }

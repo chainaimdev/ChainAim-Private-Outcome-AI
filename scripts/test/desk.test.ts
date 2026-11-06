@@ -71,6 +71,67 @@ test("re-judge of false reconcile mismatches (owner rule: one script): inside ca
   assert.ok(!/ADMIN_API_KEY/.test(code), "the admin key is never named or read here: it stays inside ca-near-watch");
 });
 
+test("the admin UI (Next.js) is rebuilt when its source is newer than .next\\BUILD_ID, before nearadminup.ps1 starts it (one script)", () => {
+  assert.match(code, /\$buildId = Join-Path \$consoleDir "\.next\\BUILD_ID"/);
+  assert.match(code, /& npm --prefix \$consoleDir run build/);
+  assert.ok(code.indexOf("run build") < code.indexOf("& $adminUp @adminArgs"), "built before it is started");
+  assert.ok(code.indexOf("Stop-Process") < code.indexOf("run build"), "the old 8800 process is stopped first, so the new build is served");
+});
+
+test("-Logs NAME: read-only log view of known services only, before anything starts (one script, no raw docker commands)", () => {
+  assert.match(code, /\[string\[\]\]\$Logs = @\(\),/);
+  assert.match(code, /& docker logs --tail \$LogLines \$known\[\$n\]/);
+  assert.match(code, /if \(-not \$known\.Contains\(\$n\)\) \{ Stop-Here/);
+  assert.ok(code.indexOf("if ($Logs.Count)") < code.indexOf("# 1. pre-flight"), "no start, no change");
+  for (const s of ["ca-gateway", "ca-paywall", "ca-console-api", "ca-attest", "ca-near-watch"]) assert.ok(code.includes(`"${s}"`), s);
+});
+
+test("no positional parameters: a stray word (\"-Check memor\", 2026-11-06) is refused instead of binding to -Logs", () => {
+  assert.match(code, /\[CmdletBinding\(PositionalBinding = \$false\)\]\s*\r?\nparam\(/);
+});
+
+test("-Memory: read-only memory report (RAM, Docker, ollama ps, model pulled), flags for model and need, before anything starts", () => {
+  assert.match(code, /\[switch\]\$Memory,/);
+  assert.match(code, /\[string\]\$MemoryModel = "deepseek-r1:8b",/);
+  assert.match(code, /\[double\]\$MemoryNeedGb = 7,/);
+  assert.match(code, /Get-CimInstance Win32_ComputerSystem/);
+  assert.match(code, /Get-CimInstance Win32_OperatingSystem/);
+  // Judged on Available (free + standby, Task Manager's figure), not FreePhysicalMemory alone (1.6 GB "free" on 15.7 GB, 2026-11-06).
+  assert.match(code, /Get-CimInstance Win32_PerfFormattedData_PerfOS_Memory/);
+  assert.match(code, /\$freeGb = if \(\$perf -and \$perf\.AvailableBytes\)/);
+  assert.match(code, /Get-Process -Name vmmem, vmmemWSL/);
+  assert.match(code, /& docker stats --no-stream/);
+  assert.match(code, /& ollama ps/);
+  assert.match(code, /& ollama list/);
+  const m = code.slice(code.indexOf("if ($Memory) {"), code.indexOf("# ---------------------------------------------------------------- -Test"));
+  assert.ok(m.length > 0 && code.indexOf("if ($Memory) {") < code.indexOf("# 1. pre-flight"), "no start, no change");
+  assert.ok(!/ollama (pull|rm|run)|docker (rm|stop|kill|compose)|Stop-Process/.test(m), "changes nothing");
+  assert.match(m, /exit 0/);
+});
+
+test("-Smoke: the UI template smoke check runs scripts\\ui-smoke.ts on the sample root through the running console API, before any start", () => {
+  assert.match(code, /\[switch\]\$Smoke,/);
+  assert.match(code, /\[string\]\$SmokeModel = "bedrock\/nemotron-nano-3-30b",/);
+  assert.match(code, /\[string\]\$SmokeSets = "default",/);
+  assert.match(code, /\[switch\]\$SmokeDryRun,/);
+  const s = code.slice(code.indexOf("if ($Smoke) {"), code.indexOf("# ---------------------------------------------------------------- -Test"));
+  assert.ok(s.length > 0 && code.indexOf("if ($Smoke) {") < code.indexOf("# 1. pre-flight"), "no start, no change");
+  assert.match(s, /\$smokeArgs = @\("scripts\\ui-smoke\.ts", "--api", "http:\/\/127\.0\.0\.1:8735", "--root", "samples"/);
+  assert.match(s, /HttpStatus "http:\/\/127\.0\.0\.1:8735\/"/);
+  assert.match(s, /& node @smokeArgs\s*\r?\n\s*exit \$LASTEXITCODE/);
+  assert.ok(!/docker|ollama|Stop-Process|& \$privUp|& \$adminUp/.test(s), "changes nothing");
+});
+
+test("-SmbSample: writes and verifies the smb-fin-1 receivables and payables (tools\\smb-synth), before any start", () => {
+  assert.match(code, /\[switch\]\$SmbSample,/);
+  assert.match(code, /\[int\]\$SmbSeed = 1,/);
+  const s = code.slice(code.indexOf("if ($SmbSample) {"), code.indexOf("# ---------------------------------------------------------------- -Smoke"));
+  assert.ok(s.length > 0 && code.indexOf("if ($SmbSample) {") < code.indexOf("# 1. pre-flight"), "no start");
+  assert.match(s, /& python tools\\smb-synth\\gen_ar_ap\.py --out-dir \$smbDir --seed \$SmbSeed --force/);
+  assert.match(s, /& python tools\\smb-synth\\verify_ar_ap\.py --dir \$smbDir\s*\r?\n\s*exit \$LASTEXITCODE/);
+  assert.ok(!/docker|Stop-Process/.test(s), "touches no service");
+});
+
 test("this PC's watch list and gas go to nearadminup.ps1; the paywall's NEAR RPC is tested from inside ca-paywall", () => {
   assert.match(code, /\$adminArgs\.Watch = \$watch/); assert.match(code, /\$adminArgs\.GasPerPaymentNear =/);
   assert.match(code, /docker exec ca-paywall node -e \$js/);
