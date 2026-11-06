@@ -1,0 +1,175 @@
+{
+  "version": 1,
+  "notes": "Query bank of finance/rcm/chiro (DESIGN/xrplh-29; owner decision 2026-11-06: exact Table answers now, model (question) entries after the chiro reconciliation, CHIRO-1b-2 stage 3). The pack has no reconcile config, so /pack-run loads each file with its layout and runs these SELECTs over the views below; no model writes SQL. One query serves ChiroTouch and Jane: the CT day sheet and the Jane transactions load into the same ledger columns. VIEWS: ledger(date, patient_key, visit_ref, provider, entry charge|payment|adjustment, code, modifiers, units, cents, ref, payer) | bank(row, date, cents, description, kind, originator, des, ach_id, indn, co_id, trace, check_no, running_cents; detail rows only, the BofA summary block is checked, never loaded) | bank__summary(period_start, period_end, beginning_cents, credits_cents, debits_cents, ending_cents) | bank_credits = bank WHERE cents > 0 plus grp from tables.bankGroups | era (835 claims), era__payments, era__lines, era__adjustments, era__plb | fee_schedule(payer_code, payer, cpt, allowed_cents) | pi_cases(case_id, patient_key, state, coverage, carrier, attorney, lop_date, billed_cents, carrier_paid_cents, has_health_ins, status, settled_date, prior_balance_cents, settlement_cents, reduction_cents, reduction_approved) | care_plans(plan_id, patient_key, start_date, visits_bought, price_cents, payment, visits_used, collected_cents, earned_cents, unearned_cents) | ct_deposits, ct_payments, cash_practice, jane_payments, jane_payouts, patients | file_checks. Amounts are cents in the sources; queries show dollars. The statement period is the one the bank statement states (bank__summary: period_start, period_end from 'Beginning/Ending balance as of'; beginning_cents, credits_cents, debits_cents, ending_cents), never today's date. bank__summary is loaded by bank/bofa. bankGroups basis: tools/chiro-synth/gen_chiro_set.py deposits_and_bank() writes HCCLAIMPMT ACH per payer remittance, GB PY DES:GLOBAL DEP (ChiroTouch card) or JANE APP DES:PAYOUT (Jane Payments payout), CASH PRACTICE DES:AUTODEBIT, and BKOFAMERICA ATM ... DEPOSIT (bank/bofa kind atm_deposit); real exports UNVERIFIED. An entry's \"template\" names the tab-03 template label (config/datasets.json) whose intent it answers exactly; scripts/ui-smoke.ts uses it to check answers against the set's _answer-key. tables.extensions: file types loaded on this pack's runs beyond .csv/.tsv/.json (the ERA 835); the generic analysis never reads them.",
+  "tables": {
+    "extensions": [
+      ".835"
+    ],
+    "views": {
+      "bank/bofa": "bank",
+      "remit/x12-835": "era",
+      "prms/chirotouch/daysheet": "ledger",
+      "prms/jane/transactions": "ledger",
+      "prms/chirotouch/patients": "patients",
+      "prms/jane/patients": "patients",
+      "prms/chirotouch/deposits": "ct_deposits",
+      "processor/ct-payments": "ct_payments",
+      "processor/cash-practice": "cash_practice",
+      "prms/jane/payments-refunds-fees": "jane_payments",
+      "processor/jane-payments-payouts": "jane_payouts",
+      "owner/fee-schedule": "fee_schedule",
+      "owner/pi-cases": "pi_cases",
+      "owner/care-plans": "care_plans"
+    },
+    "bankGroups": {
+      "view": "bank_credits",
+      "from": "bank",
+      "otherwise": "other",
+      "rules": [
+        {
+          "grp": "insurance_eft",
+          "when": {
+            "des": "HCCLAIMPMT"
+          }
+        },
+        {
+          "grp": "card_processor",
+          "when": {
+            "originator": "GB PY",
+            "des": "GLOBAL DEP"
+          }
+        },
+        {
+          "grp": "card_processor",
+          "when": {
+            "originator": "JANE APP",
+            "des": "PAYOUT"
+          }
+        },
+        {
+          "grp": "autodebit",
+          "when": {
+            "originator": "CASH PRACTICE",
+            "des": "AUTODEBIT"
+          }
+        },
+        {
+          "grp": "branch_atm_deposit",
+          "when": {
+            "kind": "atm_deposit"
+          }
+        }
+      ]
+    }
+  },
+  "topics": [
+    {
+      "id": "payers",
+      "label": "Insurance payers"
+    },
+    {
+      "id": "deposits",
+      "label": "Bank deposits"
+    },
+    {
+      "id": "plans",
+      "label": "Care plans"
+    },
+    {
+      "id": "pi",
+      "label": "Personal injury cases"
+    },
+    {
+      "id": "fees",
+      "label": "Fee schedule"
+    },
+    {
+      "id": "cash",
+      "label": "Cash flow"
+    },
+    {
+      "id": "quality",
+      "label": "Data quality"
+    }
+  ],
+  "queries": [
+    {
+      "id": "payer-paid",
+      "title": "Insurance paid by payer in the statement period: 835 payments, claims paid, amount",
+      "topic": "payers",
+      "template": "Insurance paid by payer",
+      "sql": "WITH period AS (SELECT period_start AS d0, period_end AS d1 FROM bank__summary) , pay AS (SELECT y.payer_name, count(*) AS payments, sum(y.paid_cents) AS cents FROM era__payments y, period WHERE y.payment_date BETWEEN period.d0 AND period.d1 GROUP BY 1), clm AS (SELECT y.payer_name, count(DISTINCT c.claim_seq) AS claims FROM era c JOIN era__payments y ON y.st_control = c.st_control AND y.trace = c.trace, period WHERE y.payment_date BETWEEN period.d0 AND period.d1 AND c.paid_cents > 0 GROUP BY 1) SELECT pay.payer_name AS payer, pay.payments, coalesce(clm.claims, 0) AS claims_paid, pay.cents / 100.0 AS paid FROM pay LEFT JOIN clm USING (payer_name) ORDER BY paid DESC, payer"
+    },
+    {
+      "id": "insurance-checks",
+      "title": "Insurance checks posted in the ledger (PI auto carriers, not in the 835), by payer",
+      "topic": "payers",
+      "sql": "WITH period AS (SELECT period_start AS d0, period_end AS d1 FROM bank__summary) SELECT payer, count(*) AS payments, count(DISTINCT visit_ref) AS visits, -sum(cents) / 100.0 AS paid FROM ledger, period WHERE entry = 'payment' AND code = 'Insurance Check' AND date BETWEEN period.d0 AND period.d1 GROUP BY payer ORDER BY paid DESC, payer"
+    },
+    {
+      "id": "bank-deposits-by-kind",
+      "title": "Bank credits by kind of deposit, statement period total",
+      "topic": "deposits",
+      "template": "Bank deposits by kind",
+      "sql": "SELECT grp AS kind, count(*) AS credits, sum(cents) / 100.0 AS amount FROM bank_credits GROUP BY grp ORDER BY amount DESC"
+    },
+    {
+      "id": "bank-deposits-weekly",
+      "title": "Bank credits by kind of deposit, per week (weeks start Monday)",
+      "topic": "deposits",
+      "sql": "SELECT date_trunc('week', date) AS week_of, grp AS kind, count(*) AS credits, sum(cents) / 100.0 AS amount FROM bank_credits GROUP BY ALL ORDER BY week_of, kind"
+    },
+    {
+      "id": "care-plans-unearned",
+      "title": "Care plans: unearned total (collected - earned), split into prepaid and earned-not-collected",
+      "topic": "plans",
+      "template": "Care plans: unearned revenue",
+      "sql": "SELECT count(*) AS plans, sum(price_cents) / 100.0 AS price, sum(collected_cents) / 100.0 AS collected, sum(earned_cents) / 100.0 AS earned, sum(unearned_cents) / 100.0 AS unearned_net, coalesce(sum(unearned_cents) FILTER (WHERE unearned_cents > 0), 0) / 100.0 AS prepaid_not_delivered, coalesce(-sum(unearned_cents) FILTER (WHERE unearned_cents < 0), 0) / 100.0 AS delivered_not_collected FROM care_plans"
+    },
+    {
+      "id": "care-plans",
+      "title": "Care plans one by one: price, visits bought and used, collected, earned, unearned",
+      "topic": "plans",
+      "sql": "SELECT plan_id, start_date, payment, price_cents / 100.0 AS price, visits_bought, visits_used, collected_cents / 100.0 AS collected, earned_cents / 100.0 AS earned, unearned_cents / 100.0 AS unearned FROM care_plans ORDER BY unearned_cents DESC, plan_id"
+    },
+    {
+      "id": "pi-open-by-state",
+      "title": "Open personal-injury cases by state and coverage: billed, carrier paid, open balance (billed - paid)",
+      "topic": "pi",
+      "template": "PI cases: open balances",
+      "sql": "SELECT state, coverage, count(*) AS open_cases, sum(billed_cents) / 100.0 AS billed, sum(carrier_paid_cents) / 100.0 AS carrier_paid, sum(billed_cents - carrier_paid_cents) / 100.0 AS open_balance FROM pi_cases WHERE status = 'open' GROUP BY ALL ORDER BY open_balance DESC, state, coverage"
+    },
+    {
+      "id": "pi-open-largest",
+      "title": "The 10 open personal-injury cases with the largest open balance",
+      "topic": "pi",
+      "sql": "SELECT case_id, state, coverage, carrier, attorney, lop_date, billed_cents / 100.0 AS billed, carrier_paid_cents / 100.0 AS carrier_paid, (billed_cents - carrier_paid_cents) / 100.0 AS open_balance FROM pi_cases WHERE status = 'open' ORDER BY billed_cents - carrier_paid_cents DESC, case_id LIMIT 10"
+    },
+    {
+      "id": "contracted-vs-charged",
+      "title": "Contracted allowed amount vs average charge, per payer and CPT code (fee schedule payers only)",
+      "topic": "fees",
+      "template": "Contracted vs charged",
+      "sql": "WITH ch AS (SELECT payer, code, count(*) AS charges, avg(cents / coalesce(nullif(units, 0), 1)) AS avg_cents FROM ledger WHERE entry = 'charge' GROUP BY payer, code) SELECT f.payer, f.cpt, f.allowed_cents / 100.0 AS allowed, ch.charges, round(ch.avg_cents / 100.0, 2) AS avg_charge, round((ch.avg_cents - f.allowed_cents) / 100.0, 2) AS charge_over_allowed, round(100.0 * f.allowed_cents / nullif(ch.avg_cents, 0), 1) AS allowed_pct_of_charge FROM fee_schedule f JOIN ch ON ch.payer = f.payer AND ch.code = f.cpt ORDER BY f.payer, f.cpt"
+    },
+    {
+      "id": "cash-flow",
+      "title": "Cash in, out and net for the statement period, from the bank detail; covers an installment of 8,000 a month?",
+      "topic": "cash",
+      "template": "Cash flow vs installment",
+      "sql": "WITH k AS (SELECT 8000.00 AS installment), t AS (SELECT s.period_start, s.period_end, coalesce(sum(b.cents) FILTER (WHERE b.cents > 0), 0) AS cin, coalesce(-sum(b.cents) FILTER (WHERE b.cents < 0), 0) AS cout FROM bank b, bank__summary s WHERE b.date BETWEEN s.period_start AND s.period_end GROUP BY ALL) SELECT period_start, period_end, cin / 100.0 AS cash_in, cout / 100.0 AS cash_out, (cin - cout) / 100.0 AS net_cash_flow, k.installment, (cin - cout) / 100.0 >= k.installment AS covers_installment, (cin - cout) / 100.0 - k.installment AS left_after_installment FROM t, k"
+    },
+    {
+      "id": "cash-flow-monthly",
+      "title": "Cash in, out and net per calendar month, from the bank detail",
+      "topic": "cash",
+      "sql": "SELECT date_trunc('month', date) AS month, coalesce(sum(cents) FILTER (WHERE cents > 0), 0) / 100.0 AS cash_in, coalesce(-sum(cents) FILTER (WHERE cents < 0), 0) / 100.0 AS cash_out, sum(cents) / 100.0 AS net_cash_flow FROM bank GROUP BY 1 ORDER BY 1"
+    },
+    {
+      "id": "file-checks",
+      "title": "Data-quality checks that failed, per file",
+      "topic": "quality",
+      "sql": "SELECT file, adapter, check_name, detail FROM file_checks WHERE NOT ok ORDER BY file, check_name"
+    }
+  ]
+}

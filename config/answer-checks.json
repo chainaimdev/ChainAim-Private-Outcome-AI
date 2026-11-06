@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "notes": "Answer checks for scripts/ui-smoke.ts --check-answers on (default): PASS then means the result equals the set's answer key, not only that a query ran. Sample data only: each key is a file of the generator that wrote the set (git-ignored, under --answer-root, default sample-data): <answer-root>/<dataset folder>/<set>/_answer-key/<key>. A rule names a dataset, the item (an exact pack query id, or a crossask template label), the key file and comparisons. Comparison types: cell (one row: column = key path), columnSum (sum of a column over all rows = key path), rowsByKey (keyColumn -> valueColumn equals the object at the key path, every entry and nothing else), figuresPresent (each key path's figure appears in some cell of the result, sign ignored: for model-written SQL, whose column names are not known in advance). unit: the key's unit, dollars (a number or '1234.56') or cents (integer); results are always dollars; amounts compare exactly to the cent. kind count: compare as a plain number. A key path is dotted (counts.remittances_eft). An item with no rule, or a set without the key file, is reported 'not checked'.",
+  "rules": [
+    {"datasets": ["chiro-ct", "chiro-jane"], "item": "bank-deposits-by-kind", "key": "truth.json", "unit": "dollars",
+     "compare": [{"type": "rowsByKey", "keyColumn": "kind", "valueColumn": "amount", "path": "bank_credits_by_group"}]},
+    {"datasets": ["chiro-ct", "chiro-jane"], "item": "care-plans-unearned", "key": "truth.json", "unit": "dollars",
+     "compare": [{"type": "cell", "column": "unearned_net", "path": "unearned_plan_revenue"}, {"type": "cell", "column": "plans", "path": "counts.plans", "kind": "count"}]},
+    {"datasets": ["chiro-ct", "chiro-jane"], "item": "payer-paid", "key": "truth.json", "unit": "dollars",
+     "compare": [{"type": "columnSum", "column": "paid", "path": "bank_credits_by_group.insurance_eft"}, {"type": "columnSum", "column": "payments", "path": "counts.remittances_eft", "kind": "count"}]},
+    {"datasets": ["smb-fin-1"], "item": "Receivables vs payables: need a loan?", "key": "ar-ap-key.json", "unit": "cents",
+     "compare": [{"type": "figuresPresent", "paths": ["receivables.openCents", "payables.openCents"]}]}
+  ]
+}

@@ -62,6 +62,7 @@
  * Tests: npm test (generates synthetic data with planted problems; no real data needed).
  */
 import { randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { join } from "node:path";
@@ -81,6 +82,7 @@ import { type ReconcileReport, reconcileFolder } from "./reconcile.ts";
 import { type EvidenceConfig, readReconcileConfig } from "./engines/deposit-match.ts";
 import { reconcileEvidenceOf } from "./reconcile-evidence.ts";
 import { bankPathOf, buildTables, factSheet, loadBank } from "./packquery.ts";
+import { loadPackFolder } from "./packload.ts";
 import { FACT_SYSTEM, type FactSheet, plainFacts, verifyFactAnswer } from "./facts.ts";
 import { checkSelect } from "./sqlrun.ts";
 
@@ -110,7 +112,7 @@ function resolvePack(id: unknown): ResolvedPack {
   if (id !== undefined && typeof id !== "string") throw new HttpError(400, "pack must be a pack id string");
   let p: ResolvedPack;
   try { p = packs.resolve((id as string | undefined) ?? flags.reconcilePack); } catch (e) { if (e instanceof PackError) throw new HttpError(400, e.message); throw e; }
-  if (!p.reconcile) throw new HttpError(400, `pack ${p.id} has no reconciliation config, so it has no query bank to run`);
+  if (!p.reconcile && !existsSync(bankPathOf(flags.configRoot, p.id))) throw new HttpError(400, `pack ${p.id} has no reconciliation config and no query bank to run`);
   return p;
 }
 /** One store for every run /evidence and /verify can use (Phase 4b-3: analysis or reconcile), oldest evicted beyond --runs-in-memory. */
@@ -251,7 +253,7 @@ createServer(async (req, res) => {
     if (path === "/pack-queries") {
       const pack = resolvePack(b.pack);
       const bank = loadBank(bankPathOf(flags.configRoot, pack.id));
-      return send(res, 200, { pack: pack.id, topics: bank.topics ?? [], queries: bank.queries.map((q) => ({ id: q.id, title: q.title, kind: q.sql ? "sql" : "model", topic: q.topic ?? null, pair: q.pair ?? null, ...(q.question ? { question: q.question, facts: q.facts } : {}) })) });
+      return send(res, 200, { pack: pack.id, mode: pack.reconcile ? "reconcile" : "load", topics: bank.topics ?? [], queries: bank.queries.map((q) => ({ id: q.id, title: q.title, kind: q.sql ? "sql" : "model", topic: q.topic ?? null, pair: q.pair ?? null, ...(q.question ? { question: q.question, facts: q.facts } : {}) })) });
     }
     if (path === "/pack-run") {
       const folder = await folderOf(b, cfg);
@@ -263,6 +265,24 @@ createServer(async (req, res) => {
       if (!picked.length && !own) throw new HttpError(400, "give ids (query bank entries) or sql");
       try { for (const q of picked) if (q.sql) checkSelect(q.sql); if (own) checkSelect(own); } catch (e) { if (e instanceof SqlRefused) throw new HttpError(400, e.message); throw e; }
       const maxRows = Number.isInteger(b.maxRows) && b.maxRows > 0 ? Math.min(b.maxRows, flags.sqlMaxRows) : flags.sqlMaxRows;
+      if (!pack.reconcile) {
+        // load-only pack (no reconciliation yet): exact entries only; a model entry needs reconciliation facts
+        const asked = picked.filter((q) => q.question).map((q) => q.id);
+        if (asked.length) throw new HttpError(400, `pack ${pack.id} has no reconciliation yet, so its model questions (${asked.join(", ")}) cannot run; use the exact (Table) answers`);
+        const results: { id: string; title: string; columns?: string[]; rows?: Record<string, unknown>[]; truncated?: boolean; skipped?: string; error?: string }[] = [];
+        const rep = await loadPackFolder({ files: await listDataFiles(folder, cfg, flags.maxFiles, bank.tables?.extensions ?? []), sources, pack, configRoot: flags.configRoot,
+          sourceOptions: { patientNameFormat: flags.patientNameFormat }, spec: bank.tables, open: openDb,
+          inspect: async (db) => {
+            for (const q of [...picked.map((x) => ({ id: x.id, title: x.title, sql: x.sql! })), ...(own ? [{ id: "your-query", title: "your query", sql: own }] : [])]) {
+              try { const r = await runSelect(db, q.sql, { maxRows, timeoutMs: flags.sqlTimeoutMs }); results.push({ id: q.id, title: q.title, columns: r.columns, rows: r.rows, truncated: r.truncated }); }
+              catch (e) {
+                const m = (e as Error).message; const miss = /Table with name (\w+) does not exist/i.exec(m);
+                results.push(miss ? { id: q.id, title: q.title, skipped: `no ${miss[1]} file in this folder` } : { id: q.id, title: q.title, error: m.split("\n")[0] });
+              }
+            }
+          } });
+        return send(res, 200, { runId: newRunId(), pack: pack.id, mode: "load", files: rep.files.map((f) => ({ name: f.name, adapter: f.adapter, rows: f.rows })), exceptions: 0, results, questions: [], system: FACT_SYSTEM });
+      }
       const { cfg: rc } = readReconcileConfig(join(flags.configRoot, pack.reconcile!), flags.configRoot);
       const actions = ((rc as unknown as { actions?: Record<string, string> }).actions) ?? {};
       const results: { id: string; title: string; columns?: string[]; rows?: Record<string, unknown>[]; truncated?: boolean; skipped?: string; error?: string }[] = [];
@@ -270,7 +290,7 @@ createServer(async (req, res) => {
       const report = await reconcileFolder({ files: await listDataFiles(folder, cfg, flags.maxFiles), sources, pack, configRoot: flags.configRoot,
         sourceOptions: { patientNameFormat: flags.patientNameFormat }, toleranceCents: flags.reconcileToleranceCents, open: openDb,
         inspect: async (db, tables, rep) => {
-          await buildTables(db, tables, rep, rc.evidence?.directions ?? {});
+          await buildTables(db, tables, rep, rc.evidence?.directions ?? {}, bank.tables);
           const sqls = [...picked.filter((q) => q.sql).map((q) => ({ id: q.id, title: q.title, sql: q.sql! })), ...(own ? [{ id: "your-query", title: "your query", sql: own }] : [])];
           for (const q of sqls) {
             try { const r = await runSelect(db, q.sql, { maxRows, timeoutMs: flags.sqlTimeoutMs }); results.push({ id: q.id, title: q.title, columns: r.columns, rows: r.rows, truncated: r.truncated }); }

@@ -7,7 +7,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createServer, type Server } from "node:http";
-import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -36,7 +36,9 @@ const BANK = { pack: "finance/rcm/dental", topics: [{ id: "leaks", label: "Leaks
 ] };
 
 type Seen = { method: string; path: string; body: any };
-type Mode = { crossFail?: boolean; zeroRows?: boolean; checkOk?: boolean; warnings?: boolean; rateLimited?: number };
+type Mode = { crossFail?: boolean; zeroRows?: boolean; checkOk?: boolean; warnings?: boolean; rateLimited?: number;
+  /** answer checks: the rows a pack query id returns, and the rows every crossask result returns */
+  packRows?: Record<string, Record<string, unknown>[]>; crossRows?: Record<string, unknown>[] };
 
 async function double(mode: Mode): Promise<{ server: Server; url: string; seen: Seen[] }> {
   const seen: Seen[] = [];
@@ -51,7 +53,8 @@ async function double(mode: Mode): Promise<{ server: Server; url: string; seen: 
     if (req.method === "POST" && url.pathname === "/analyst/pack-run") {
       const id = body.ids[0];
       return send(200, { runId: "r1", pack: body.pack, files: [], exceptions: 0, questions: [],
-        results: [id === "financing" ? { id, title: "Financing", skipped: "no financing file in this folder" } : { id, title: "Every leak", columns: ["code"], rows: [], truncated: false }] });
+        results: [id === "financing" ? { id, title: "Financing", skipped: "no financing file in this folder" }
+          : { id, title: "Every leak", columns: mode.packRows?.[id] ? Object.keys(mode.packRows[id][0] ?? {}) : ["code"], rows: mode.packRows?.[id] ?? [], truncated: false }] });
     }
     if (req.method === "POST" && url.pathname === "/packask") {
       const ok = mode.checkOk !== false;
@@ -62,7 +65,7 @@ async function double(mode: Mode): Promise<{ server: Server; url: string; seen: 
       if (mode.rateLimited && mode.rateLimited-- > 0) return send(200, { attempts: [], sql: null, result: null, answer: null, unverified: [], served: [], sentToModel: [], warnings: [],
         error: "the model that writes the query (bedrock/nemotron-nano-3-30b) failed: gateway: free-model capacity is used up right now (rate_limited); you were not charged" });
       if (mode.crossFail && body.question === "Q2?") return send(200, { attempts: [{ sql: "SELECT nope", error: "Binder Error: column nope" }], sql: null, result: null, answer: null, unverified: [], served: [], sentToModel: [], warnings: [], error: "the query failed after 2 tries" });
-      return send(200, { attempts: [{ sql: "SELECT 1 AS n" }], sql: "SELECT 1 AS n", result: { columns: ["n"], rows: mode.zeroRows ? [] : [{ n: 1 }], truncated: false },
+      return send(200, { attempts: [{ sql: "SELECT 1 AS n" }], sql: "SELECT 1 AS n", result: { columns: ["n"], rows: mode.zeroRows ? [] : mode.crossRows ?? [{ n: 1 }], truncated: false },
         answer: null, unverified: [], served: [{ model: "m" }], sentToModel: [], warnings: mode.warnings ? ["a many-to-many join"] : [] });
     }
     send(404, { error: "not found" });
@@ -170,4 +173,74 @@ test("usage errors exit 2: non-sample root without --allow-root, bad model, unkn
   await withDouble({}, ["--bogus"], ({ code }) => assert.equal(code, 2));
   const r = await cli(["--api", "http://127.0.0.1:9", "--report-dir", tmpdir()]);
   assert.equal(r.code, 2); assert.match(r.out, /not answering/);
+});
+
+// ---------------------------------------------------------------- --check-answers (answer keys, config/answer-checks.json)
+/** A rules file, a datasets config and an answer root with keys for dent SET-2/NEG-ALL and chiro SET-1/POS (none for smb). */
+function answerFixture(): { dir: string; args: string[] } {
+  const dir = mkdtempSync(join(tmpdir(), "ui-smoke-keys-"));
+  const put = (rel: string, j: unknown) => { const p = join(dir, rel); mkdirSync(join(p, ".."), { recursive: true }); writeFileSync(p, JSON.stringify(j)); };
+  put("rules.json", { version: 1, rules: [
+    { datasets: ["dent"], item: "leak-summary", key: "truth.json", unit: "dollars", compare: [
+      { type: "rowsByKey", keyColumn: "code", valueColumn: "amount", path: "by_code" }, { type: "columnSum", column: "items", path: "counts.items", kind: "count" }] },
+    { datasets: ["chiro"], item: "Payers", key: "k.json", unit: "cents", compare: [{ type: "figuresPresent", paths: ["paid.total"] }] },
+    { datasets: ["smb"], item: "Cash flow", key: "none.json", unit: "cents", compare: [{ type: "figuresPresent", paths: ["x"] }] }] });
+  put("datasets.json", { datasets: [{ id: "dent", folder: "dent" }, { id: "chiro", folder: "chiro" }, { id: "smb", folder: "smb" }] });
+  put("root/dent/SET-2/NEG-ALL/_answer-key/truth.json", { by_code: { CASH_SHORT: "12.50", EFT_MISSING: "300.00" }, counts: { items: 3 } });
+  put("root/chiro/SET-1/POS/_answer-key/k.json", { paid: { total: 2357210 } });
+  return { dir, args: ["--answer-checks", join(dir, "rules.json"), "--datasets-config", join(dir, "datasets.json"), "--answer-root", join(dir, "root")] };
+}
+const ROWS_OK = [{ code: "EFT_MISSING", items: 1, amount: 300 }, { code: "CASH_SHORT", items: 2, amount: 12.5 }];
+const report = (dir: string) => JSON.parse(readFileSync(join(dir, readdirSync(dir).find((n) => n.startsWith("ui-smoke-"))!), "utf8"));
+
+test("--check-answers (default on): results equal to the key are PASS 'answer checked'; no key file is 'not checked'; the report counts them, without rows", async () => {
+  const fx = answerFixture();
+  try {
+    await withDouble({ packRows: { "leak-summary": ROWS_OK }, crossRows: [{ payer: "MARKER-ROW-TEXT", paid: -23572.1 }] }, ["--pack-explained", "off", ...fx.args], ({ code, out, dir }) => {
+      assert.equal(code, 0, out);
+      assert.match(out, /answers checked/);
+      const r = report(dir);
+      const by = (item: string) => r.items.find((i: { item: string; id?: string }) => i.item === item || i.id === item);
+      assert.equal(by("leak-summary").status, "PASS"); assert.equal(by("leak-summary").check, "ok"); assert.match(by("leak-summary").note, /answer checked against truth\.json/);
+      assert.equal(by("Payers").check, "ok", "figuresPresent ignores the sign: -23572.10 in the result is the key's 2357210 cents");
+      assert.equal(by("Cash flow").check, "none"); assert.match(by("Cash flow").note, /not checked: no answer key none\.json/);
+      assert.deepEqual(r.checks, { ok: 2, mismatch: 0, none: 1 }, "leak-summary and Payers ok; Cash flow has no key file; financing (SKIP) and pers (no templates) are never checked");
+      assert.equal(r.checkAnswers, true);
+      assert.ok(!JSON.stringify(r).includes("MARKER-ROW-TEXT"), "the report never holds result rows");
+    });
+  } finally { rmSync(fx.dir, { recursive: true, force: true }); }
+});
+
+test("--check-answers: a figure different from the key is FAIL naming it (exit 1); a missing or extra key row too; off turns checks off", async () => {
+  const fx = answerFixture();
+  try {
+    await withDouble({ packRows: { "leak-summary": [{ code: "EFT_MISSING", items: 1, amount: 300 }, { code: "CASH_SHORT", items: 2, amount: 12.49 }, { code: "NEW", items: 0, amount: 1 }] } },
+      ["--pack-explained", "off", ...fx.args], ({ code, out, dir }) => {
+        assert.equal(code, 1, out);
+        const it = report(dir).items.find((i: { id?: string }) => i.id === "leak-summary");
+        assert.equal(it.status, "FAIL"); assert.equal(it.check, "mismatch");
+        assert.match(it.note, /code CASH_SHORT: 12\.49, key 12\.50/); assert.match(it.note, /code NEW: in the result, not in key by_code/);
+      });
+    await withDouble({ packRows: { "leak-summary": ROWS_OK }, crossRows: [{ paid: 1 }] }, ["--pack-explained", "off", ...fx.args], ({ code, dir }) => {
+      assert.equal(code, 1);
+      assert.match(report(dir).items.find((i: { item: string }) => i.item === "Payers").note, /paid\.total 23572\.10 not found in the result/);
+    });
+    await withDouble({ packRows: { "leak-summary": [{ code: "X", items: 9, amount: 9 }] } }, ["--pack-explained", "off", "--check-answers", "off", ...fx.args], ({ code, out, dir }) => {
+      assert.equal(code, 0, out); assert.match(out, /answers not checked/);
+      assert.ok(report(dir).items.every((i: { check?: string }) => i.check === undefined));
+    });
+  } finally { rmSync(fx.dir, { recursive: true, force: true }); }
+});
+
+test("--check-answers: a bad rules file or check-answers value is a usage error (exit 2); checkAnswer compares one-row cells exactly", async () => {
+  const fx = answerFixture();
+  try {
+    writeFileSync(join(fx.dir, "bad.json"), JSON.stringify({ version: 1, rules: [{ datasets: ["dent"], item: "x", key: "truth.json", unit: "euros", compare: [{ type: "cell", column: "a", path: "b" }] }] }));
+    const bad = await cli(["--api", "http://127.0.0.1:9", "--answer-checks", join(fx.dir, "bad.json")]);
+    assert.equal(bad.code, 2); assert.match(bad.out, /unit must be dollars or cents/);
+    const v = await cli(["--check-answers", "maybe"]); assert.equal(v.code, 2); assert.match(v.out, /--check-answers must be on or off/);
+    const { checkAnswer } = await import(new URL("../ui-smoke.ts", import.meta.url).href); // a file:// URL: a bare C:\ path fails on Windows
+    assert.deepEqual(checkAnswer({ datasets: ["d"], item: "i", key: "k.json", unit: "dollars", compare: [{ type: "cell", column: "net", path: "n" }] }, { n: "1720.00" }, [{ net: 1720 }]), []);
+    assert.deepEqual(checkAnswer({ datasets: ["d"], item: "i", key: "k.json", unit: "dollars", compare: [{ type: "cell", column: "net", path: "n" }] }, { n: "1720.00" }, [{ net: 1720 }, { net: 1 }]), ["net: expected one row, got 2"]);
+  } finally { rmSync(fx.dir, { recursive: true, force: true }); }
 });

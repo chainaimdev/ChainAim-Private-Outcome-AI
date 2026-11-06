@@ -225,7 +225,8 @@ export async function insideRoots(p: unknown, cfg: DataConfig): Promise<string> 
   throw new HttpError(403, "this path leads outside the allowed data folders (a link?)");
 }
 
-export const isDataFile = (name: string, cfg: DataConfig): boolean =>
-  ANALYST_EXTENSIONS.includes(extname(name).toLowerCase()) && !name.startsWith(".") && !name.startsWith("_") && !cfg.exclude.some((re) => re.test(basename(name)));
+/** extra: more extensions for one caller only (a pack's tables.extensions, e.g. ".835" for the load-only /pack-run). */
+export const isDataFile = (name: string, cfg: DataConfig, extra: readonly string[] = []): boolean =>
+  (ANALYST_EXTENSIONS.includes(extname(name).toLowerCase()) || extra.includes(extname(name).toLowerCase())) && !name.startsWith(".") && !name.startsWith("_") && !cfg.exclude.some((re) => re.test(basename(name)));
 
 export async function isFolder(p: string): Promise<boolean> { try { return (await stat(p)).isDirectory(); } catch { return false; } }

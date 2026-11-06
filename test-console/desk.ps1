@@ -38,7 +38,9 @@ one READY table across both. Neither launcher is changed or renamed; each team k
                 pulled, and whether free RAM covers MemoryNeedGb. 7 GB: deepseek-r1:8b at numCtx 12288 loaded at 6.0 GB
                 (q8_0 K/V) and 7.2 GB (f16) in DESIGN/2026-10-17T1948-0500_local-gpu-models-session.md D14.
   -Smoke  [-SmokeModel bedrock/nemotron-nano-3-30b] [-SmokeSets default|all] [-SmokeDatasets all|ID,ID]
-         [-SmokeAnswerModel none|ID] [-SmokeDryRun]
+         [-SmokeAnswerModel none|ID] [-SmokeCheckAnswers on|off] [-SmokeDryRun]
+         -SmokeCheckAnswers on (default): results with a rule in config\answer-checks.json are compared with the
+         set's _answer-key, so PASS means correct; a different figure is FAIL
                 UI template smoke check (scripts\ui-smoke.ts): every tab-03 template of config\datasets.json, run against its
                 sample-data folder through the running console API with the page's own requests; one line per template,
                 PASS/WARN/SKIP/FAIL, a report in test-console\runs (no rows or answers), exit 1 on any FAIL. Needs the desk
@@ -79,8 +81,9 @@ param(
   [switch]$Smoke,
   [string]$SmokeModel = "bedrock/nemotron-nano-3-30b",
   [string]$SmokeSets = "default",
-  [string]$SmokeDatasets = "all",
+  [string[]]$SmokeDatasets = @("all"),
   [string]$SmokeAnswerModel = "none",
+  [string]$SmokeCheckAnswers = "on",
   [switch]$SmokeDryRun,
   [switch]$SmbSample,
   [int]$SmbSeed = 1,
@@ -187,11 +190,14 @@ if ($Smoke) {
   if (@("default", "all") -notcontains $SmokeSets) { Stop-Here "-SmokeSets must be default or all" }
   if ($SmokeModel -notmatch '^[\w.-]+/[\w.:-]+$') { Stop-Here "-SmokeModel must look like provider/name, e.g. bedrock/nemotron-nano-3-30b" }
   if ($SmokeAnswerModel -ne "none" -and $SmokeAnswerModel -notmatch '^[\w.-]+/[\w.:-]+$') { Stop-Here "-SmokeAnswerModel must be none or provider/name" }
-  if ($SmokeDatasets -notmatch '^[A-Za-z0-9_,-]+$') { Stop-Here "-SmokeDatasets must be all or dataset ids separated by commas" }
+  # -SmokeDatasets chiro-ct,chiro-jane arrives as an array (PowerShell splits on the comma); ui-smoke wants one comma list
+  [string]$smokeDs = @($SmokeDatasets) -join ","   # a plain string: the [string[]] parameter would turn it back into an array
+  if ($smokeDs -notmatch '^[A-Za-z0-9_,-]+$') { Stop-Here "-SmokeDatasets must be all or dataset ids separated by commas" }
+  if (@("on", "off") -notcontains $SmokeCheckAnswers) { Stop-Here "-SmokeCheckAnswers must be on or off" }
   if ((HttpStatus "http://127.0.0.1:8735/") -eq 0) { Stop-Here "the console API (127.0.0.1:8735) is not running: start the desk first (.\test-console\desk.ps1), then run -Smoke" }
-  $smokeArgs = @("scripts\ui-smoke.ts", "--api", "http://127.0.0.1:8735", "--root", "samples", "--model", $SmokeModel, "--answer-model", $SmokeAnswerModel, "--datasets", $SmokeDatasets, "--sets", $SmokeSets)
+  $smokeArgs = @("scripts\ui-smoke.ts", "--api", "http://127.0.0.1:8735", "--root", "samples", "--model", $SmokeModel, "--answer-model", $SmokeAnswerModel, "--datasets", $smokeDs, "--sets", $SmokeSets, "--check-answers", $SmokeCheckAnswers)
   if ($SmokeDryRun) { $smokeArgs += "--dry-run" }
-  Say "RUN" "UI template smoke check: model $SmokeModel, sets $SmokeSets, datasets $SmokeDatasets (sample data; report in test-console\runs)"
+  Say "RUN" "UI template smoke check: model $SmokeModel, sets $SmokeSets, datasets $smokeDs, answers checked $SmokeCheckAnswers (sample data; report in test-console\runs)"
   & node @smokeArgs
   exit $LASTEXITCODE
 }

@@ -70,40 +70,35 @@
       "id": "chiro-ct",
       "label": "Practice Management - Chiro (ChiroTouch)",
       "folder": "prms/chiro-1-chirotouch",
-      "engine": "crossask",
+      "engine": "domain-pack",
       "subfolders": true,
       "defaultSubfolder": "SET-1/POS",
-      "description": "Synthetic ChiroTouch exports (day sheet, deposits, CT Payments, Cash Practice) with the Bank of America statement, fee schedule, PI cases and care plans. Questions are answered by a model-written SQL query over the CSV files until the chiro reconciliation and query bank are built (CHIRO-1b-2).",
-      "templates": [
-        {
-          "label": "Insurance paid by payer",
-          "q": "How much did each insurance payer pay us in the statement period (day sheet rows with Type Payment and Code ERA), and how many claims does that cover?"
-        },
-        {
-          "label": "Bank deposits by kind",
-          "q": "Total bank credits by kind of deposit (insurance EFT HCCLAIMPMT, card settlements, ATM deposits, auto-debits) per week, from the bank statement."
-        },
-        {
-          "label": "Care plans: unearned revenue",
-          "q": "For each care plan: price, visits bought, visits used, collected and unearned amount. What is the total unearned (prepaid, not yet delivered) revenue?"
-        },
-        {
-          "label": "PI cases: open balances",
-          "q": "For personal injury cases: billed, carrier paid, open balance (billed minus paid) by state and coverage (PIP or MedPay); list the open cases with the largest balances."
-        },
-        {
-          "label": "Contracted vs charged",
-          "q": "For each payer and CPT code in the fee schedule, how does the contracted allowed amount compare with our charge in the day sheet (Type Charge) (average charge per code)?"
-        },
-        {
-          "label": "Cash flow vs installment",
-          "q": "How much cash came into and went out of the bank account in the statement period, and what was the net cash flow? Could it cover a loan installment of 8,000 a month?"
-        }
-      ],
+      "description": "Synthetic ChiroTouch exports (day sheet, deposits, CT Payments, Cash Practice) with the ERA 835, the Bank of America statement, fee schedule, PI cases and care plans. Questions are answered exactly by the chiro query bank (no model writes SQL); worded (Explained) answers come with the chiro reconciliation (CHIRO-1b-2 stage 3).",
+      "templates": {
+        "from": "pack"
+      },
       "setLabels": {
-        "SET-1/POS": "POS - everything reconciles (synthetic, tools/chiro-synth)"
+        "SET-1/POS": "POS - everything reconciles (synthetic, tools/chiro-synth)",
+        "SET-1/NEG-ALL": "NEG-ALL - every leak of this PMS planted",
+        "SET-1/NEG-AUTODEBIT-RETURNED": "NEG-AUTODEBIT-RETURNED - one planted leak: AUTODEBIT_RETURNED",
+        "SET-1/NEG-BANK-UNPOSTED": "NEG-BANK-UNPOSTED - one planted leak: BANK_UNPOSTED",
+        "SET-1/NEG-BUNDLED-97140": "NEG-BUNDLED-97140 - one planted leak: BUNDLED_97140",
+        "SET-1/NEG-CARD-BATCH-SHORT": "NEG-CARD-BATCH-SHORT - one planted leak: CARD_BATCH_SHORT",
+        "SET-1/NEG-CASH-SHORT": "NEG-CASH-SHORT - one planted leak: CASH_SHORT",
+        "SET-1/NEG-CONTRACT-UNDERPAY": "NEG-CONTRACT-UNDERPAY - one planted leak: CONTRACT_UNDERPAY",
+        "SET-1/NEG-EFT-MISSING": "NEG-EFT-MISSING - one planted leak: EFT_MISSING",
+        "SET-1/NEG-MAINT-NO-ABN": "NEG-MAINT-NO-ABN - one planted leak: MAINT_NO_ABN",
+        "SET-1/NEG-MCR-AT-MISSING": "NEG-MCR-AT-MISSING - one planted leak: MCR_AT_MISSING",
+        "SET-1/NEG-PI-REDUCTION": "NEG-PI-REDUCTION - one planted leak: PI_REDUCTION",
+        "SET-1/NEG-POSTED-TWICE": "NEG-POSTED-TWICE - one planted leak: POSTED_TWICE",
+        "SET-1/NEG-PR-NOT-TRANSFERRED": "NEG-PR-NOT-TRANSFERRED - one planted leak: PR_NOT_TRANSFERRED",
+        "SET-1/NEG-PREPAY-UNEARNED": "NEG-PREPAY-UNEARNED - one planted leak: PREPAY_UNEARNED",
+        "SET-1/NEG-REF-MISMATCH": "NEG-REF-MISMATCH - one planted leak: REF_MISMATCH",
+        "SET-1/NEG-UNDEPOSITED-CHECK": "NEG-UNDEPOSITED-CHECK - one planted leak: UNDEPOSITED_CHECK",
+        "SET-1/NEG-VISIT-CAP": "NEG-VISIT-CAP - one planted leak: VISIT_CAP"
       },
       "fileKinds": {
+        "ERA": "Insurance remittance (835)",
         "BANK-ST": "Bank statement",
         "FEESCHED": "Fee schedule",
         "PI-CASES": "Personal injury cases",
@@ -113,46 +108,41 @@
         "CT-DEPOSITS": "Deposit report",
         "CTPAY": "CT Payments batches",
         "CASHPRAC": "Cash Practice auto-debits"
-      }
+      },
+      "pack": "finance/rcm/chiro"
     },
     {
       "id": "chiro-jane",
       "label": "Practice Management - Chiro (Jane)",
       "folder": "prms/chiro-2-jane",
-      "engine": "crossask",
+      "engine": "domain-pack",
       "subfolders": true,
       "defaultSubfolder": "SET-1/POS",
-      "description": "Synthetic Jane exports (transactions, payments with fees, Jane Payments payouts) with the Bank of America statement, fee schedule, PI cases and care plans. Questions are answered by a model-written SQL query over the CSV files until the chiro reconciliation and query bank are built (CHIRO-1b-2).",
-      "templates": [
-        {
-          "label": "Insurance paid by payer",
-          "q": "How much did each insurance payer pay us in the statement period (insurance payments in the transactions file (Type Payment, Item ERA)), and how many claims does that cover?"
-        },
-        {
-          "label": "Bank deposits by kind",
-          "q": "Total bank credits by kind of deposit (insurance EFT HCCLAIMPMT, card settlements, ATM deposits, auto-debits) per week, from the bank statement."
-        },
-        {
-          "label": "Care plans: unearned revenue",
-          "q": "For each care plan: price, visits bought, visits used, collected and unearned amount. What is the total unearned (prepaid, not yet delivered) revenue?"
-        },
-        {
-          "label": "PI cases: open balances",
-          "q": "For personal injury cases: billed, carrier paid, open balance (billed minus paid) by state and coverage (PIP or MedPay); list the open cases with the largest balances."
-        },
-        {
-          "label": "Contracted vs charged",
-          "q": "For each payer and CPT code in the fee schedule, how does the contracted allowed amount compare with our charge in the transactions file (rows with Type Charge, where Item holds the CPT code as text, so compare codes as text) (average charge per code)?"
-        },
-        {
-          "label": "Cash flow vs installment",
-          "q": "How much cash came into and went out of the bank account in the statement period, and what was the net cash flow? Could it cover a loan installment of 8,000 a month?"
-        }
-      ],
+      "description": "Synthetic Jane exports (transactions, payments with fees, Jane Payments payouts) with the ERA 835, the Bank of America statement, fee schedule, PI cases and care plans. Questions are answered exactly by the chiro query bank (no model writes SQL); worded (Explained) answers come with the chiro reconciliation (CHIRO-1b-2 stage 3).",
+      "templates": {
+        "from": "pack"
+      },
       "setLabels": {
-        "SET-1/POS": "POS - everything reconciles (synthetic, tools/chiro-synth)"
+        "SET-1/POS": "POS - everything reconciles (synthetic, tools/chiro-synth)",
+        "SET-1/NEG-ALL": "NEG-ALL - every leak of this PMS planted",
+        "SET-1/NEG-BANK-UNPOSTED": "NEG-BANK-UNPOSTED - one planted leak: BANK_UNPOSTED",
+        "SET-1/NEG-BUNDLED-97140": "NEG-BUNDLED-97140 - one planted leak: BUNDLED_97140",
+        "SET-1/NEG-CARD-BATCH-SHORT": "NEG-CARD-BATCH-SHORT - one planted leak: CARD_BATCH_SHORT",
+        "SET-1/NEG-CASH-SHORT": "NEG-CASH-SHORT - one planted leak: CASH_SHORT",
+        "SET-1/NEG-CONTRACT-UNDERPAY": "NEG-CONTRACT-UNDERPAY - one planted leak: CONTRACT_UNDERPAY",
+        "SET-1/NEG-EFT-MISSING": "NEG-EFT-MISSING - one planted leak: EFT_MISSING",
+        "SET-1/NEG-MAINT-NO-ABN": "NEG-MAINT-NO-ABN - one planted leak: MAINT_NO_ABN",
+        "SET-1/NEG-MCR-AT-MISSING": "NEG-MCR-AT-MISSING - one planted leak: MCR_AT_MISSING",
+        "SET-1/NEG-PI-REDUCTION": "NEG-PI-REDUCTION - one planted leak: PI_REDUCTION",
+        "SET-1/NEG-POSTED-TWICE": "NEG-POSTED-TWICE - one planted leak: POSTED_TWICE",
+        "SET-1/NEG-PR-NOT-TRANSFERRED": "NEG-PR-NOT-TRANSFERRED - one planted leak: PR_NOT_TRANSFERRED",
+        "SET-1/NEG-PREPAY-UNEARNED": "NEG-PREPAY-UNEARNED - one planted leak: PREPAY_UNEARNED",
+        "SET-1/NEG-REF-MISMATCH": "NEG-REF-MISMATCH - one planted leak: REF_MISMATCH",
+        "SET-1/NEG-UNDEPOSITED-CHECK": "NEG-UNDEPOSITED-CHECK - one planted leak: UNDEPOSITED_CHECK",
+        "SET-1/NEG-VISIT-CAP": "NEG-VISIT-CAP - one planted leak: VISIT_CAP"
       },
       "fileKinds": {
+        "ERA": "Insurance remittance (835)",
         "BANK-ST": "Bank statement",
         "FEESCHED": "Fee schedule",
         "PI-CASES": "Personal injury cases",
@@ -161,7 +151,8 @@
         "JANE-TRANSACTIONS": "Transactions (ledger)",
         "JANE-PAYMENTS-REFUNDS-FEES": "Payments, refunds and fees",
         "JANEPAY-PAYOUTS": "Jane Payments payouts"
-      }
+      },
+      "pack": "finance/rcm/chiro"
     },
     {
       "id": "pers-fin",

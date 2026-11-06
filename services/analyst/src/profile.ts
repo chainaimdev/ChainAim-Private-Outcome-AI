@@ -24,8 +24,8 @@ export type Recipe = { version: 1; folder: string; /** Domain pack id; absent = 
 export type ColumnProfile = { name: string; type: "date" | "number" | "text"; filled: number; samples: string[] };
 export type FileProfile = { name: string; path: string; bytes: number; modified: string; rows: number; columns: ColumnProfile[]; dateRange: { from: string; to: string } | null; tooBig: boolean };
 
-export async function listDataFiles(folder: string, cfg: DataConfig, maxFiles: number): Promise<{ name: string; path: string; bytes: number; modified: string }[]> {
-  const entries = (await readdir(folder, { withFileTypes: true })).filter((e) => e.isFile() && !e.isSymbolicLink() && isDataFile(e.name, cfg)).sort((a, b) => a.name.localeCompare(b.name));
+export async function listDataFiles(folder: string, cfg: DataConfig, maxFiles: number, extra: readonly string[] = []): Promise<{ name: string; path: string; bytes: number; modified: string }[]> {
+  const entries = (await readdir(folder, { withFileTypes: true })).filter((e) => e.isFile() && !e.isSymbolicLink() && isDataFile(e.name, cfg, extra)).sort((a, b) => a.name.localeCompare(b.name));
   if (entries.length > maxFiles) throw new HttpError(413, `${entries.length} data files in this folder; the limit is --max-files ${maxFiles}`);
   const out = [];
   for (const e of entries) {

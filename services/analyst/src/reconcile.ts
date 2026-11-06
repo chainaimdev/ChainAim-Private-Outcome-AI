@@ -19,6 +19,21 @@ export const RECONCILE_SOURCES = { deposit: "prms/curve-hero/deposit-detail", ba
 export type FileReport = { name: string; adapter: string | null; rows: number | null; checks: LoadedSource["checks"] };
 export type ReconcileReport = { pack: string; packChain: string[]; files: FileReport[]; checksFailed: number; exceptions: Exception[]; result: ReconcileResult };
 
+/** Which source layout claims each file (one layout per file, one file per layout); shared by reconcileFolder and packload.ts. */
+export async function detectFiles(list: readonly { name: string; path: string }[], sources: SourceRegistry): Promise<{ byAdapter: Map<string, { name: string; path: string }>; files: FileReport[] }> {
+  const byAdapter = new Map<string, { name: string; path: string }>();
+  const files: FileReport[] = [];
+  for (const f of list) {
+    const hits = sources.detect(await firstLines(f.path));
+    if (hits.length > 1) throw new HttpError(400, `${f.name}: matches more than one layout (${hits.map((h) => h.id).join(", ")})`);
+    const id = hits[0]?.id ?? null;
+    if (id && byAdapter.has(id)) throw new HttpError(400, `two files have the layout ${id}: ${byAdapter.get(id)!.name} and ${f.name}; keep one per folder`);
+    if (id) byAdapter.set(id, f);
+    files.push({ name: f.name, adapter: id, rows: null, checks: [] });
+  }
+  return { byAdapter, files };
+}
+
 export async function reconcileFolder(o: { files: { name: string; path: string }[]; sources: SourceRegistry; pack: ResolvedPack; configRoot: string;
   sourceOptions: SourceOptions; toleranceCents: number | null; open: () => Promise<Db>;
   /** Phase 4c (scripts/dental.ts query): read the loaded tables and the report before the database closes. File access is
@@ -27,16 +42,7 @@ export async function reconcileFolder(o: { files: { name: string; path: string }
   if (!o.pack.reconcile) throw new HttpError(400, `pack ${o.pack.id} has no reconciliation config (use finance/rcm/dental)`);
   const { cfg, aliases } = readReconcileConfig(join(o.configRoot, o.pack.reconcile), o.configRoot);
   const sourceOptions: SourceOptions = { ...o.sourceOptions, configs: { ...readSourceConfigs(o.pack, o.configRoot), ...(o.sourceOptions.configs ?? {}) } };
-  const byAdapter = new Map<string, { name: string; path: string }>();
-  const files: FileReport[] = [];
-  for (const f of o.files) {
-    const hits = o.sources.detect(await firstLines(f.path));
-    if (hits.length > 1) throw new HttpError(400, `${f.name}: matches more than one layout (${hits.map((h) => h.id).join(", ")})`);
-    const id = hits[0]?.id ?? null;
-    if (id && byAdapter.has(id)) throw new HttpError(400, `two files have the layout ${id}: ${byAdapter.get(id)!.name} and ${f.name}; keep one per folder`);
-    if (id) byAdapter.set(id, f);
-    files.push({ name: f.name, adapter: id, rows: null, checks: [] });
-  }
+  const { byAdapter, files } = await detectFiles(o.files, o.sources);
   for (const need of [RECONCILE_SOURCES.deposit, RECONCILE_SOURCES.bank]) if (!byAdapter.has(need)) throw new HttpError(400, `no file with the layout ${need} in this folder (found: ${files.map((f) => `${f.name}=${f.adapter ?? "unknown"}`).join(", ")})`);
   const db = await o.open();
   try {

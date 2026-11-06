@@ -13,7 +13,8 @@
  *   node scripts/ui-smoke.ts [--api URL] [--root samples] [--model ID] [--answer-model none|ID] [--datasets all|ID,ID]
  *       [--sets default|all] [--pack-explained on|off] [--timeout-sec N] [--require-rows on|off] [--strict-check off|on]
  *       [--skip-is-fail off|on] [--report-sql on|off] [--report-dir DIR] [--allow-root NAME] [--dry-run]
- *       [--rate-limit-retries N] [--rate-limit-wait-sec N]
+ *       [--rate-limit-retries N] [--rate-limit-wait-sec N] [--check-answers on|off] [--answer-checks FILE] [--answer-root DIR]
+ *       [--datasets-config FILE]
  *
  *   --api URL            the console API (default http://127.0.0.1:8735, ca-console-api; its Host check accepts 127.0.0.1:8735)
  *   --root NAME          a root of config/datasets.json (default samples). Any other root needs --allow-root NAME too, since
@@ -38,23 +39,33 @@
  *                        per 60 s, counted Bedrock calls too in the 2026-11-06 run) is waited out and sent again up to N
  *                        times (default 3); a refused call never reached a model. 0 = report it as FAIL at once
  *   --rate-limit-wait-sec N  the wait before each retry (default 65: the gateway's 60 s window and a margin)
+ *   --check-answers on|off  (default on) compare each result that has a rule in --answer-checks with its set's answer key, so
+ *                        PASS means correct, not only that a query ran; a mismatch is FAIL. Root samples only (keys are
+ *                        written by the sample generators); other roots are never checked
+ *   --answer-checks FILE the rules (default config/answer-checks.json; the file's notes explain them)
+ *   --answer-root DIR    where the sample sets are on this machine (default sample-data): keys are read from
+ *                        <DIR>/<dataset folder>/<set>/_answer-key/<key>, never through the console (whose folders may be in Docker)
+ *   --datasets-config FILE  the datasets' relative folders (default config/datasets.json)
  *
  * PASS / WARN / SKIP / FAIL:
  *   crossask      PASS: no error, a result, rows > 0. WARN: the console's join warnings, unverified figures, 0 rows with
  *                 --require-rows off. FAIL: HTTP error, an error, no result, 0 rows with --require-rows on.
  *   pack-sql      PASS: columns and no error. SKIP: skipped (missing file kind). FAIL: an error.
+ *   answer check  (crossask and pack-sql with a rule) a result that differs from the answer key is FAIL; the note says which
+ *                 figure, and the item records check ok | mismatch | none (no rule or no key file).
  *   pack-explained PASS: every figure checked. WARN: a figure did not match (--strict-check off). FAIL: HTTP error.
  *   dataset       SKIP: folder not found, or no templates. FAIL: folder outside allowedRoots, or a domain pack without a pack.
  * Exit 0 = no FAIL, 1 = at least one FAIL, 2 = usage error or the console API cannot be reached.
  */
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 
 type Status = "PASS" | "WARN" | "SKIP" | "FAIL" | "PLAN";
 type Kind = "crossask" | "pack-sql" | "pack-explained" | "dataset";
-type Item = { dataset: string; set: string; item: string; id?: string; kind: Kind; status: Status; rows: number | null; ms: number; tries?: number; note: string; sql?: string | null };
+type Item = { dataset: string; set: string; item: string; id?: string; kind: Kind; status: Status; rows: number | null; ms: number; tries?: number; note: string; sql?: string | null;
+  check?: "ok" | "mismatch" | "none" };
 type Dataset = { id: string; label?: string; engine: string; pack: string | null; templates: { label: string; q: string }[]; templatesFrom: string | null;
   defaultSubfolder: string | null; folder: string; exists: boolean; allowed: boolean; files: string[]; sets: { name: string; files: string[] }[] };
 type BankEntry = { id: string; title: string; kind: "sql" | "model"; question?: string };
@@ -86,6 +97,10 @@ function options(argv: string[]) {
         "dry-run": { type: "boolean", default: false },
         "rate-limit-retries": { type: "string", default: "3" },
         "rate-limit-wait-sec": { type: "string", default: "65" },
+        "check-answers": { type: "string", default: "on" },
+        "answer-checks": { type: "string", default: fileURLToPath(new URL("../config/answer-checks.json", import.meta.url)) },
+        "answer-root": { type: "string", default: fileURLToPath(new URL("../sample-data", import.meta.url)) },
+        "datasets-config": { type: "string", default: fileURLToPath(new URL("../config/datasets.json", import.meta.url)) },
       },
     }));
   } catch (e) {
@@ -116,9 +131,74 @@ function options(argv: string[]) {
     api, root: v.root!, model: v.model!, answerModel, datasets, sets: v.sets as "default" | "all", packExplained: onOff("pack-explained"),
     timeoutMs: timeoutSec * 1000, requireRows: onOff("require-rows"), strictCheck: onOff("strict-check"), skipIsFail: onOff("skip-is-fail"),
     reportSql: onOff("report-sql"), reportDir: resolve(v["report-dir"]!), dryRun: v["dry-run"]!, rlRetries, rlWaitMs: rlWaitSec * 1000,
+    checkAnswers: onOff("check-answers") && v.root === "samples", answerChecks: resolve(v["answer-checks"]!), answerRoot: resolve(v["answer-root"]!),
+    datasetsConfig: resolve(v["datasets-config"]!),
   };
 }
 type Opt = ReturnType<typeof options>;
+
+// ---------------------------------------------------------------- answer checks (--check-answers)
+type Compare = { type: "cell" | "columnSum" | "rowsByKey" | "figuresPresent"; column?: string; keyColumn?: string; valueColumn?: string; path?: string; paths?: string[]; kind?: "amount" | "count" };
+type Rule = { datasets: string[]; item: string; key: string; unit: "dollars" | "cents"; compare: Compare[] };
+const COMPARE_TYPES = ["cell", "columnSum", "rowsByKey", "figuresPresent"];
+
+/** Reads and checks the rules file; throws UsageError naming the bad rule. */
+export function loadAnswerRules(path: string): Rule[] {
+  let j: any;
+  try { j = JSON.parse(readFileSync(path, "utf8")); } catch (e) { throw new UsageError(`--answer-checks ${path}: ${(e as Error).message}`); }
+  if (j?.version !== 1 || !Array.isArray(j.rules)) throw new UsageError(`--answer-checks ${path}: version must be 1 with a rules list`);
+  for (const r of j.rules as Rule[]) {
+    const bad = (m: string) => { throw new UsageError(`--answer-checks ${path}: rule ${JSON.stringify(r?.item)}: ${m}`); };
+    if (!Array.isArray(r?.datasets) || !r.datasets.length || typeof r.item !== "string" || !r.item) bad("needs datasets and item");
+    if (typeof r.key !== "string" || !/^[\w.-]+\.json$/.test(r.key)) bad("key must be a .json file name in _answer-key");
+    if (r.unit !== "dollars" && r.unit !== "cents") bad("unit must be dollars or cents");
+    if (!Array.isArray(r.compare) || !r.compare.length) bad("compare must be a non-empty list");
+    for (const c of r.compare) {
+      if (!COMPARE_TYPES.includes(c?.type)) bad(`compare type must be one of ${COMPARE_TYPES.join(", ")}`);
+      if (c.type === "figuresPresent" ? !(Array.isArray(c.paths) && c.paths.length) : typeof c.path !== "string") bad(`${c.type} needs ${c.type === "figuresPresent" ? "paths" : "path"}`);
+      if ((c.type === "cell" || c.type === "columnSum") && !c.column) bad(`${c.type} needs column`);
+      if (c.type === "rowsByKey" && (!c.keyColumn || !c.valueColumn)) bad("rowsByKey needs keyColumn and valueColumn");
+    }
+  }
+  return j.rules as Rule[];
+}
+const at = (o: unknown, path: string): unknown => path.split(".").reduce<unknown>((x, k) => (x !== null && typeof x === "object" ? (x as Record<string, unknown>)[k] : undefined), o);
+/** A figure as integer cents (amount) or a plain number (count); null when it is not a number. */
+const fig = (x: unknown, unit: "dollars" | "cents", kind: "amount" | "count" = "amount"): number | null => {
+  const n = typeof x === "number" ? x : typeof x === "string" && x.trim() !== "" ? Number(x.replace(/,/g, "")) : NaN;
+  if (!Number.isFinite(n)) return null;
+  return kind === "count" ? n : unit === "cents" ? Math.round(n) : Math.round(n * 100);
+};
+const show = (n: number | null, kind: "amount" | "count" = "amount") => (n === null ? "missing" : kind === "count" ? String(n) : (n / 100).toFixed(2));
+
+/** Compares result rows (dollars) with an answer key: [] when equal, else one line per difference (figures only, no row data). */
+export function checkAnswer(rule: Rule, key: unknown, rows: readonly Record<string, unknown>[]): string[] {
+  const out: string[] = [];
+  for (const c of rule.compare) {
+    const kind = c.kind ?? "amount";
+    if (c.type === "cell") {
+      const want = fig(at(key, c.path!), rule.unit, kind), got = rows.length === 1 ? fig(rows[0][c.column!], "dollars", kind) : null;
+      if (rows.length !== 1) out.push(`${c.column}: expected one row, got ${rows.length}`);
+      else if (want === null || got !== want) out.push(`${c.column} ${show(got, kind)}, key ${c.path} ${show(want, kind)}`);
+    } else if (c.type === "columnSum") {
+      const want = fig(at(key, c.path!), rule.unit, kind);
+      const parts = rows.map((r) => fig(r[c.column!], "dollars", kind));
+      const got = parts.some((x) => x === null) ? null : parts.reduce<number>((a, b) => a + b!, 0);
+      if (want === null || got !== want) out.push(`sum of ${c.column} ${show(got, kind)}, key ${c.path} ${show(want, kind)}`);
+    } else if (c.type === "rowsByKey") {
+      const obj = at(key, c.path!);
+      if (obj === null || typeof obj !== "object") { out.push(`key ${c.path} is not an object`); continue; }
+      const want = new Map(Object.entries(obj).map(([k, v]) => [k, fig(v, rule.unit, kind)]));
+      const got = new Map(rows.map((r) => [String(r[c.keyColumn!]), fig(r[c.valueColumn!], "dollars", kind)]));
+      for (const [k, w] of want) if (got.get(k) !== w) out.push(`${c.keyColumn} ${k}: ${show(got.get(k) ?? null, kind)}, key ${show(w, kind)}`);
+      for (const k of got.keys()) if (!want.has(k)) out.push(`${c.keyColumn} ${k}: in the result, not in key ${c.path}`);
+    } else {
+      const cells = new Set(rows.flatMap((r) => Object.values(r).map((v) => fig(v, "dollars", kind))).filter((x): x is number => x !== null).map(Math.abs));
+      for (const p of c.paths!) { const w = fig(at(key, p), rule.unit, kind); if (w === null || !cells.has(Math.abs(w))) out.push(`${p} ${show(w, kind)} not found in the result`); }
+    }
+  }
+  return out;
+}
 
 /** The page's dsJoin: the set's folder under the dataset folder, with the folder's own separator. */
 const dsJoin = (base: string, rel: string): string => {
@@ -195,6 +275,31 @@ function line(it: Item): string {
 export async function run(argv: string[], out: (s: string) => void = (s) => process.stdout.write(s + "\n")): Promise<number> {
   let o: Opt;
   try { o = options(argv); } catch (e) { out(`ui-smoke: ${(e as Error).message}`); return 2; }
+  // answer checks: the rules, and each dataset's relative folder (the keys are read on this machine, never through the console)
+  let rules: Rule[] = [];
+  const localFolder = new Map<string, string>();
+  if (o.checkAnswers) {
+    try {
+      rules = loadAnswerRules(o.answerChecks);
+      const cfg = JSON.parse(readFileSync(o.datasetsConfig, "utf8"));
+      for (const x of cfg?.datasets ?? []) if (typeof x?.id === "string" && typeof x?.folder === "string") localFolder.set(x.id, x.folder);
+    } catch (e) { out(`ui-smoke: ${e instanceof UsageError ? e.message : `--datasets-config ${o.datasetsConfig}: ${(e as Error).message}`}`); return 2; }
+  }
+  /** Applies the dataset item's answer rule to a verdict that ran (PASS or WARN); a mismatch makes it FAIL. */
+  const withCheck = <V extends { status: Status; note: string }>(d: Dataset, set: string, item: string, rows: unknown, v: V): V & { check?: Item["check"] } => {
+    if (!o.checkAnswers || (v.status !== "PASS" && v.status !== "WARN")) return v;
+    const rule = rules.find((r) => r.datasets.includes(d.id) && r.item === item);
+    const note = (x: string) => (v.note ? `${v.note}; ${x}` : x);
+    if (!rule) return { ...v, check: "none" };
+    const rel = localFolder.get(d.id);
+    const keyPath = rel ? join(o.answerRoot, ...rel.split("/"), ...(set ? set.split("/") : []), "_answer-key", rule.key) : "";
+    if (!rel || !existsSync(keyPath)) return { ...v, check: "none", note: note(`not checked: no answer key ${rule.key} for this set`) };
+    let key: unknown;
+    try { key = JSON.parse(readFileSync(keyPath, "utf8")); } catch (e) { return { ...v, status: "FAIL", check: "mismatch", note: note(`answer key unreadable: ${oneLine((e as Error).message)}`) }; }
+    const diffs = checkAnswer(rule, key, Array.isArray(rows) ? (rows as Record<string, unknown>[]) : []);
+    return diffs.length ? { ...v, status: "FAIL", check: "mismatch", note: note(`answer differs from ${rule.key}: ${diffs.slice(0, 3).join("; ")}${diffs.length > 3 ? ` (+${diffs.length - 3})` : ""}`) }
+      : { ...v, check: "ok", note: note(`answer checked against ${rule.key}`) };
+  };
   let reg;
   try { reg = await call(o, "GET", `/datasets?root=${encodeURIComponent(o.root)}`); }
   catch (e) { out(`ui-smoke: the console API is not answering at ${o.api} (${(e as Error).message}): start the desk (.\\test-console\\desk.ps1) first`); return 2; }
@@ -206,7 +311,7 @@ export async function run(argv: string[], out: (s: string) => void = (s) => proc
 
   const items: Item[] = [];
   const started = new Date();
-  out(`ui-smoke ${o.dryRun ? "(dry run) " : ""}api ${o.api}  root ${o.root}  model ${o.model}  answer ${o.answerModel ?? "none (table only)"}  sets ${o.sets}  explained ${o.packExplained ? "on" : "off"}`);
+  out(`ui-smoke ${o.dryRun ? "(dry run) " : ""}api ${o.api}  root ${o.root}  model ${o.model}  answer ${o.answerModel ?? "none (table only)"}  sets ${o.sets}  explained ${o.packExplained ? "on" : "off"}  answers ${o.checkAnswers ? "checked" : "not checked"}`);
   out(COLS);
   const add = (it: Item) => { items.push(it); out(line(it)); };
   const timed = async <T>(f: () => Promise<T>): Promise<[T | null, number, string | null]> => {
@@ -247,7 +352,7 @@ export async function run(argv: string[], out: (s: string) => void = (s) => proc
             ? await timed(() => call(o, "POST", "/analyst/pack-run", { folder, pack: d.pack, ids: [q.id] }))
             : await timed(() => modelCall("/packask", { folder, pack: d.pack, id: q.id, model: o.model }));
           if (err) { add({ ...base(d, set, q.title, kind, q.id), status: "FAIL", rows: null, ms, note: oneLine(err) }); continue; }
-          add({ ...base(d, set, q.title, kind, q.id), ms, ...(q.kind === "sql" ? judgePackSql(o, r!) : judgePackAsk(o, r!)) });
+          add({ ...base(d, set, q.title, kind, q.id), ms, ...(q.kind === "sql" ? withCheck(d, set, q.id, r!.json?.results?.[0]?.rows, judgePackSql(o, r!)) : judgePackAsk(o, r!)) });
         }
       }
       continue;
@@ -262,7 +367,7 @@ export async function run(argv: string[], out: (s: string) => void = (s) => proc
         const body = { folder, question: t.q, model: o.model, ...(o.answerModel ? { answerModel: o.answerModel } : {}), phrase: o.answerModel ? "llm" : "none" };
         const [r, ms, err] = await timed(() => modelCall("/crossask", body));
         if (err) { add({ ...base(d, set, t.label, "crossask"), status: "FAIL", rows: null, ms, note: oneLine(err) }); continue; }
-        const v = judgeCrossask(o, r!);
+        const v = withCheck(d, set, t.label, r!.json?.result?.rows, judgeCrossask(o, r!));
         add({ ...base(d, set, t.label, "crossask"), ms, ...v, ...(o.reportSql ? {} : { sql: undefined }) });
       }
     }
@@ -272,10 +377,13 @@ export async function run(argv: string[], out: (s: string) => void = (s) => proc
   if (o.dryRun) { out(`\n${count("PLAN")} template run(s) planned; nothing was sent to a model.`); return 0; }
   const fails = count("FAIL");
   out(`\nPASS ${count("PASS")}  WARN ${count("WARN")}  SKIP ${count("SKIP")}  FAIL ${fails}   (${Math.round((Date.now() - started.getTime()) / 1000)} s${waits ? `, ${waits} rate-limit wait(s) included` : ""})`);
+  if (o.checkAnswers) out(`answers: ${items.filter((i) => i.check === "ok").length} checked and equal to the key, ${items.filter((i) => i.check === "mismatch").length} different (FAIL), ${items.filter((i) => i.check === "none").length} without a rule or key (not checked)`);
   const report = {
     tool: "ui-smoke", startedAt: started.toISOString(), finishedAt: new Date().toISOString(), api: o.api, root: o.root, model: o.model,
     answerModel: o.answerModel ?? null, sets: o.sets, packExplained: o.packExplained, requireRows: o.requireRows, strictCheck: o.strictCheck,
-    skipIsFail: o.skipIsFail, rateLimitWaits: waits, counts: { pass: count("PASS"), warn: count("WARN"), skip: count("SKIP"), fail: fails },
+    skipIsFail: o.skipIsFail, checkAnswers: o.checkAnswers,
+    checks: { ok: items.filter((i) => i.check === "ok").length, mismatch: items.filter((i) => i.check === "mismatch").length, none: items.filter((i) => i.check === "none").length },
+    rateLimitWaits: waits, counts: { pass: count("PASS"), warn: count("WARN"), skip: count("SKIP"), fail: fails },
     items: items.map((i) => (o.reportSql ? i : { ...i, sql: undefined })),
   };
   try {

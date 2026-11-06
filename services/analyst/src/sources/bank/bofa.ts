@@ -4,6 +4,8 @@
  * Total credits, Total debits, Ending balance), a blank line, then "Date,Description,Amount,Running Bal.,..." and one row per
  * transaction. The first detail row repeats the beginning balance with no amount and is skipped.
  * ACH descriptions are parsed into their fields: "<ORIGINATOR> DES:<type> ID:<id> INDN:<name> CO ID:<id> <SEC> [PMT INFO:TRN*1*<trace>*...]".
+ * Also writes <table>__summary (one row): period_start / period_end from "Beginning/Ending balance as of MM/DD/YYYY" (NULL when
+ * the label has no date) and the four summary amounts in cents.
  * Checks: beginning + credits + debits = ending (summary), detail credits and debits equal the summary totals, and each
  * running balance equals the previous one plus the amount.
  */
@@ -24,10 +26,13 @@ export const BOFA_STATEMENT: SourceAdapter = {
     const at = head.findIndex(isDetailHeader);
     if (at === -1) throw new Error(`${path}: no "Date,Description,Amount,Running Bal." header in the first 40 lines`);
     const summary = new Map<string, number | null>();
+    let periodStart: string | null = null, periodEnd: string | null = null;
     for (const l of head.slice(1, at)) {
       const f = csvFields(l); const label = (f[0] ?? "").trim(); if (!label) continue;
       const key = /^Beginning balance/i.test(label) ? "beginning" : /^Total credits/i.test(label) ? "credits" : /^Total debits/i.test(label) ? "debits" : /^Ending balance/i.test(label) ? "ending" : null;
       if (key) summary.set(key, cents(f[2] ?? ""));
+      const asOf = /as of (\d{1,2}\/\d{1,2}\/\d{4})/i.exec(label)?.[1] ?? null;
+      if (key === "beginning") periodStart = asOf; else if (key === "ending") periodEnd = asOf;
     }
     const desc = `trim(column1)`;
     const rx = (re: string) => `nullif(trim(regexp_extract(${desc}, ${literal(re)}, 1)), '')`;
@@ -63,6 +68,12 @@ export const BOFA_STATEMENT: SourceAdapter = {
       { name: "running balance continuous", ok: run.breaks === 0, detail: `${run.breaks} break(s) in ${run.checked} rows` },
       { name: "every row has a date and an amount", ok: tot.bad === 0, detail: `${tot.bad} row(s) without` },
     ];
-    return { adapter: this.id, table, rows: tot.n, checks, meta: { headerLine: at + 1, summary: Object.fromEntries([...summary].map(([k, v]) => [k, v])) } };
+    // the statement as stated in its summary block (one row): the period ("as of" dates) and the four amounts, so a query can use
+    // the statement period instead of the first and last transaction dates
+    const n = (x: number | null | undefined) => (x === null || x === undefined ? "NULL" : String(x));
+    const dt = (x: string | null) => (x === null ? "NULL" : `CAST(strptime(${literal(x)}, '%m/%d/%Y') AS DATE)`);
+    await db.conn.run(`CREATE TABLE ${ident(`${table}__summary`)} AS SELECT ${dt(periodStart)} AS period_start, ${dt(periodEnd)} AS period_end,
+      CAST(${n(b)} AS BIGINT) AS beginning_cents, CAST(${n(c)} AS BIGINT) AS credits_cents, CAST(${n(d)} AS BIGINT) AS debits_cents, CAST(${n(e)} AS BIGINT) AS ending_cents`);
+    return { adapter: this.id, table, rows: tot.n, checks, meta: { headerLine: at + 1, period: { start: periodStart, end: periodEnd }, tables: { summary: `${table}__summary` }, summary: Object.fromEntries([...summary].map(([k, v]) => [k, v])) } };
   },
 };

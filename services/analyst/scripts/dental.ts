@@ -53,7 +53,7 @@ import { readReconcileConfig } from "../src/engines/deposit-match.ts";
 import { type ReconcileReport, reconcileFolder } from "../src/reconcile.ts";
 import { BUILT_IN_SOURCES } from "../src/sources/index.ts";
 import { checkSelect, runSelect } from "../src/sqlrun.ts";
-import { buildTables, type Entry, factSheet, SECTIONS } from "../src/packquery.ts";
+import { buildTables, type Entry, factSheet, SECTIONS, type TablesSpec } from "../src/packquery.ts";
 import { SCENARIOS } from "../src/synth/dental-gen.ts";
 
 const HERE = fileURLToPath(new URL(".", import.meta.url));
@@ -147,7 +147,7 @@ process.exit(failed ? 1 : 0);
 async function query(): Promise<number> {
   if (rest.length) usage(`query does not take ${rest.join(" ")}`);
   const bankPath = opt.bank ? resolve(base, opt.bank) : join(REPO, "config", "domain-packs", "finance", "rcm", "dental", "queries.json");
-  const bank = JSON.parse(readFileSync(bankPath, "utf8")) as { version: number; queries: Entry[] };
+  const bank = JSON.parse(readFileSync(bankPath, "utf8")) as { version: number; queries: Entry[]; tables?: TablesSpec };
   if (bank.version !== 1 || !Array.isArray(bank.queries)) usage(`${bankPath}: version must be 1 with a queries list`);
   const seen = new Set<string>();
   for (const q of bank.queries) {
@@ -179,7 +179,7 @@ async function query(): Promise<number> {
     const files = readdirSync(folder).filter((n) => /\.(csv|tsv)$/i.test(n) && statSync(join(folder, n)).isFile()).sort().map((n) => ({ name: n, path: join(folder, n) }));
     await reconcileFolder({ files, sources, pack, configRoot, sourceOptions: { patientNameFormat: "last_first" }, toleranceCents: null, open: openDb,
       inspect: async (db, tables, report) => {
-        await buildTables(db, tables, report, cfg.evidence?.directions ?? {});
+        await buildTables(db, tables, report, cfg.evidence?.directions ?? {}, bank.tables);
         for (const q of askQs) sheets.set(q.id, await factSheet(db, q.facts!, actions));
         for (const q of sqlQs) {
           try { const r = await runSelect(db, q.sql!, { maxRows, timeoutMs: 15000 }); out.push({ id: q.id, title: q.title, columns: r.columns, rows: r.rows, truncated: r.truncated }); }

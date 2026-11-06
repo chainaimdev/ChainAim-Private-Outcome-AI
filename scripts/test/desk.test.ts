@@ -118,6 +118,14 @@ test("-Smoke: the UI template smoke check runs scripts\\ui-smoke.ts on the sampl
   assert.ok(s.length > 0 && code.indexOf("if ($Smoke) {") < code.indexOf("# 1. pre-flight"), "no start, no change");
   assert.match(s, /\$smokeArgs = @\("scripts\\ui-smoke\.ts", "--api", "http:\/\/127\.0\.0\.1:8735", "--root", "samples"/);
   assert.match(s, /HttpStatus "http:\/\/127\.0\.0\.1:8735\/"/);
+  // --check-answers (2026-11-06): on by default, on|off only, passed through to ui-smoke.ts
+  assert.match(code, /\[string\]\$SmokeCheckAnswers = "on",/);
+  // -SmokeDatasets chiro-ct,chiro-jane (owner run 2026-11-06: "Cannot convert value to type System.String"): a list, joined
+  assert.match(code, /\[string\[\]\]\$SmokeDatasets = @\("all"\),/);
+  assert.match(s, /\[string\]\$smokeDs = @\(\$SmokeDatasets\) -join ","/);
+  assert.match(s, /"--datasets", \$smokeDs,/);
+  assert.match(s, /@\("on", "off"\) -notcontains \$SmokeCheckAnswers/);
+  assert.match(s, /"--check-answers", \$SmokeCheckAnswers\)/);
   assert.match(s, /& node @smokeArgs\s*\r?\n\s*exit \$LASTEXITCODE/);
   assert.ok(!/docker|ollama|Stop-Process|& \$privUp|& \$adminUp/.test(s), "changes nothing");
 });

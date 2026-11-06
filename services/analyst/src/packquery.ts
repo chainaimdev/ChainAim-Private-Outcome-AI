@@ -7,13 +7,22 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { type Category, type ExceptionFact, type Fact, type FactSheet, renderSheet } from "./facts.ts";
+import { HttpError } from "./config.ts";
 import { type Db, ident, literal, rows } from "./db.ts";
 import type { ReconcileReport } from "./reconcile.ts";
 
 export type Entry = { id: string; title: string; topic?: string; pair?: string; sql?: string; question?: string; facts?: string[] };
 export type Topic = { id: string; label: string };
 /** topics / topic / pair are for the console (grouping, and one question with "Answer as: Table | Explained"); the CLI ignores them. */
-export type Bank = { version: 1; topics?: Topic[]; queries: Entry[] };
+/** A bank rule: the bank credit belongs to grp when every listed column equals the value (bank/bofa columns). */
+export type BankGroupRule = { grp: string; when: Partial<Record<(typeof BANK_RULE_COLUMNS)[number], string>> };
+/** The loaded sources under short names (DESIGN/xrplh-29): views maps a source layout id to a view name; a sub-table of a loaded
+ * table (<table>__payments of the 835) becomes <view>__payments. bankGroups adds one view of the bank credits (cents > 0) with a
+ * grp column from the first rule that matches (otherwise: the fallback group). Config, never code: the queries name views only. */
+export type TablesSpec = { extensions?: string[]; views?: Record<string, string>; bankGroups?: { view: string; from: string; rules: BankGroupRule[]; otherwise: string } };
+export type Bank = { version: 1; topics?: Topic[]; queries: Entry[]; tables?: TablesSpec };
+export const BANK_RULE_COLUMNS = ["kind", "originator", "des", "co_id"] as const;
+const VIEW_NAME = /^[a-z][a-z0-9_]*$/;
 
 export const SECTIONS = ["totals", "groups", "losses", "extra", "timing", "posting", "payers", "card", "branch", "eft", "all"];
 export const CATEGORY_SQL = `CASE WHEN severity = 'watch' THEN 'timing' WHEN direction = 'negative' THEN 'loss' WHEN direction = 'positive' THEN 'extra' ELSE 'posting' END`;
@@ -44,13 +53,64 @@ export function loadBank(path: string): Bank {
     if (!o || o.pair !== q.id || !q.sql === !o.sql || (q.topic ?? null) !== (o.topic ?? null))
       throw new Error(`${path}: entry ${q.id}: pair ${q.pair} must be an entry of the other kind, in the same topic, that pairs back`);
   }
+  if (bank.tables !== undefined) checkTables(path, bank.tables);
   return bank;
 }
+function checkTables(path: string, t: TablesSpec): void {
+  const bad = (m: string) => { throw new Error(`${path}: tables: ${m}`); };
+  if (typeof t !== "object" || t === null) bad("must be an object with views and/or bankGroups");
+  if (t.extensions !== undefined && (!Array.isArray(t.extensions) || t.extensions.some((x) => typeof x !== "string" || !/^\.[a-z0-9]{1,8}$/.test(x))))
+    bad("extensions must be a list like [\".835\"] (lowercase, with the dot)");
+  const views = t.views ?? {};
+  if (typeof views !== "object" || Array.isArray(views)) bad("views must map a source layout id to a view name");
+  for (const [id, v] of Object.entries(views)) if (!id || typeof v !== "string" || !VIEW_NAME.test(v)) bad(`views.${id}: a view name is lowercase letters, digits and _`);
+  const g = t.bankGroups;
+  if (g === undefined) return;
+  if (!VIEW_NAME.test(g.view ?? "") || !VIEW_NAME.test(g.from ?? "") || !VIEW_NAME.test(g.otherwise ?? "")) bad("bankGroups needs view, from and otherwise (lowercase names)");
+  if (!Object.values(views).includes(g.from)) bad(`bankGroups.from ${g.from} is not a view in views`);
+  if (!Array.isArray(g.rules) || !g.rules.length) bad("bankGroups.rules must be a non-empty list");
+  for (const r of g.rules) {
+    const keys = Object.keys(r?.when ?? {});
+    if (!VIEW_NAME.test(r?.grp ?? "") || !keys.length || keys.some((k) => !(BANK_RULE_COLUMNS as readonly string[]).includes(k) || typeof (r.when as Record<string, unknown>)[k] !== "string"))
+      bad(`bankGroups rule ${JSON.stringify(r)}: needs grp and when { ${BANK_RULE_COLUMNS.join(" | ")}: text }`);
+  }
+}
+
+/** Creates the views of TablesSpec over the loaded tables (source id -> table). Two loaded sources may not share a view name. */
+export async function buildViews(db: Db, tables: Readonly<Record<string, string>>, spec: TablesSpec | undefined): Promise<string[]> {
+  const made: string[] = [];
+  const owner = new Map<string, string>();
+  for (const [id, t] of Object.entries(tables)) {
+    const v = spec?.views?.[id];
+    if (!v) continue;
+    if (owner.has(v)) throw new HttpError(400, `two files would both be the table ${v} (${owner.get(v)} and ${id}); keep one per folder`);
+    owner.set(v, id);
+    await db.conn.run(`CREATE VIEW ${ident(v)} AS SELECT * FROM ${ident(t)}`); made.push(v);
+    const subs = await rows<{ name: string }>(db, `SELECT table_name AS name FROM information_schema.tables WHERE starts_with(table_name, ${literal(`${t}__`)}) ORDER BY 1`);
+    for (const { name } of subs) { const sv = v + name.slice(t.length); await db.conn.run(`CREATE VIEW ${ident(sv)} AS SELECT * FROM ${ident(name)}`); made.push(sv); }
+  }
+  const g = spec?.bankGroups;
+  if (g && made.includes(g.from)) {
+    const when = g.rules.map((r) => `WHEN ${Object.entries(r.when).map(([k, v]) => `${ident(k)} = ${literal(v!)}`).join(" AND ")} THEN ${literal(r.grp)}`).join(" ");
+    await db.conn.run(`CREATE VIEW ${ident(g.view)} AS SELECT *, CASE ${when} ELSE ${literal(g.otherwise)} END AS grp FROM ${ident(g.from)} WHERE cents > 0`);
+    made.push(g.view);
+  }
+  return made;
+}
+
+/** file_checks(file, adapter, rows, check_name, ok, detail): one row per check of each file; a file no layout claimed gets one row. */
+export async function buildFileChecks(db: Db, files: readonly { name: string; adapter: string | null; rows: number | null; checks: readonly { name: string; ok: boolean; detail: string }[] }[]): Promise<void> {
+  await db.conn.run(`CREATE TABLE file_checks ("file" VARCHAR, adapter VARCHAR, "rows" INTEGER, check_name VARCHAR, ok BOOLEAN, detail VARCHAR)`);
+  const data = files.flatMap((f) => f.checks.length ? f.checks.map((c) => [f.name, f.adapter, f.rows, c.name, c.ok, c.detail]) : [[f.name, f.adapter, f.rows, "(no layout recognised)", f.adapter !== null, ""]]);
+  const v = (x: unknown) => x === null || x === undefined ? "NULL" : typeof x === "number" || typeof x === "boolean" ? String(x) : literal(String(x));
+  for (let i = 0; i < data.length; i += 200) await db.conn.run(`INSERT INTO file_checks VALUES ${data.slice(i, i + 200).map((r) => `(${r.map(v).join(", ")})`).join(", ")}`);
+}
+
 /** The query bank of a domain pack: config/domain-packs/<pack>/queries.json. */
 export const bankPathOf = (configRoot: string, pack: string): string => join(configRoot, "domain-packs", ...pack.split("/"), "queries.json");
 
 /** The report as tables (amounts in cents and as dollars), and the loaded sources under short names. */
-export async function buildTables(db: Db, tables: Readonly<Record<string, string>>, rep: ReconcileReport, dirs: Record<string, string>): Promise<void> {
+export async function buildTables(db: Db, tables: Readonly<Record<string, string>>, rep: ReconcileReport, dirs: Record<string, string>, spec: TablesSpec | undefined): Promise<void> {
   const make = async (name: string, cols: [string, string][], data: unknown[][]) => {
     await db.conn.run(`CREATE TABLE ${ident(name)} (${cols.map(([c, t]) => `${ident(c)} ${t}`).join(", ")})`);
     // an empty value is NULL in a typed column (e.g. an exception with no date, such as an ID found only in the ledger)
@@ -69,11 +129,8 @@ export async function buildTables(db: Db, tables: Readonly<Record<string, string
     d.unmatchedBank.map((b) => [b.row, b.date, b.group, b.payer, b.kind, b.originator, b.cents, usd(b.cents)]));
   await make("group_totals", [["grp", "VARCHAR"], ["curve_amount", "DECIMAL(18,2)"], ["matched_amount", "DECIMAL(18,2)"], ["unmatched_amount", "DECIMAL(18,2)"]],
     Object.entries(rep.result.totals).map(([g, t]) => [g, usd(t.curveCents), usd(t.matchedCents), usd(t.curveCents - t.matchedCents)]));
-  await make("file_checks", [["file", "VARCHAR"], ["adapter", "VARCHAR"], ["rows", "INTEGER"], ["check_name", "VARCHAR"], ["ok", "BOOLEAN"], ["detail", "VARCHAR"]],
-    rep.files.flatMap((f) => f.checks.length ? f.checks.map((c) => [f.name, f.adapter, f.rows, c.name, c.ok, c.detail]) : [[f.name, f.adapter, f.rows, "(no layout recognised)", f.adapter !== null, ""]]));
-  const short: Record<string, string> = { "bank/bofa": "bank", "prms/curve-hero/deposit-detail": "deposit", "prms/curve-hero/ledger": "ledger", "prms/curve-hero/patient-list": "patients",
-    "prms/curve-hero/procedures": "procedures", "financing/carecredit": "carecredit", "financing/cherry": "cherry", "financing/hfd": "hfd" };
-  for (const [id, t] of Object.entries(tables)) if (short[id]) await db.conn.run(`CREATE VIEW ${ident(short[id])} AS SELECT * FROM ${ident(t)}`);
+  await buildFileChecks(db, rep.files);
+  await buildViews(db, tables, spec);
 }
 
 /** One question's facts, computed by DuckDB from the reconciliation tables: classified, signed, totalled, ranked, with actions. */
