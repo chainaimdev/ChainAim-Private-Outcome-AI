@@ -43,6 +43,25 @@ test("secrets: files checked by name only; no value read, set or printed", () =>
   for (const line of code.split(/\r?\n/)) if (/\b(Say|Write-Host|Problem|Stop-Here)\b/.test(line)) assert.ok(!/\$env:[A-Z_]*KEY/.test(line), line.trim());
 });
 
+test("model attestation (ARCH-411): attest.enabled auto/on/off and gpuCheck go to up.ps1; READY row reads commands.yml, not a secret", () => {
+  assert.match(code, /\[switch\]\$Attest,/);
+  assert.match(code, /if \(\$attestMode -ne "auto"\) \{ \$privArgs\.Attest = \$attestMode \}/);
+  assert.match(code, /\$privArgs\.AttestGpuCheck = \$attestGpu/);
+  assert.match(code, /"attest \(ca-attest\)", "http:\/\/127\.0\.0\.1:8770\/healthz"/);
+  assert.match(code, /runtime\\compose\\commands\.yml/);
+  assert.ok(code.indexOf("$privArgs.Attest") < code.indexOf("& $privUp @privArgs"));
+  assert.equal(ex.attest.enabled, "auto"); assert.equal(ex.attest.gpuCheck, "on");
+  const up = readFileSync(new URL("../../test-console/up.ps1", import.meta.url), "utf8");
+  assert.ok(/^[\x00-\x7F]*$/.test(up), "up.ps1 must be ASCII");
+  assert.match(up, /\[ValidateSet\("on", "off"\)\]\[string\]\$Attest = "on"/);
+  assert.match(up, /--attest-url=http:\/\/attest:\$AttestPort/);
+  assert.match(up, /& docker rm -f ca-attest/);
+  // Images always rebuilt (cache) unless -NoBuild, so no image runs code older than the flags (2026-11-06 --attest-url).
+  assert.match(up, /@\("up", "-d"\) \+ \$\(if \(-not \$NoBuild\) \{ @\("--build"\) \}/);
+  const down = readFileSync(new URL("../../test-console/down.ps1", import.meta.url), "utf8");
+  assert.match(down, /--profile attest/);
+});
+
 test("this PC's watch list and gas go to nearadminup.ps1; the paywall's NEAR RPC is tested from inside ca-paywall", () => {
   assert.match(code, /\$adminArgs\.Watch = \$watch/); assert.match(code, /\$adminArgs\.GasPerPaymentNear =/);
   assert.match(code, /docker exec ca-paywall node -e \$js/);

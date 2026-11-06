@@ -31,7 +31,27 @@ export type Msg = { role: "system" | "user" | "assistant"; content: string };
 export type ChatReply = {
   text: string; model?: string; zone?: string; usage?: { promptTokens: number; completionTokens: number };
   entityCounts?: Record<string, number>; residual?: "pass" | "refused";
+  /** NEAR AI attestation evidence (PLAN-private-ai-nearai-attestation.md ARCH-411), from the gateway's ARCH-408 headers; absent otherwise. */
+  attest?: AttestEvidence;
 };
+/**
+ * What the console hands ca-attest for one call (ARCH-411): the provider's chat id (absent when the gateway had none), the
+ * served model id, SHA-256 of the exact request and response bytes, and calledAt = the time just BEFORE this client sent the
+ * request (a report only counts if it arrived before that). Ids, hashes and a time only.
+ */
+export type AttestEvidence = { chatId?: string; servedModel: string; requestSha256: string; responseSha256: string; calledAt: string };
+
+const SHA256_HEX = /^[0-9a-f]{64}$/;
+const PROVIDER_ID = /^[A-Za-z0-9._:-]{1,200}$/;
+/** The four x-chainaim attestation headers (gateway server.ts ATTEST_HEADERS) -> AttestEvidence, or undefined when absent or malformed. */
+export function parseAttestHeaders(get: (name: string) => string | null, calledAt: string): AttestEvidence | undefined {
+  const servedModel = get("x-chainaim-served-model");
+  const req = get("x-chainaim-req-sha256");
+  const resp = get("x-chainaim-resp-sha256");
+  if (!servedModel || servedModel.length > 200 || !req || !resp || !SHA256_HEX.test(req) || !SHA256_HEX.test(resp)) return undefined;
+  const id = get("x-chainaim-provider-id");
+  return { ...(id && PROVIDER_ID.test(id) ? { chatId: id } : {}), servedModel, requestSha256: req, responseSha256: resp, calledAt };
+}
 export type CrossAskDeps = {
   /** POST to the analyst route; resolves with the JSON body, throws Error(message) on a non-2xx answer. */
   analyst: (route: "relations" | "sql", body: Record<string, unknown>) => Promise<any>;
@@ -242,6 +262,7 @@ export function gatewayChat(opts: { url: string; key: string; timeoutMs: number;
   const base = opts.url.replace(/\/+$/, "");
   return async (messages, model) => {
     let r: Response;
+    const calledAt = new Date().toISOString(); // ARCH-411: before the request leaves
     try {
       r = await fetch(`${base}/v1/chat/completions`, {
         method: "POST", headers: { authorization: `Bearer ${opts.key}`, "content-type": "application/json" },
@@ -258,6 +279,9 @@ export function gatewayChat(opts: { url: string; key: string; timeoutMs: number;
     if (entityCounts) reply.entityCounts = entityCounts;
     const residual = parseResidual(r.headers.get("x-chainaim-residual"));
     if (residual) reply.residual = residual;
+    // ARCH-411: only for a deployment the gateway attests (NEAR AI); every other reply is exactly as before.
+    const attest = parseAttestHeaders((n) => r.headers.get(n), calledAt);
+    if (attest) reply.attest = attest;
     return reply;
   };
 }

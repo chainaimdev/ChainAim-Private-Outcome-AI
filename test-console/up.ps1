@@ -6,8 +6,11 @@ this PC (server.ts --mode ui, which forwards every call to the console API in Do
   .\test-console\up.ps1 -ReplaceRunning         stop the containers started by stack.ps1 / switch-models.ps1 (same
                                                 names) and start the compose stack in their place, then the UI
   .\test-console\up.ps1                         the same once the compose stack owns the containers
-  .\test-console\up.ps1 -Build                  rebuild the images first (gateway, paywall, presidio, analyst,
-                                                chain-query, console)
+  .\test-console\up.ps1 -Build                  kept for old habits: every start now rebuilds the images (gateway, paywall,
+                                                presidio, analyst, chain-query, console, agent, attest) with Docker's cache,
+                                                seconds when nothing changed, so an image never runs older code than the
+                                                flags this script writes (seen 2026-11-06: "Unknown option '--attest-url'")
+  .\test-console\up.ps1 -NoBuild                skip that rebuild (offline, or to start exactly the images already built)
   .\test-console\up.ps1 -Test                   also the OpenRouter stand-in (compose profile "test")
   .\test-console\up.ps1 -PaidJobs off           tab 03 free only (no paid-job settings needed)
   .\test-console\up.ps1 -Agent on               also tab 03 agent mode (architecture-tab03-agent-mode.md ARCH-312): the agent
@@ -16,6 +19,13 @@ this PC (server.ts --mode ui, which forwards every call to the console API in Do
                                                 without -Agent it is switched off, with an INFO line, when -PaidJobs is off,
                                                 -AgentEnvFile does not exist or no BEDROCK_API_KEY is found; -Agent on
                                                 stops instead, -Agent off turns it off.
+  .\test-console\up.ps1 -Attest on              also NEAR AI model attestation (PLAN-private-ai-nearai-attestation.md ARCH-411):
+                                                ca-attest (compose profile "attest", services\attest) and the console API
+                                                asks it about every quoted job (--attest-url). Default on: without -Attest it
+                                                is switched off, with an INFO line, when -PaidJobs is off, no NEARAI_API_KEY
+                                                is found, or the running catalog (config\generated\catalog.local.json) has no
+                                                "attest": "nearai" model; -Attest on stops instead, -Attest off turns it off.
+                                                -AttestGpuCheck on|off (default on): require NVIDIA's GPU verdict.
   .\test-console\down.ps1                       stop the UI and the compose stack (volumes kept)
 
 What it takes, from files outside the repository (NAME=value; values are never printed or written anywhere):
@@ -53,6 +63,7 @@ param(
   [switch]$DryRun,
   [switch]$ReplaceRunning,
   [switch]$Build,
+  [switch]$NoBuild,
   [switch]$Test,
   [switch]$NoUi,
   [switch]$NoBrowser,
@@ -82,6 +93,10 @@ param(
   [string]$AgentModelId = "nvidia.nemotron-nano-3-30b",
   [int]$AgentTimeoutSec = 300,
   [int]$AgentPort = 8760,
+  [ValidateSet("on", "off")][string]$Attest = "on",
+  [ValidateSet("on", "off")][string]$AttestGpuCheck = "on",
+  [int]$AttestPort = 8770,
+  [string]$AttestCatalog = "config\generated\catalog.local.json",
   [string]$StateFile = "runtime\compose\last-start.json"
 )
 $ErrorActionPreference = "Stop"
@@ -137,7 +152,7 @@ try {
   if ((Invoke-Quiet @("volume", "inspect", "chainaim-test-ledger")).Code -ne 0) { if ($DryRun) { Say "INFO" "volume chainaim-test-ledger would be created" } else { & docker volume create chainaim-test-ledger | Out-Null; Say "OK" "created volume chainaim-test-ledger" } }
 
   # 2. Containers with the compose names that compose does not own (started by stack.ps1 / switch-models.ps1)
-  $names = @("ca-presidio", "ca-gateway", "ca-paywall", "ca-analyst", "ca-chain-query", "ca-console-api") + $(if ($Test) { @("ca-openrouter-stub") } else { @() }) + $(if ($Agent -eq "on") { @("ca-agent") } else { @() })
+  $names = @("ca-presidio", "ca-gateway", "ca-paywall", "ca-analyst", "ca-chain-query", "ca-console-api") + $(if ($Test) { @("ca-openrouter-stub") } else { @() }) + $(if ($Agent -eq "on") { @("ca-agent") } else { @() }) + $(if ($Attest -eq "on") { @("ca-attest") } else { @() })
   $foreign = @()
   foreach ($n in $names) {
     # Labels as JSON: Windows PowerShell 5.1 drops quotes inside a native argument, so no quoted template here.
@@ -262,22 +277,47 @@ try {
       "--run-timeout-sec=$AgentTimeoutSec")
     Say "OK" "agent mode on: tenants $AgentTenants, Bedrock $AgentModelId in $AgentRegion; keys from $AgentEnvFile (mounted, not read here); Bedrock key passed by name"
   }
+  # NEAR AI model attestation (ARCH-411): ca-attest reads the models to attest from the catalog the gateway runs with.
+  $attestCmd = $null
+  $attCatPath = if ([IO.Path]::IsPathRooted($AttestCatalog)) { $AttestCatalog } else { Join-Path $repo $AttestCatalog }
+  $attCatHas = (Test-Path $attCatPath) -and ((Get-Content -Raw $attCatPath) -match '"attest"\s*:\s*"nearai"')
+  # A catalog generated before its registry last changed (seen 2026-11-06: no "attest" after ARCH-407) is stale: say so.
+  if ((Test-Path $attCatPath) -and ((Get-Content -Raw $attCatPath) -match 'GENERATED from (config/[A-Za-z0-9._/-]+\.json)')) {
+    $srcReg = Join-Path $repo ($Matches[1].Replace("/", "\"))
+    if ((Test-Path $srcReg) -and (Get-Item $srcReg).LastWriteTimeUtc -gt (Get-Item $attCatPath).LastWriteTimeUtc) {
+      Say "WARN" "$AttestCatalog is older than $($Matches[1]), which it was generated from: run .\test-console\switch-models.ps1 again for the current mode to regenerate it"
+    }
+  }
+  if ($Attest -eq "on" -and -not $PSBoundParameters.ContainsKey("Attest")) {
+    $why = if ($PaidJobs -ne "on") { "-PaidJobs off" } elseif (-not $env:NEARAI_API_KEY) { "no NEARAI_API_KEY" } elseif (-not $attCatHas) { "no attested model in $AttestCatalog (switch-models.ps1 -To ollama-cpu-8gb-all-nearai)" } else { $null }
+    if ($why) { Say "INFO" "model attestation off: $why (pass -Attest on to require it, -Attest off to skip this check)"; $Attest = "off" }
+  }
+  if ($Attest -eq "on") {
+    if ($PaidJobs -ne "on") { Stop-Here "-Attest on needs -PaidJobs on: only quoted jobs are attested" }
+    if (-not $env:NEARAI_API_KEY) { Stop-Here "-Attest on needs NEARAI_API_KEY (in $SecretsFile, or held by the running ca-gateway)" }
+    if (-not $attCatHas) { Stop-Here "-Attest on needs a model with `"attest`": `"nearai`" in $attCatPath (switch-models.ps1 generates it)" }
+    $consoleCmd += "--attest-url=http://attest:$AttestPort"
+    $attestCmd = @("--host=0.0.0.0", "--allow-non-loopback", "--port=$AttestPort", "--allowed-hosts=attest:$AttestPort,127.0.0.1:$AttestPort,localhost:$AttestPort",
+      "--catalog=/config/generated/catalog.local.json", "--gpu-check=$AttestGpuCheck")
+    Say "OK" "model attestation on: ca-attest on port $AttestPort, GPU check $AttestGpuCheck; NEAR AI key passed by name"
+  }
   $port = "127.0.0.1:${ApiPort}:${ApiPort}"
   $override = [ordered]@{ services = [ordered]@{ gateway = [ordered]@{ command = @($gwCmd) }; "console-api" = [ordered]@{ command = $consoleCmd; ports = @($port) } } }
   if ($agentCmd) { $override.services["agent"] = [ordered]@{ command = $agentCmd; ports = @("127.0.0.1:${AgentPort}:${AgentPort}") } }
+  if ($attestCmd) { $override.services["attest"] = [ordered]@{ command = $attestCmd; ports = @("127.0.0.1:${AttestPort}:${AttestPort}") } }
   $outDir = Join-Path $repo "runtime\compose"
   New-Item -ItemType Directory -Force -Path $outDir | Out-Null
   $cmdFile = Join-Path $outDir "commands.yml"
   # JSON is YAML: compose reads this file as an override of docker-compose.yml.
   [IO.File]::WriteAllText($cmdFile, ($override | ConvertTo-Json -Depth 6), (New-Object Text.UTF8Encoding($false)))
   Say "OK" "wrote $cmdFile (commands only, no secrets)"
-  $composeArgs = @("compose", "-f", "docker-compose.yml", "-f", $cmdFile) + $(if ($Test) { @("--profile", "test") } else { @() }) + $(if ($agentCmd) { @("--profile", "agent") } else { @() })
+  $composeArgs = @("compose", "-f", "docker-compose.yml", "-f", $cmdFile) + $(if ($Test) { @("--profile", "test") } else { @() }) + $(if ($agentCmd) { @("--profile", "agent") } else { @() }) + $(if ($attestCmd) { @("--profile", "attest") } else { @() })
   $check = Invoke-Quiet ($composeArgs + @("config", "-q"))
   if ($check.Code -ne 0) { Stop-Here "docker compose rejected the configuration; run: docker compose -f docker-compose.yml -f runtime\compose\commands.yml config -q   (do NOT run it without -q: it prints the values)" }
   Say "OK" "compose configuration is valid"
 
   # 6. Ports this stack publishes must be free, or held by this stack's own containers
-  foreach ($p in @(8740, 8750, $ApiPort) + $(if ($agentCmd) { @($AgentPort) } else { @() })) {
+  foreach ($p in @(8740, 8750, $ApiPort) + $(if ($agentCmd) { @($AgentPort) } else { @() }) + $(if ($attestCmd) { @($AttestPort) } else { @() })) {
     $own = (Invoke-Quiet @("ps", "--filter", "label=com.docker.compose.project=chainaim-private-ai", "--filter", "publish=$p", "-q")).Out
     if ((Listening $p) -and -not $own) { Stop-Here "port $p is in use on this PC (the analyst / chain-query / console windows of start-ui.ps1?). Close that window, then run this again." }
   }
@@ -286,7 +326,12 @@ try {
 
   # 7. Start
   if ($foreign.Count) { foreach ($n in $foreign) { Say "REPLACE" "$n (docker rm -f; its volume and image are kept)"; & docker rm -f $n | Out-Null } }
-  $upArgs = $composeArgs + @("up", "-d") + $(if ($Build) { @("--build") } else { @() })
+  # Attestation off this time: a ca-attest left from an earlier start would keep running with the NEAR AI key; remove it.
+  if (-not $attestCmd -and (Invoke-Quiet @("inspect", "--format", "{{.Name}}", "ca-attest")).Code -eq 0) { Say "INFO" "model attestation off: removing the ca-attest left from an earlier start"; & docker rm -f ca-attest | Out-Null }
+  # Always --build (Docker's cache makes it quick) unless -NoBuild: the images then match this checkout's code.
+  if ($Build -and $NoBuild) { Stop-Here "-Build and -NoBuild together: pick one" }
+  if ($NoBuild) { Say "INFO" "-NoBuild: starting the images already built; they may hold older code than this checkout" }
+  $upArgs = $composeArgs + @("up", "-d") + $(if (-not $NoBuild) { @("--build") } else { @() })
   & docker @upArgs
   if ($LASTEXITCODE -ne 0) { Stop-Here "docker compose up failed; see the message above. Rollback: DOCKERIZE-PLAN.md section 8." }
   # The console API reads the price catalog once, at start: restart it when switch-models.ps1 rewrote the catalog since
@@ -301,11 +346,22 @@ try {
       } catch { Say "INFO" "could not compare the catalog time with ca-console-api's start time; restart it by hand after a model switch: docker restart ca-console-api" }
     }
   }
+  # ca-attest reads the attested models from the catalog once, at start: the same restart after a model switch.
+  if ($attestCmd) {
+    $started = (Invoke-Quiet @("inspect", "--format", "{{.State.StartedAt}}", "ca-attest")).Out
+    if ($started) {
+      try {
+        $startedAt = [DateTimeOffset]::Parse(($started -replace '(\.\d{7})\d+', '$1')).UtcDateTime
+        if ((Get-Item $attCatPath).LastWriteTimeUtc -gt $startedAt) { Say "INFO" "the model catalog changed after ca-attest started: restarting it"; & docker restart ca-attest | Out-Null }
+      } catch { Say "INFO" "could not compare the catalog time with ca-attest's start time; restart it by hand after a model switch: docker restart ca-attest" }
+    }
+  }
   $ok = (Wait-Http "http://127.0.0.1:8720/healthz" @{} "gateway") -and
         (Wait-Http "http://127.0.0.1:8740/healthz" @{} "analyst") -and
         (Wait-Http "http://127.0.0.1:8750/healthz" @{} "chain-query") -and
         (Wait-Http "http://127.0.0.1:$ApiPort/data/config" @{} "console-api")
   if ($ok -and $agentCmd) { $ok = Wait-Http "http://127.0.0.1:$AgentPort/healthz" @{} "agent" }
+  if ($ok -and $attestCmd) { $ok = Wait-Http "http://127.0.0.1:$AttestPort/healthz" @{} "ca-attest" }
   if (-not $ok) { Stop-Here "a service did not come up: docker compose logs --tail 40 <service>" }
   # Saved for the next start (public values only, no keys): read only when no ca-gateway / ca-paywall is left.
   $newState = [ordered]@{ note = "Written by test-console\up.ps1 after a successful start. Public values only: the gateway command and the XRPL pay-to. No keys."; gatewayCmd = @($gwCmd); xrplPayTo = [ordered]@{} }

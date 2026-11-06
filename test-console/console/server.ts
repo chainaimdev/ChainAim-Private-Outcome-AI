@@ -79,6 +79,13 @@
  *   --job-feed-timeout-ms N     one post (default 5000)
  *   --job-feed-max-inflight N   posts at once; beyond it an event is dropped and logged (default 20)
  *   --job-expiry-check-sec N    how often held jobs are checked for expiry (default 30)
+ *   NEAR AI model attestation (PLAN-private-ai-nearai-attestation.md ARCH-411; off unless --attest-url, which needs
+ *   --paid-jobs on): after a job is quoted, ca-attest (services/attest) is asked about each of its calls that carry the
+ *   gateway's attestation evidence, in the background (attest.ts); never awaited, never fails a job.
+ *   GET /jobs/<id>/attestation answers the result (ids, hashes, addresses, booleans, reasons).
+ *   --attest-url URL            ca-attest, e.g. http://attest:8770 (default unset = off)
+ *   --attest-timeout-ms N       one POST /verify (default 20000)
+ *   --attest-keep N             job attestations kept in memory (default 500; oldest dropped first)
  *
  *   Docker split (DOCKERIZE-PLAN 4.1, C1-C7; every default is today's single process on 127.0.0.1):
  *   --mode all|ui|api          all (default): page and backend in one process, as before. api: the same backend, meant to
@@ -127,6 +134,7 @@ import { RUN_LOG_MODES, RunLog, type RunLogMode } from "./run-log.ts";
 import { quoteJob } from "../../packages/crossask/src/cost.ts";
 import { JobStore, internalHandler, meterOf, paidJobsConfig, registerJob } from "./jobs.ts";
 import { JobFeed, jobFeedConfig } from "./job-feed.ts";
+import { AttestClient, attestConfig } from "./attest.ts";
 
 const { values: flags } = parseArgs({
   args: process.argv.slice(2),
@@ -174,6 +182,9 @@ const { values: flags } = parseArgs({
     "job-feed-timeout-ms": { type: "string" },
     "job-feed-max-inflight": { type: "string" },
     "job-expiry-check-sec": { type: "string" },
+    "attest-url": { type: "string" },
+    "attest-timeout-ms": { type: "string" },
+    "attest-keep": { type: "string" },
     mode: { type: "string", default: "all" },
     bind: { type: "string", default: "127.0.0.1" },
     api: { type: "string" },
@@ -192,7 +203,7 @@ const MODE = flags.mode as "all" | "ui" | "api";
 if (!["all", "ui", "api"].includes(MODE)) throw new Error(`--mode must be all, ui or api, got ${flags.mode}`);
 if (MODE === "ui") {
   // The ui process runs nothing of the backend; a backend flag here would be silently unused, so it is refused.
-  for (const name of ["paid-jobs", "job-feed-url", "pricing-catalog", "dataset-root"] as const) {
+  for (const name of ["paid-jobs", "job-feed-url", "pricing-catalog", "dataset-root", "attest-url"] as const) {
     if (flags[name] !== undefined) throw new Error(`--${name} belongs to the api process, not --mode ui (use --paid-jobs-page on for the tab 03 pay box)`);
   }
   if (!flags.api) throw new Error("--mode ui needs --api URL: the console API, e.g. http://127.0.0.1:8735");
@@ -241,6 +252,9 @@ const AGENT_FORWARD_TIMEOUT_MS = positiveInt("agent-forward-timeout-sec") * 1000
 /** The paid-job feed to near-watch (adminUI ARCH-205): undefined unless --job-feed-url; start-up stops here on a bad flag or key. */
 const JOB_FEED_CONFIG = MODE === "ui" ? undefined : jobFeedConfig(flags, process.env, PAID_JOBS !== undefined);
 const JOB_FEED = JOB_FEED_CONFIG ? new JobFeed(JOB_FEED_CONFIG) : undefined;
+/** NEAR AI model attestation (ARCH-411): undefined unless --attest-url; start-up stops here on a bad flag. */
+const ATTEST_CONFIG = MODE === "ui" ? undefined : attestConfig(flags, PAID_JOBS !== undefined);
+const ATTEST = ATTEST_CONFIG ? new AttestClient(ATTEST_CONFIG) : undefined;
 const JOBS = PAID_JOBS ? new JobStore(PAID_JOBS.max, PAID_JOBS.ttlMs, Date.now, JOB_FEED ? (j) => JOB_FEED.expired(j.jobId) : undefined) : undefined;
 /** The tab 03 pay box and its script, added to the page only with --paid-jobs on (the page is otherwise served as it is). */
 const PAID_JOBS_FRAGMENT = fileURLToPath(new URL("./paid-jobs.html", import.meta.url));
@@ -662,6 +676,14 @@ createServer(async (req, res) => {
       }
     }
     // ---- Paid jobs on tab 03 (ARCH-104, ARCH-112): only with --paid-jobs on -----------------------------------------
+    // ARCH-411: one job's model attestation (ids, hashes, addresses, booleans, reasons); 404 when off or unknown.
+    if (PAID_JOBS && api === "jobs" && req.method === "GET" && /^\/jobs\/[0-9a-f]{32}\/attestation$/.test(url.pathname)) {
+      if (!hostOk(req)) return dataJson(res, 403, { error: `open the console as http://127.0.0.1:${PORT}` });
+      if (!ATTEST) return dataJson(res, 404, { error: "model attestation is off: start the console with --attest-url" });
+      const a = ATTEST.get(url.pathname.split("/")[2]);
+      if (!a) return dataJson(res, 404, { error: "no attestation for this job" });
+      return dataJson(res, 200, a);
+    }
     if (PAID_JOBS && JOBS && api === "jobs" && name === "config" && req.method === "GET") {
       if (!hostOk(req)) return dataJson(res, 403, { error: `open the console as http://127.0.0.1:${PORT}` });
       return dataJson(res, 200, { wallet: NEAR_WALLET, walletName: NEAR_WALLETS[NEAR_WALLET!].name, ttlMin: PAID_JOBS.ttlMs / 60_000 });
@@ -699,6 +721,8 @@ createServer(async (req, res) => {
       const { timings: _timings, ...result } = out;
       JOBS.hold({ jobId, result, amount: quote.amount, breakdown: quote.breakdown, expiresAt });
       JOB_FEED?.quoted({ jobId, network: offer.network, expiresAt, out, quote });
+      // ARCH-411: in the background; the quote below is returned without waiting for it.
+      ATTEST?.start(jobId, out.served);
       // Ids and amounts only.
       console.log(JSON.stringify({ ts: new Date().toISOString(), route: "paid-job", event: "job_quoted", jobId, amount: quote.amount, calls: quote.breakdown.calls.length }));
       return dataJson(res, 200, { jobId, totalUsd: quote.totalUsd, amount: quote.amount, network: offer.network, asset: offer.asset, payTo: offer.payTo, expiresAt });
@@ -853,6 +877,7 @@ createServer(async (req, res) => {
   }
   if (MODE === "api") console.log(`[test-console] api mode: listening on ${flags.bind}:${PORT}; hosts ${ALLOWED_HOSTS.join(",")}; ledger ${LEDGER_SOURCE}`);
   if (AGENT_SERVICE) console.log(`[test-console] agent mode on: /agent/config and /agent/crossask relayed to ${AGENT_SERVICE} (up to ${AGENT_FORWARD_TIMEOUT_MS / 1000} s per run)`);
+  if (ATTEST_CONFIG) console.log(`[test-console] model attestation on: ${ATTEST_CONFIG.url}/verify after each quoted job (GET /jobs/<id>/attestation)`);
   console.log(`[test-console] run log: ${RUN_LOG.opt.mode}${RUN_LOG.opt.mode === "off" ? "" : ` -> ${RUN_LOG.opt.dir} (keep ${RUN_LOG.opt.keepDays} days${RUN_LOG.opt.mode === "full" ? `, up to ${RUN_LOG.opt.maxRows} rows per run` : ""})`}`);
   console.log(`[test-console] http://127.0.0.1:${PORT}  default model: ${DEFAULT_MODEL}${NEAR_WALLET ? `  NEAR wallet: ${NEAR_WALLET}` : ""}`);
   // The internal listener for the paywall (ARCH-105), only with --paid-jobs on; the key is never shown.

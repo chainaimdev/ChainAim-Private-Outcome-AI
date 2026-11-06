@@ -986,3 +986,38 @@ Built in the AI's workspace on a snapshot of the owner's repo (main = e8626e8, v
 - Owner PC: `npm test` -> check-deps OK (327 files, 49 cross-unit imports, no new allow); tests 454, pass 454, fail 0.
 - Next: ARCH-411 console --attest-url (off by default, never blocks a job), up.ps1 -Attest + desk.ps1 row, ARCH-412 job_attested,
   ARCH-413 tab 03 badge, ARCH-414 live.
+
+## 2026-11-06 — NEAR AI attestation part B: ARCH-411 console side (checkpoint; up.ps1/desk.ps1 and a real-process route test pending)
+- packages/crossask/src/index.ts: ChatReply.attest?: AttestEvidence {chatId?, servedModel, requestSha256, responseSha256, calledAt};
+  exported parseAttestHeaders(); gatewayChat stamps calledAt before the request and reads the gateway's 4 ARCH-408 headers.
+- New test-console/console/attest.ts: attestConfig (--attest-url, needs --paid-jobs on; --attest-timeout-ms 20000; --attest-keep 500),
+  AttestClient.start(jobId, served) in the background (never throws; calls without evidence not_applicable; ca-attest down ->
+  unavailable "attest service: unreachable" / "HTTP n" / "no answer in time"), get(), summarize(), one job_attested log line (ids only).
+- test-console/console/server.ts: the 3 flags (refused in ui mode), ATTEST built after JOB_FEED, ATTEST?.start(jobId, out.served) right
+  after JOB_FEED?.quoted (not awaited), GET /jobs/<id>/attestation (Host check; 404 when off or unknown), one start-up line.
+- New test-console/test/console-attest.test.ts (10): headers -> evidence, malformed -> none, gatewayChat with/without headers (ARCH-401
+  unchanged), flags, client against a loopback server speaking ca-attest's /verify contract (body = ids and hashes only, no text;
+  not_applicable; down/500 -> unavailable; summary rules; keep cap).
+- Owner PC: `npm test` -> check-deps OK (329 files, 51 cross-unit imports, no new allow); tests 464, pass 464, fail 0 (every existing
+  console test, ARCH-104/112/113/205/307-309/C1-C7, still passes).
+- Pending for ARCH-411: a real console process test of GET /jobs/<id>/attestation; up.ps1 -Attest on|off + --attest-url
+  http://attest:8770; desk.ps1 row; MANUAL_SETUP/cmd.md lines.
+
+### 2026-11-06 ARCH-411 one-command start (owner: "one consolidated script ... end 2 end")
+- test-console/up.ps1: -Attest on|off (default on; auto-off with an INFO line when -PaidJobs off, no NEARAI_API_KEY, or no
+  "attest": "nearai" model in config\generated\catalog.local.json; explicit -Attest on stops instead), -AttestGpuCheck, -AttestPort 8770,
+  -AttestCatalog. Adds --attest-url to the console API, services.attest to commands.yml, --profile attest, the port check, a restart
+  of ca-attest when the catalog changed after it started, the /healthz wait, and removes a leftover ca-attest when off.
+- test-console/down.ps1: --profile attest.
+- test-console/desk.ps1: -Attest switch and desk.json attest.enabled (auto/on/off) / attest.gpuCheck passed to up.ps1; READY row
+  "attest (ca-attest)" 127.0.0.1:8770/healthz, shown "off" when up.ps1 auto-switched it off (read from runtime\compose\commands.yml).
+- config/local/desk.example.json: attest { enabled auto, gpuCheck on }. scripts/test/desk.test.ts: one new guard test.
+- Owner PC run 1: npm test 465/465; up.ps1 -DryRun said attestation off (catalog generated before ARCH-407 carried "attest");
+  switch-models.ps1 -To ollama-cpu-8gb-all-nearai regenerated it ("attest nearai"); desk.ps1 then failed: ca-console-api exited with
+  "Unknown option '--attest-url'" (image built before ARCH-411). Fixes: up.ps1 now always runs compose up --build (cache; -NoBuild to
+  skip) and WARNs when the generated catalog is older than the registry it came from.
+- Owner PC run 2: desk.ps1 (one command) rebuilt all images, every READY row OK incl. "attest (ca-attest)". Paid job
+  af055c26222c7c66daa5052586297779 (query nearai/deepseek-v4.1-flash, answer bedrock/nemotron-nano-3-30b; released; reconcile matched):
+  GET /jobs/<id>/attestation -> summary verified; call 0 verified (provider_tee, ecdsa, signer 0xfe0071895500a9755c18044948ab4f4e1a7f337e,
+  tdx true, gpu true with --gpu-check on, signature true, hashes true, chat chatcmpl-906e15d2-29e9-4e88-9e86-bcae8c0642bb);
+  call 1 not_applicable. First live end-to-end attestation (ARCH-414 live run part; the cloud.near.ai/verify cross-check still open).

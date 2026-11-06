@@ -12,14 +12,20 @@ one READY table across both. Neither launcher is changed or renamed; each team k
   .\test-console\desk.ps1 -Check     report only (changes nothing)
   .\test-console\desk.ps1 -Stop      both repositories' down.ps1 (volumes kept)
   .\test-console\desk.ps1 -Test      the terminal test suites (they start their own servers)
-  -Build        rebuild the private images first (up.ps1 -Build)
+  -Build        kept for old habits: up.ps1 now rebuilds the private images on every start (Docker's cache, seconds when
+                nothing changed), so they always match this checkout's code
   -WithStub     also the OpenRouter stand-in (up.ps1 -Test)
   -Agent        require tab 03 agent mode (up.ps1 -Agent on). Without it, agent.enabled decides: "auto" (default) lets
                 up.ps1 switch it on when <secretsDir>\agent-tenants.env and a Bedrock key exist, "on" requires it, "off" skips it
+  -Attest       require NEAR AI model attestation (up.ps1 -Attest on, container ca-attest). Without it, attest.enabled decides:
+                "auto" (default) lets up.ps1 switch it on when NEARAI_API_KEY is in chainaim.env (or the running ca-gateway)
+                and the current model mode has a model marked "attest": "nearai"; "on" requires it, "off" skips it.
+                attest.gpuCheck "on" (default) / "off" goes to up.ps1 -AttestGpuCheck.
   -NoBrowser    do not open the pages
   -Settings     settings file (default config\local\desk.json; copy config\local\desk.example.json)
 
-Settings (config\local\desk.json, git-ignored): secretsDir, paidJobs.enabled, adminUi.enabled / watch / gasPerPaymentNear.
+Settings (config\local\desk.json, git-ignored): secretsDir, paidJobs.enabled, agent.enabled / tenants, attest.enabled / gpuCheck,
+adminUi.enabled / watch / gasPerPaymentNear.
 Prices are NOT here: up.ps1 reads its own price files (config\paid-jobs-prices.conf, or <secretsDir>\paid-jobs-settings.env).
 The adminUI checkout is found like the near-watch tests do: env NEAR_WATCH_DIR, config\local\repos.json nearWatchDir, sibling.
 Secrets are only checked to exist (by name); this script never reads or prints a value.
@@ -35,6 +41,7 @@ param(
   [switch]$Build,
   [switch]$WithStub,
   [switch]$Agent,
+  [switch]$Attest,
   [switch]$NoBrowser,
   [string]$Settings = "config\local\desk.json"
 )
@@ -87,6 +94,18 @@ $agentMode = if ($Agent) { "on" } elseif ($P.agent -and $P.agent.enabled -is [bo
 if (@("auto", "on", "off") -notcontains $agentMode) { Stop-Here "$Settings agent.enabled must be auto, on or off" }
 if ($agentMode -eq "on" -and -not $paid) { Stop-Here "agent mode needs paid jobs on (paidJobs.enabled in $Settings)" }
 $agentOn = ($agentMode -ne "off") -and $paid -and (Test-Path (Join-Path $secrets "agent-tenants.env"))
+# NEAR AI model attestation (ARCH-411): the same auto / on / off shape as agent mode; up.ps1 makes the auto decision.
+$attestMode = if ($Attest) { "on" } elseif ($P.attest -and $P.attest.enabled -is [bool]) { $(if ($P.attest.enabled) { "on" } else { "off" }) } elseif ($P.attest -and $P.attest.enabled) { [string]$P.attest.enabled } else { "auto" }
+if (@("auto", "on", "off") -notcontains $attestMode) { Stop-Here "$Settings attest.enabled must be auto, on or off" }
+if ($attestMode -eq "on" -and -not $paid) { Stop-Here "model attestation needs paid jobs on (paidJobs.enabled in $Settings)" }
+$attestGpu = if ($P.attest -and $P.attest.gpuCheck) { [string]$P.attest.gpuCheck } else { "on" }
+if (@("on", "off") -notcontains $attestGpu) { Stop-Here "$Settings attest.gpuCheck must be on or off" }
+# Whether up.ps1 actually started ca-attest: runtime\compose\commands.yml (written by up.ps1, commands only, no secrets).
+function AttestStarted {
+  $f = Join-Path $repo "runtime\compose\commands.yml"
+  if (-not (Test-Path $f)) { return $false }
+  try { return [bool]((Get-Content -Raw $f | ConvertFrom-Json).services.attest) } catch { return $false }
+}
 if ($P.paidJobs -and $P.paidJobs.feePerModelCallUsd) { Say "NOTE" "$Settings has paidJobs fees: they are no longer used (prices come from up.ps1's price files)" }
 
 function AdminRoot {
@@ -133,7 +152,8 @@ function Report {
     @("console page (03)", "http://127.0.0.1:8730/", $true),
     @("near-watch", "http://127.0.0.1:8790/healthz", $admin),
     @("NEAR admin UI", "http://127.0.0.1:8800/", $admin),
-    @("agent (tab 03)", "http://127.0.0.1:8760/healthz", $agentOn))
+    @("agent (tab 03)", "http://127.0.0.1:8760/healthz", $agentOn),
+    @("attest (ca-attest)", "http://127.0.0.1:8770/healthz", ($attestMode -ne "off" -and $paid)))
   $notes = @(); $bad = 0
   foreach ($r in $rows) {
     if (-not $r[2]) { Write-Host ("  {0,-20} off in {1}" -f $r[0], $Settings); continue }
@@ -146,6 +166,9 @@ function Report {
         $notes += "Honesty note: near-watch is running but its NEAR feed is not live yet ($states): it is catching up, or its RPC is rate-limited (set NEAR_RPC_FALLBACK_URL_TESTNET in $secrets\near-watch.env). Payments still work; the admin UI shows them as reconciled once the feed is live. Log: docker logs ca-near-watch --tail 20"
         continue
       }
+    }
+    if ($r[0] -eq "attest (ca-attest)" -and -not (AttestStarted)) {
+      if ($attestMode -eq "auto") { Write-Host ("  {0,-20} {1,-5} {2}" -f $r[0], "off", "up.ps1 switched model attestation off (see its INFO line above)"); continue }
     }
     $c = HttpStatus $r[1]; $ok = ($c -gt 0 -and $c -lt 500)
     if (-not $ok -and $r[0] -eq "agent (tab 03)" -and $agentMode -eq "auto") { Write-Host ("  {0,-20} {1,-5} {2}" -f $r[0], "off", "up.ps1 switched agent mode off (see its INFO line above)"); continue }
@@ -218,7 +241,9 @@ if ($Build) { $privArgs.Build = $true }
 if ($WithStub) { $privArgs.Test = $true }
 if ($agentMode -ne "auto") { $privArgs.Agent = $agentMode }
 if ($agentMode -ne "off" -and $P.agent -and $P.agent.tenants) { $privArgs.AgentTenants = [string]$P.agent.tenants }
-Say "RUN" "test-console\up.ps1 -ReplaceRunning -PaidJobs $($privArgs.PaidJobs)$(if ($Build) { ' -Build' })$(if ($WithStub) { ' -Test' })$(if ($agentMode -ne 'auto') { ' -Agent ' + $agentMode })"
+if ($attestMode -ne "auto") { $privArgs.Attest = $attestMode }
+$privArgs.AttestGpuCheck = $attestGpu
+Say "RUN" "test-console\up.ps1 -ReplaceRunning -PaidJobs $($privArgs.PaidJobs)$(if ($Build) { ' -Build' })$(if ($WithStub) { ' -Test' })$(if ($agentMode -ne 'auto') { ' -Agent ' + $agentMode })$(if ($attestMode -ne 'auto') { ' -Attest ' + $attestMode }) -AttestGpuCheck $attestGpu"
 & $privUp @privArgs
 if ($LASTEXITCODE) { Stop-Here "test-console\up.ps1 stopped (exit $LASTEXITCODE): its STOP line above names the fix" }
 

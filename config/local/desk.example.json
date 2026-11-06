@@ -3,6 +3,7 @@
   "secretsDir": "C:\\PRIV-AI-SECRETS",
   "paidJobs": { "enabled": true },
   "agent": { "enabled": "auto", "tenants": "t01,t02,t03" },
+  "attest": { "enabled": "auto", "gpuCheck": "on" },
   "adminUi": {
     "enabled": true,
     "watch": ["buyer1=buyer=<buyer account>.testnet", "relayer=relayer=<relayer account>.testnet"],

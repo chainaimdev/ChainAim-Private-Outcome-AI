@@ -1,6 +1,6 @@
 <#
 Stops what up.ps1 started: the 8730 UI window (server.ts --mode ui) and the compose stack (docker compose down),
-including ca-agent when up.ps1 -Agent on started it.
+including ca-agent when up.ps1 -Agent on started it and ca-attest when up.ps1 -Attest on started it.
 Volumes are kept (the gateway ledger chainaim-test-ledger, the analyst's work folder, the console's run log), and so
 are the network and the images. Back to the old way: DOCKERIZE-PLAN.md section 8 (stack.ps1, switch-models.ps1,
 start-ui.ps1).
@@ -24,7 +24,7 @@ if (-not $KeepUi) {
 $files = @("-f", "docker-compose.yml")
 $cmdFile = Join-Path $repo "runtime\compose\commands.yml"
 if (Test-Path $cmdFile) { $files += @("-f", $cmdFile) }
-# --profile agent: ca-agent too, when up.ps1 -Agent on started it (ARCH-312); nothing else changes when it did not.
-& docker compose @files --profile test --profile agent down
+# --profile agent / attest: ca-agent (ARCH-312) and ca-attest (ARCH-411) too, when up.ps1 started them; nothing else changes when it did not.
+& docker compose @files --profile test --profile agent --profile attest down
 if ($LASTEXITCODE -ne 0) { Write-Host "STOP   docker compose down failed; see the message above."; exit 1 }
 Write-Host "DONE   compose stack stopped (volumes, network and images kept)"
