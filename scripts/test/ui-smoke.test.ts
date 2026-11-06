@@ -242,5 +242,14 @@ test("--check-answers: a bad rules file or check-answers value is a usage error 
     const { checkAnswer } = await import(new URL("../ui-smoke.ts", import.meta.url).href); // a file:// URL: a bare C:\ path fails on Windows
     assert.deepEqual(checkAnswer({ datasets: ["d"], item: "i", key: "k.json", unit: "dollars", compare: [{ type: "cell", column: "net", path: "n" }] }, { n: "1720.00" }, [{ net: 1720 }]), []);
     assert.deepEqual(checkAnswer({ datasets: ["d"], item: "i", key: "k.json", unit: "dollars", compare: [{ type: "cell", column: "net", path: "n" }] }, { n: "1720.00" }, [{ net: 1720 }, { net: 1 }]), ["net: expected one row, got 2"]);
+    // rowsByKey with keyColumns joined by "/" and several values (PI by state/coverage, contracted by payer/cpt)
+    const multi = { datasets: ["d"], item: "i", key: "k.json", unit: "dollars", compare: [{ type: "rowsByKey", keyColumns: ["state", "coverage"], values: { open_cases: "count", open_balance: "amount" }, path: "pi" }] };
+    const key = { pi: { "MA/PIP": { open_cases: 13, open_balance: "2320.00" }, "CT/MedPay": { open_cases: 15, open_balance: "2330.00" } } };
+    assert.deepEqual(checkAnswer(multi, key, [{ state: "CT", coverage: "MedPay", open_cases: 15, open_balance: 2330 }, { state: "MA", coverage: "PIP", open_cases: 13, open_balance: 2320 }]), []);
+    assert.deepEqual(checkAnswer(multi, key, [{ state: "MA", coverage: "PIP", open_cases: 12, open_balance: 2320 }, { state: "RI", coverage: "PIP", open_cases: 1, open_balance: 1 }]),
+      ["MA/PIP open_cases: 12, key 13", "state/coverage CT/MedPay: in key pi, not in the result", "state/coverage RI/PIP: in the result, not in key pi"]);
+    writeFileSync(join(fx.dir, "bad2.json"), JSON.stringify({ version: 1, rules: [{ datasets: ["d"], item: "x", key: "truth.json", unit: "dollars", compare: [{ type: "rowsByKey", keyColumns: ["a"], values: { b: "euro" }, path: "p" }] }] }));
+    const bad2 = await cli(["--api", "http://127.0.0.1:9", "--answer-checks", join(fx.dir, "bad2.json")]);
+    assert.equal(bad2.code, 2); assert.match(bad2.out, /keyColumns \+ values \{column: amount\|count\}/);
   } finally { rmSync(fx.dir, { recursive: true, force: true }); }
 });

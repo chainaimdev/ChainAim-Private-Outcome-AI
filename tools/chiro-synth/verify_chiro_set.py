@@ -18,11 +18,13 @@ are not applicable to one of them.
 """
 import argparse
 import csv
+import datetime as dt
 import json
 import os
 import re
 import sys
 from collections import defaultdict
+from decimal import ROUND_HALF_UP, Decimal
 
 
 def cents(t):
@@ -54,11 +56,15 @@ def era(path):
     bad = []
     for e in segs:
         if e[0] == "ST":
-            cur = dict(bpr=None, trace=None, clp=0)
+            cur, claim = dict(bpr=None, trace=None, clp=0, payer=None, date=None), None
         elif e[0] == "BPR":
             cur["bpr"] = cents(e[2])
         elif e[0] == "TRN":
             cur["trace"] = e[2]
+        elif e[0] == "N1" and e[1] == "PR":
+            cur["payer"] = e[2]
+        elif e[0] == "DTM" and e[1] == "405" and cur is not None and claim is None:
+            cur["date"] = e[2]
         elif e[0] == "CLP":
             claim = dict(id=e[1], status=e[2], clp04=cents(e[4]), clp05=cents(e[5] or "0"), filing=e[6], svc=0, lines=[])
             cur["clp"] += claim["clp04"]
@@ -129,6 +135,48 @@ def scan_unplanted(leak, d, t, prms, pays, tx, fail):
         for x in rows(os.path.join(d, f"CASHPRAC-{t}.csv")):
             if x["Type"] != "Debit" and x["Reference"] not in refs("AUTODEBIT_RETURNED"):
                 fail(f"unplanted: Cash Practice {x['Type']} {x['Reference']}")
+
+
+def check_query_answers(d, t, truth, prms, cr, dr, pays, tx, fail):
+    """truth.json query_answers (the chiro query bank's answers) recomputed from the written files, never from the generator."""
+    qa = truth.get("query_answers")
+    if not qa:
+        fail("truth.json has no query_answers (regenerate the set with this gen_chiro_set.py)")
+        return
+    money = lambda c: f"{'-' if c < 0 else ''}{abs(c) // 100}.{abs(c) % 100:02d}"
+    want_cash = {"in": money(cr), "out": money(-dr), "net": money(cr + dr)}
+    if qa.get("cash") != want_cash:
+        fail(f"query_answers.cash {qa.get('cash')} vs bank detail {want_cash}")
+    s0 = dt.date.fromisoformat(truth["flags"]["start"]); s1 = s0 + dt.timedelta(days=truth["flags"]["days"] - 1)  # the statement period
+    pp = defaultdict(lambda: [0, 0, 0])
+    for p in pays.values():
+        day = dt.date(int(p["date"][:4]), int(p["date"][4:6]), int(p["date"][6:])) if p.get("date") else None
+        if day and s0 <= day <= s1:
+            x = pp[p["payer"]]; x[0] += 1; x[1] += sum(1 for c in p.get("claims", []) if c["clp04"] > 0); x[2] += p["bpr"]
+    want_pp = {k: dict(payments=v[0], claims_paid=v[1], paid=money(v[2])) for k, v in sorted(pp.items())}
+    if qa.get("payer_paid") != want_pp:
+        fail(f"query_answers.payer_paid vs the ERA: {qa.get('payer_paid')} vs {want_pp}")
+    pi = defaultdict(lambda: [0, 0, 0])
+    for x in rows(os.path.join(d, f"PI-CASES-{t}.csv")):
+        if x["Status"] == "open":
+            v = pi[f"{x['State']}/{x['Coverage']}"]; v[0] += 1; v[1] += cents(x["Billed"]); v[2] += cents(x["Carrier Paid"])
+    want_pi = {k: dict(open_cases=v[0], billed=money(v[1]), carrier_paid=money(v[2]), open_balance=money(v[1] - v[2])) for k, v in sorted(pi.items())}
+    if qa.get("pi_open") != want_pi:
+        fail(f"query_answers.pi_open vs PI-CASES: {qa.get('pi_open')} vs {want_pi}")
+    code_col = "Code" if prms == "chirotouch" else "Item"
+    ch = defaultdict(list)
+    for x in tx:
+        if x["Type"] == "Charge":
+            ch[(x["Payer"], x[code_col])].append(cents(x["Amount"]))
+    want_ct = {}
+    for f in rows(os.path.join(d, f"FEESCHED-{t}.csv")):
+        c = ch.get((f["Payer"], f["CPT"]))
+        if c:
+            avg = (Decimal(sum(c)) / len(c) / 100).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+            want_ct[f"{f['Payer']}/{f['CPT']}"] = dict(allowed=money(cents(f["Allowed"])), charges=len(c), avg_charge=f"{avg:.2f}")
+    if qa.get("contracted") != dict(sorted(want_ct.items())):
+        diff = sorted(set(qa.get("contracted", {})) ^ set(want_ct)) or [k for k in want_ct if qa.get("contracted", {}).get(k) != want_ct[k]][:3]
+        fail(f"query_answers.contracted vs FEESCHED + charges: differs at {diff}")
 
 
 def ymd(iso):
@@ -422,6 +470,7 @@ def main(argv=None):
         if sum(x["cents"] for x in listed) - short != c["cents"]:
             fail(f"bank line {c['line']}: {c['group']} credit {c['cents']} vs listed payments {sum(x['cents'] for x in listed)} minus shortfall {short}")
     check_leaks(leak, d, t, prms, credits, pays, tx, dep_by_id, fail)
+    check_query_answers(d, t, truth, prms, cr, dr, pays, tx, fail)
     scan_unplanted(leak, d, t, prms, pays, tx, fail)
     sc = truth["scenario"]
     want = [] if sc == "pos" else [c for c in ALL_LEAKS if c not in truth.get("not_applicable", [])] if sc == "neg-all" else [sc[4:].upper().replace("-", "_")]

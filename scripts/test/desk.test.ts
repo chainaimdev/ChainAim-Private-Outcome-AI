@@ -140,6 +140,18 @@ test("-SmbSample: writes and verifies the smb-fin-1 receivables and payables (to
   assert.ok(!/docker|Stop-Process/.test(s), "touches no service");
 });
 
+test("-ChiroSample: regenerates and verifies every chiro sample set (tools\\chiro-synth), scenarios from the generator, before any start", () => {
+  assert.match(code, /\[switch\]\$ChiroSample,/);
+  assert.match(code, /\[int\]\$ChiroSeed = 1,/); assert.match(code, /\[int\]\$ChiroLeakSeed = 1,/);
+  const s = code.slice(code.indexOf("if ($ChiroSample) {"), code.indexOf("# ---------------------------------------------------------------- -Smoke"));
+  assert.ok(s.length > 0 && code.indexOf("if ($ChiroSample) {") < code.indexOf("# 1. pre-flight"), "no start");
+  assert.match(s, /gen_chiro_set\.py --prms \$p --list-scenarios/, "the scenario list comes from the generator");
+  assert.match(s, /gen_chiro_set\.py --prms \$p --scenario \$sc --seed \$ChiroSeed --leak-seed \$ChiroLeakSeed --out \$out/);
+  assert.match(s, /verify_chiro_set\.py", "--dir", \$x\[2\]/); assert.match(s, /"--compare", \$other/);
+  assert.match(s, /if \(\$chiroFailed\) \{ Say "FAIL" .*; exit 1 \}/, "a set that fails verification fails the run");
+  assert.ok(!/docker|Stop-Process/.test(s), "touches no service");
+});
+
 test("this PC's watch list and gas go to nearadminup.ps1; the paywall's NEAR RPC is tested from inside ca-paywall", () => {
   assert.match(code, /\$adminArgs\.Watch = \$watch/); assert.match(code, /\$adminArgs\.GasPerPaymentNear =/);
   assert.match(code, /docker exec ca-paywall node -e \$js/);

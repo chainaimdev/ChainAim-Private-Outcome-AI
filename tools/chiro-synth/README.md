@@ -64,6 +64,16 @@ python tools\chiro-synth\verify_chiro_set.py --dir sample-data\prms\chiro-1-chir
 
 Expected (seed 1): 150 patients, 723 visits, 622 claims, 16 ERA payments; `ALL CHECKS PASS` for both folders.
 
+Every set at once (both PRMS, every scenario that applies, each verified against the other PRMS): `.\test-console\desk.ps1
+-ChiroSample [-ChiroSeed 1] [-ChiroLeakSeed 1]`. `gen_chiro_set.py --prms <p> --list-scenarios` prints the scenarios it uses.
+
+`_answer-key/truth.json` `query_answers` (2026-11-06) holds the answers of the chiro query bank
+(`config/domain-packs/finance/rcm/chiro/queries.json`) from the generator's own model, so `scripts/ui-smoke.ts --check-answers`
+and `services/analyst/test/chiro-bank.test.ts` check the bank's SQL against figures that SQL did not produce:
+`payer_paid` (835 payer: payments, claims paid, paid), `pi_open` (`<state>/<coverage>` of open cases: billed, carrier paid,
+billed - carrier paid), `contracted` (`<payer>/<cpt>`: allowed, charges, average charge half-up to the cent) and `cash`
+(bank detail: in, out, net). `verify_chiro_set.py` recomputes each from the written files and fails a set whose key lacks them.
+
 ## Scenarios
 
 One folder per scenario, as in dental (`SET-1/POS`, `SET-1/NEG-ALL`, `SET-1/NEG-<LEAK>`):

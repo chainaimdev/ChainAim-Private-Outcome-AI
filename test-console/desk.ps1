@@ -46,6 +46,9 @@ one READY table across both. Neither launcher is changed or renamed; each team k
                 PASS/WARN/SKIP/FAIL, a report in test-console\runs (no rows or answers), exit 1 on any FAIL. Needs the desk
                 started; changes nothing. Sample root only. A local/ model must be pulled first (-Memory shows it).
   -SmbSample  [-SmbSeed 1]
+  -ChiroSample [-ChiroSeed 1] [-ChiroLeakSeed 1]
+         regenerate every chiro sample set (sample-data\prms\chiro-1-chirotouch and chiro-2-jane, SET-1\<scenario>) with
+         tools\chiro-synth and verify each one (cross-checked with the other PRMS); the answer keys then carry query_answers
                 write the synthetic open receivables and payables of smb-fin-1 (tools\smb-synth\gen_ar_ap.py --force, tied
                 to the sample bank statement's deposits) into sample-data\smb-fin\statements, then check them
                 (verify_ar_ap.py). Same seed, same files. Changes only those two files and their _answer-key.
@@ -87,6 +90,9 @@ param(
   [switch]$SmokeDryRun,
   [switch]$SmbSample,
   [int]$SmbSeed = 1,
+  [switch]$ChiroSample,
+  [int]$ChiroSeed = 1,
+  [int]$ChiroLeakSeed = 1,
   [string]$RejudgeReceiver = "",
   [string]$RejudgeReason = "",
   [string]$Settings = "config\local\desk.json"
@@ -183,6 +189,38 @@ if ($SmbSample) {
   if ($LASTEXITCODE) { Stop-Here "gen_ar_ap.py failed (exit $LASTEXITCODE): its message is above" }
   & python tools\smb-synth\verify_ar_ap.py --dir $smbDir
   exit $LASTEXITCODE
+}
+
+# ---------------------------------------------------------------- -ChiroSample: regenerate and verify every chiro sample set
+if ($ChiroSample) {
+  if (-not (Get-Command python -ErrorAction SilentlyContinue)) { Stop-Here "python is not on PATH (tools\chiro-synth needs Python 3)" }
+  if ($ChiroSeed -lt 0 -or $ChiroLeakSeed -lt 0) { Stop-Here "-ChiroSeed and -ChiroLeakSeed must be 0 or more" }
+  $chiroRoot = Join-Path $repo "sample-data\prms"
+  $chiroOf = @{ chirotouch = "chiro-1-chirotouch"; jane = "chiro-2-jane" }
+  $chiroSets = @()
+  foreach ($p in @("chirotouch", "jane")) {
+    # the scenarios come from the generator (Jane has no AUTODEBIT_RETURNED), never from a list here
+    $scs = @(& python tools\chiro-synth\gen_chiro_set.py --prms $p --list-scenarios)
+    if ($LASTEXITCODE -or $scs.Count -eq 0) { Stop-Here "gen_chiro_set.py --list-scenarios failed for $p (exit $LASTEXITCODE)" }
+    Say "RUN" ("{0}: {1} set(s), seed {2}, leak seed {3}" -f $p, $scs.Count, $ChiroSeed, $ChiroLeakSeed)
+    foreach ($sc in $scs) {
+      $out = Join-Path $chiroRoot ("{0}\SET-1\{1}" -f $chiroOf[$p], $sc.ToUpper())
+      & python tools\chiro-synth\gen_chiro_set.py --prms $p --scenario $sc --seed $ChiroSeed --leak-seed $ChiroLeakSeed --out $out | Out-Null
+      if ($LASTEXITCODE) { Stop-Here "gen_chiro_set.py failed for $p $sc (exit $LASTEXITCODE): its message is above" }
+      $chiroSets += ,@($p, $sc.ToUpper(), $out)
+    }
+  }
+  $chiroFailed = 0
+  foreach ($x in $chiroSets) {
+    $other = Join-Path $chiroRoot ("{0}\SET-1\{1}" -f $chiroOf[$(if ($x[0] -eq "chirotouch") { "jane" } else { "chirotouch" })], $x[1])
+    $vArgs = @("tools\chiro-synth\verify_chiro_set.py", "--dir", $x[2], "--tag", ("SET1-" + $x[1]))
+    if (Test-Path $other) { $vArgs += @("--compare", $other) }
+    $vOut = @(& python @vArgs)
+    if ($LASTEXITCODE) { $chiroFailed++; Say "FAIL" ("{0} {1}" -f $x[0], $x[1]); $vOut | Select-Object -Last 6 | ForEach-Object { Write-Host "        $_" } }
+  }
+  if ($chiroFailed) { Say "FAIL" ("{0} of {1} chiro set(s) failed verification" -f $chiroFailed, $chiroSets.Count); exit 1 }
+  Say "OK" ("{0} chiro set(s) written and verified (ALL CHECKS PASS each); answer keys carry query_answers" -f $chiroSets.Count)
+  exit 0
 }
 
 # ---------------------------------------------------------------- -Smoke: every tab-03 template through the console API (reads only)

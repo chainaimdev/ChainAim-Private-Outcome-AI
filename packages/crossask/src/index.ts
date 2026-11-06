@@ -85,26 +85,115 @@ function parseEntityCounts(header: string | null): Record<string, number> | unde
 function parseResidual(header: string | null): "pass" | "refused" | undefined {
   return header === "pass" || header === "refused" ? header : undefined;
 }
-export type CrossAskInput = { folder: string; question: string; model: string; /** Model for the worded answer (default: model). A local one keeps the result rows on this PC. */ answerModel?: string; phrase: "llm" | "none"; sqlRetries: number; answerMaxRows: number; sql?: string };
+export type CrossAskInput = { folder: string; question: string; model: string; /** Model for the worded answer (default: model). A local one keeps the result rows on this PC. */ answerModel?: string; phrase: "llm" | "none"; sqlRetries: number; answerMaxRows: number; sql?: string;
+  /** Characters of the query prompt (every message's text) at most: older failed attempts are left out first (fitPrompt). Absent:
+   * no limit (the gateway refuses more than 48,000 characters, keys of the JSON body included, so a caller sets this lower). */
+  maxPromptChars?: number;
+  /** A failed query's error text fed back to the model is cut to this many characters (DuckDB binder errors list every candidate
+   * column). Absent: not cut. */
+  retryErrorMaxChars?: number };
 export type Attempt = { sql: string; error?: string };
+/**
+ * The query prompt within maxChars characters of message text: the system prompt and the table list + question are always sent;
+ * after them the most recent attempts (a model reply and the feedback on it, in pairs), oldest left out first, and the latest
+ * feedback names how many were left out. When even the latest attempt does not fit, its feedback is cut. null: the system
+ * prompt and the table list + question alone are over the limit (nothing can be sent). Live 2026-11-06: a ChiroTouch SQL-fix
+ * retry reached 58,063 characters and the gateway refused it.
+ */
+export function fitPrompt(messages: readonly Msg[], maxChars: number): Msg[] | null {
+  const size = (ms: readonly Msg[]) => ms.reduce((n, m) => n + m.content.length, 0);
+  const head = messages.slice(0, 2), tail = messages.slice(2);
+  if (size(head) > maxChars) return null;
+  if (size(messages) <= maxChars) return messages.map((m) => ({ ...m }));
+  const pairs: Msg[][] = [];
+  for (let i = 0; i < tail.length; i += 2) pairs.push(tail.slice(i, i + 2));
+  let kept: Msg[][] = [];
+  for (let i = pairs.length - 1; i >= 0; i--) { if (size(head) + size(kept.flat()) + size(pairs[i]) + 120 > maxChars && kept.length) break; kept = [pairs[i], ...kept]; }
+  const dropped = pairs.length - kept.length;
+  const out = [...head.map((m) => ({ ...m })), ...kept.flat().map((m) => ({ ...m }))];
+  const last = out[out.length - 1];
+  if (dropped && last.role === "user") last.content = `(${dropped} earlier failed attempt(s) left out to keep the request small.)\n${last.content}`;
+  const over = size(out) - maxChars;
+  if (over > 0) { // the latest attempt alone is too big: cut its feedback (then its query) from the end
+    for (let i = out.length - 1; i >= 2 && size(out) > maxChars; i--) {
+      const room = out[i].content.length - (size(out) - maxChars) - 20;
+      out[i].content = room > 0 ? `${out[i].content.slice(0, room)} ...(cut)` : "(cut to keep the request small)";
+    }
+    if (size(out) > maxChars) return null;
+  }
+  return out;
+}
 /**
  * Joins that multiply rows: an ON clause comparing the two columns of a relation the analyst found to be many-to-many
  * (link "category", or cardinality many-to-many), with both tables in the query. Seen live 2026-10-24: receipts joined to
  * sales orders on Customer ID, every total about 117 times too big. Approximate (reads the SQL text), so it warns rather
- * than proves; aggregates joined on such a column (GROUP BY first) are not flagged when the join is between subqueries.
+ * than proves. Judged per scope (the outer query, each WITH body and each parenthesised subquery): a table counts in a scope
+ * when the scope reads it, or reads a WITH name / subquery that passes the table's rows through unchanged; a WITH body or
+ * subquery with GROUP BY or DISTINCT does not pass rows through (one row per group), so joining aggregates is not flagged.
+ * Live 2026-11-06: smb Receivables vs payables grouped each table by "Terms" first and was wrongly warned.
  */
 export type RelationLike = { a: { table: string; column: string }; b: { table: string; column: string }; link: string; cardinality: string };
+type Scope = { id: string; text: string; grouped: boolean };
+/** The SQL as scopes: every parenthesised SELECT / WITH body becomes its own scope, replaced in its parent by " __subN ". */
+function sqlScopes(sql: string): Scope[] {
+  const scopes: Scope[] = [];
+  const strip = (text: string, id: string): void => {
+    let out = "", q = "";
+    for (let i = 0; i < text.length; i++) {
+      if (q) { out += text[i]; if (text[i] === q) q = ""; continue; } // inside '...' or "...": copied as is
+      if (text[i] === "'" || text[i] === '"') { q = text[i]; out += text[i]; continue; }
+      if (text[i] === "(" && /^\s*(select|with)\b/i.test(text.slice(i + 1))) {
+        let depth = 1, k = i + 1, quote = "";
+        for (; k < text.length && depth; k++) {
+          const ch = text[k];
+          if (quote) { if (ch === quote) quote = ""; continue; }
+          if (ch === "'" || ch === '"') quote = ch; else if (ch === "(") depth++; else if (ch === ")") depth--;
+        }
+        const sub = `__sub${scopes.length + 1000}`; // reserved before recursing, so ids are unique
+        scopes.push({ id: sub, text: "", grouped: false });
+        strip(text.slice(i + 1, k - 1), sub);
+        out += ` ${sub} `;
+        i = k - 1;
+      } else out += text[i];
+    }
+    const at = scopes.findIndex((x) => x.id === id);
+    const sc = { id, text: out, grouped: /\bgroup\s+by\b|\bselect\s+distinct\b/i.test(out) };
+    if (at === -1) scopes.push(sc); else scopes[at] = sc;
+  };
+  strip(sql.replace(/\s+/g, " "), "__main");
+  return scopes;
+}
 export function fanOutJoins(sql: string, relations: readonly RelationLike[]): string[] {
-  const q = sql.replace(/\s+/g, " ");
-  const mentions = (t: string) => new RegExp(`(from|join)\\s+"?${t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"?(\\s|$|,|\\))`, "i").test(q);
-  const ons = [...q.matchAll(/\bon\b(.*?)(?=\b(join|where|group|order|limit|having|union|left|right|inner|full|cross|select)\b|$)/gi)].map((m) => m[1]);
+  const scopes = sqlScopes(sql);
+  const byId = new Map(scopes.map((x) => [x.id, x]));
+  const main = byId.get("__main")!;
+  // WITH names -> their body's scope ("name AS __subN" in the outer text)
+  const cte = new Map<string, string>();
+  for (const x of scopes) for (const m of x.text.matchAll(/("[^"]+"|[A-Za-z_][\w]*)\s+as\s+(__sub\d+)/gi)) cte.set(m[1].replace(/"/g, "").toLowerCase(), m[2]);
+  const esc = (t: string) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const reads = (text: string, name: string) => new RegExp(`(from|join)\\s+"?${esc(name)}"?(\\s|$|,|\\))`, "i").test(text);
+  /** Does this scope see the rows of table t (directly, or through an ungrouped WITH body / subquery)? */
+  const sees = (sc: Scope, t: string, depth = 0): boolean => {
+    if (depth > 20) return false;
+    if (reads(sc.text, t)) return true;
+    for (const m of sc.text.matchAll(/(from|join)\s+("[^"]+"|[A-Za-z_][\w]*)/gi)) {
+      const name = m[2].replace(/"/g, "").toLowerCase();
+      const target = name.startsWith("__sub") ? byId.get(name) : cte.has(name) ? byId.get(cte.get(name)!) : undefined;
+      if (target && !target.grouped && sees(target, t, depth + 1)) return true;
+    }
+    return false;
+  };
   const out: string[] = [];
-  for (const r of relations) {
-    if (r.link !== "category" && r.cardinality !== "many-to-many") continue;
-    if (!mentions(r.a.table) || !mentions(r.b.table)) continue;
-    const ca = `"${r.a.column}"`, cb = `"${r.b.column}"`;
-    const hit = ons.some((on) => (ca === cb ? on.split(ca).length - 1 >= 2 : on.includes(ca) && on.includes(cb)));
-    if (hit) out.push(`${r.a.table}."${r.a.column}" = ${r.b.table}."${r.b.column}" is many-to-many: each row is repeated, so counts and sums are multiplied`);
+  for (const sc of [main, ...scopes.filter((x) => x !== main)]) {
+    const ons = [...sc.text.matchAll(/\bon\b(.*?)(?=\b(join|where|group|order|limit|having|union|left|right|inner|full|cross|select)\b|$)/gi)].map((m) => m[1]);
+    if (!ons.length) continue;
+    for (const r of relations) {
+      if (r.link !== "category" && r.cardinality !== "many-to-many") continue;
+      if (!sees(sc, r.a.table) || !sees(sc, r.b.table)) continue;
+      const ca = `"${r.a.column}"`, cb = `"${r.b.column}"`;
+      const hit = ons.some((on) => (ca === cb ? on.split(ca).length - 1 >= 2 : on.includes(ca) && on.includes(cb)));
+      if (hit) out.push(`${r.a.table}."${r.a.column}" = ${r.b.table}."${r.b.column}" is many-to-many: each row is repeated, so counts and sums are multiplied`);
+    }
   }
   return [...new Set(out)];
 }
@@ -176,9 +265,14 @@ export async function crossAsk(input: CrossAskInput, deps: CrossAskDeps): Promis
   let sql: string | null = input.sql?.trim() || null;
   for (let attempt = 0; attempt <= input.sqlRetries; attempt++) {
     if (!input.sql) {
-      out.sentToModel.push({ step: attempt ? "query (retry)" : "query", chars: messages.reduce((n, m) => n + m.content.length, 0), hasData: false });
+      const send = input.maxPromptChars ? fitPrompt(messages, input.maxPromptChars) : messages;
+      if (!send) {
+        out.error = `the table list and the question are ${messages[0].content.length + messages[1].content.length} characters, over the ${input.maxPromptChars} a query request may have: pick fewer files or a smaller folder`;
+        return out;
+      }
+      out.sentToModel.push({ step: attempt ? "query (retry)" : "query", chars: send.reduce((n, m) => n + m.content.length, 0), hasData: false });
       let reply: ChatReply;
-      try { reply = await timed(() => deps.chat(messages, input.model), (ms) => { t!.queryMs += ms; }); }
+      try { reply = await timed(() => deps.chat(send, input.model), (ms) => { t!.queryMs += ms; }); }
       catch (e) { out.error = `the model that writes the query (${input.model}) failed: ${(e as Error).message}`; return out; }
       out.served.push(reply);
       t?.callsMs.push(lastMs);
@@ -208,9 +302,10 @@ export async function crossAsk(input: CrossAskInput, deps: CrossAskDeps): Promis
     } catch (e) {
       const error = (e as Error).message;
       out.attempts.push({ sql: sql!, error });
+      const fed = input.retryErrorMaxChars && error.length > input.retryErrorMaxChars ? `${error.slice(0, input.retryErrorMaxChars)} ...(error cut)` : error;
       if (input.sql) break; // the person's own query: report the error, no model
       const repeated = out.attempts.slice(0, -1).some((a) => a.sql === sql);
-      messages.push({ role: "user", content: `That query failed: ${error}\n${repeated ? "It is the same query as before. Write a different, simpler one: no WITHIN GROUP, check that every parenthesis is closed. " : ""}Fix it. Reply with one SELECT statement in a \`\`\`sql block only.` });
+      messages.push({ role: "user", content: `That query failed: ${fed}\n${repeated ? "It is the same query as before. Write a different, simpler one: no WITHIN GROUP, check that every parenthesis is closed. " : ""}Fix it. Reply with one SELECT statement in a \`\`\`sql block only.` });
     }
   }
   if (!out.result) { out.error = out.attempts.at(-1)?.error ?? "no query ran"; return out; }

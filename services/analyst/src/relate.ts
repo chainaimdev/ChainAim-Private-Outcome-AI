@@ -13,7 +13,8 @@
  *               many rows to many and is shown so the model groups by it rather than joins on it
  *   confidence = 0.8 x overlap + 0.2 x nameScore
  */
-import { type Db, amountExpr, dateExpr, ident, loadText, rows } from "./db.ts";
+import { readFileSync } from "node:fs";
+import { type Db, amountExpr, dateExpr, ident, literal, loadText, rows } from "./db.ts";
 import { type FileProfile } from "./profile.ts";
 
 export type RelateOptions = {
@@ -29,12 +30,29 @@ export type RelateOptions = {
    * values get their values listed in the schema text, so a model can write WHERE "status" = 'Overdue'. 0 = off. Default 12.
    * Only those column names, so names, ids and amounts never appear. */
   codeValues: number;
+  /** Rows that are not data, by header line (readRowFilters); absent: none. */
+  rowFilters?: RowFilter[];
 };
+/** config/row-filters.json: a file whose header line is exactly `columns` loses the rows whose `column` is one of `drop`. */
+export type RowFilter = { id: string; columns: string[]; column: string; drop: string[]; basis: string };
+/** Reads and checks a row-filters file; throws naming the bad rule. */
+export function readRowFilters(path: string): RowFilter[] {
+  const t = readFileSync(path, "utf8");
+  const j = JSON.parse(t.charCodeAt(0) === 0xfeff ? t.slice(1) : t) as { version?: number; rules?: RowFilter[] };
+  if (j.version !== 1 || !Array.isArray(j.rules)) throw new Error(`${path}: version must be 1 with a rules list`);
+  for (const r of j.rules) {
+    if (!/^[a-z0-9][a-z0-9-]*$/.test(r?.id ?? "") || !Array.isArray(r.columns) || !r.columns.length || !r.columns.includes(r.column) || !Array.isArray(r.drop) || !r.drop.length || !r.basis)
+      throw new Error(`${path}: rule ${JSON.stringify(r?.id)}: needs id, columns (the header line), a column among them, a non-empty drop list and a basis`);
+  }
+  return j.rules;
+}
 export const RELATE_DEFAULTS: RelateOptions = { minOverlap: 0.5, minShared: 3, maxDistinct: 50000, maxRelations: 40, codeValues: 12 };
 export const CODE_COLUMN = /(^|[^a-z])(status|state|type|method|category|currency|stage|kind|mode|channel)([^a-z]|$)/i;
 
 export type TableColumn = { name: string; type: "date" | "number" | "text"; values?: string[] };
-export type TableSchema = { table: string; file: string; rows: number; columns: TableColumn[] };
+export type TableSchema = { table: string; file: string; rows: number; columns: TableColumn[];
+  /** Rows a row filter left out (not data): how many, which values and the rule. */
+  left?: { rows: number; values: string[]; rule: string } };
 export type Relation = {
   a: { file: string; table: string; column: string; distinct: number; unique: boolean };
   b: { file: string; table: string; column: string; distinct: number; unique: boolean };
@@ -88,6 +106,14 @@ export async function loadAndRelate(db: Db, profiles: FileProfile[], opt: Relate
   for (const [i, p] of usable.entries()) {
     const raw = `__raw${i}`, t = names.get(p.name)!;
     await loadText(db, raw, p.path);
+    const rule = opt.rowFilters?.find((f) => f.columns.length === p.columns.length && f.columns.every((c, k) => c === p.columns[k].name));
+    let left: TableSchema["left"];
+    if (rule) {
+      const where = `upper(trim(${ident(rule.column)})) IN (${rule.drop.map((v) => literal(v.trim().toUpperCase())).join(", ")})`;
+      const [n] = await rows<{ n: number }>(db, `SELECT CAST(count(*) AS INTEGER) n FROM ${ident(raw)} WHERE ${where}`);
+      await db.conn.run(`DELETE FROM ${ident(raw)} WHERE ${where}`);
+      if (n.n) left = { rows: n.n, values: rule.drop, rule: rule.id };
+    }
     const cols = p.columns.map((c) => `${c.type === "number" ? amountExpr(c.name) : c.type === "date" ? dateExpr(c.name, null) : `NULLIF(trim(${ident(c.name)}), '')`} AS ${ident(c.name)}`);
     await db.conn.run(`CREATE TABLE ${ident(t)} AS SELECT __row, ${cols.join(", ")} FROM ${ident(raw)}`);
     // Distinct normalized values of each candidate column, kept for the comparison only.
@@ -105,7 +131,7 @@ export async function loadAndRelate(db: Db, profiles: FileProfile[], opt: Relate
       }
       columns.push(col);
     }
-    tables.push({ table: t, file: p.name, rows: p.rows, columns });
+    tables.push({ table: t, file: p.name, rows: p.rows - (left?.rows ?? 0), columns, ...(left ? { left } : {}) });
   }
   // Per candidate: distinct count and whether it is unique per row.
   type Cand = { i: number; j: number; file: string; table: string; column: string; distinct: number; unique: boolean };
@@ -143,7 +169,7 @@ export async function loadAndRelate(db: Db, profiles: FileProfile[], opt: Relate
 /** The text a model gets to write a query: tables, columns and types, and the relations. No data values. */
 export function schemaText(tables: TableSchema[], relations: Relation[]): string {
   const lines = ["Tables (DuckDB; one per file; number columns are DOUBLE, date columns are DATE, others VARCHAR; __row = line number in the file):"];
-  for (const t of tables) lines.push(`- ${t.table}  (file ${t.file}, ${t.rows} rows): ${t.columns.map((c) => `"${c.name}" ${c.type === "number" ? "DOUBLE" : c.type === "date" ? "DATE" : "VARCHAR"}${c.values ? ` (values: ${c.values.map((v) => `'${v.replace(/'/g, "''")}'`).join(", ")})` : ""}`).join(", ")}`);
+  for (const t of tables) lines.push(`- ${t.table}  (file ${t.file}, ${t.rows} rows${t.left ? `; ${t.left.rows} ${t.left.values.join("/")} row(s) of the file left out, they are not data` : ""}): ${t.columns.map((c) => `"${c.name}" ${c.type === "number" ? "DOUBLE" : c.type === "date" ? "DATE" : "VARCHAR"}${c.values ? ` (values: ${c.values.map((v) => `'${v.replace(/'/g, "''")}'`).join(", ")})` : ""}`).join(", ")}`);
   lines.push("", relations.length ? "Relations found from the values (join keys match after upper(trim(...))):" : "No relations between the files were found from the values.");
   for (const r of relations) {
     lines.push(`- ${r.a.table}."${r.a.column}" ~ ${r.b.table}."${r.b.column}": ${r.link}, ${r.cardinality}, ${Math.round(r.overlap * 100)}% overlap (${r.shared} shared values)`);

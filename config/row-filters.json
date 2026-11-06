@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "notes": "Rows that are not data, left out when the analyst builds the tables a model writes SQL over (/relations and /sql: tab 03 crossask). A rule matches a file by its exact header line (column names in order), never by its name, and drops the rows whose column value is one of drop (compared after upper(trim(...))). The schema text the model reads says how many rows were left out and by which rule. services/analyst --row-filters FILE|off (default this file). Exact pack queries never use these tables.",
+  "rules": [
+    {
+      "id": "bofa-sectioned-statement",
+      "columns": ["SECTION", "DATE", "DESCRIPTION", "AMOUNT", "BALANCE"],
+      "column": "SECTION",
+      "drop": ["HEADER", "SUMMARY"],
+      "basis": "sample-data/smb-fin/statements/sample_bofa_full_statement.csv (owner's sample, with its PDF): HEADER rows hold the bank name, account and period; SUMMARY rows the beginning/ending balance and section totals, with an AMOUNT or BALANCE but no DATE. Seen 2026-11-06: a cash-flow query by month counted them as two NULL-month rows. Transaction rows are DEPOSITS, DEBITS_ATM, DEBITS_OTHER and FEES."
+    }
+  ]
+}

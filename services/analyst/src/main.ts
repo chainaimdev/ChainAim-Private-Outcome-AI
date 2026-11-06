@@ -36,6 +36,8 @@
  *   --relation-max N             most relations returned, best first (default 40)
  *   --schema-code-values N       code columns (status, type, method, category, currency, ...) with at most N distinct
  *                                values list them in the schema text a model gets (default 12; 0 = never)
+ *   --row-filters FILE|off       rows that are not data, dropped by header line before a model sees the tables (default
+ *                                <config-root>/row-filters.json; off = keep every row). Checked at start-up.
  *   --sql-max-rows N             most rows a /sql query returns (default 200; truncated is then true)
  *   --sql-timeout-ms N           a /sql query is stopped after this long (default 15000)
  *
@@ -69,7 +71,7 @@ import { join } from "node:path";
 import { type Analysis, analyze } from "./analyze.ts";
 import { type DataConfig, type Flags, HttpError, insideRoots, isFolder, parseFlags, readDataConfig, settingsOf } from "./config.ts";
 import { type Db, lockFiles, openDb } from "./db.ts";
-import { type Relation, type TableSchema, loadAndRelate, schemaText } from "./relate.ts";
+import { type Relation, type RowFilter, type TableSchema, loadAndRelate, readRowFilters, schemaText } from "./relate.ts";
 import { SqlRefused, runSelect } from "./sqlrun.ts";
 import { type FileProfile, folderId, listDataFiles, profileFolder, proposeRecipe, readRecipe, saveRecipe, sha256File, validateRecipe, writeJson } from "./profile.ts";
 import { type Finding, evidenceOf, findingsOf, scorecardOf } from "./report.ts";
@@ -94,6 +96,10 @@ for (const p of BUILT_IN_PACKS) packs.register(p);
 const sources = new SourceRegistry();
 for (const a of BUILT_IN_SOURCES) sources.register(a);
 const defaultPack = flags.pack ?? DEFAULT_PACK;
+const rowFilters: RowFilter[] = (() => {
+  if (!flags.rowFilters) return [];
+  try { return readRowFilters(flags.rowFilters); } catch (e) { console.error(`analyst: --row-filters ${(e as Error).message}`); process.exit(2); }
+})();
 try {
   if (flags.printPack !== null) { console.log(JSON.stringify(packs.describe(flags.printPack), null, 2)); process.exit(0); }
   packs.resolve(defaultPack);
@@ -201,7 +207,7 @@ async function relatedDb(folder: string, cfg: DataConfig): Promise<{ db: Db; tab
   const profs = await profiles(folder, cfg);
   const db = await openDb();
   try {
-    const { tables, relations } = await loadAndRelate(db, profs, { minOverlap: flags.relationMinOverlap, minShared: flags.relationMinShared, maxDistinct: flags.relationMaxDistinct, maxRelations: flags.relationMax, codeValues: flags.schemaCodeValues });
+    const { tables, relations } = await loadAndRelate(db, profs, { minOverlap: flags.relationMinOverlap, minShared: flags.relationMinShared, maxDistinct: flags.relationMaxDistinct, maxRelations: flags.relationMax, codeValues: flags.schemaCodeValues, rowFilters });
     await lockFiles(db);
     return { db, tables, relations, skipped: profs.filter((p) => p.tooBig).map((p) => p.name) };
   } catch (e) { db.close(); throw e; }

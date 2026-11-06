@@ -60,6 +60,8 @@ export type Flags = Settings & {
   relationMinOverlap: number;
   relationMinShared: number;
   relationMaxDistinct: number;
+  /** config/row-filters.json (or --row-filters FILE); null = off. */
+  rowFilters: string | null;
   relationMax: number;
   schemaCodeValues: number;
   sqlMaxRows: number;
@@ -114,6 +116,7 @@ export function parseFlags(argv: string[]): Flags {
       "reconcile-tolerance-cents": { type: "string" },
       "reconcile-trail-rows": { type: "string" },
       "patient-name-format": { type: "string", default: "last_first" },
+      "row-filters": { type: "string", default: "" },
     },
   });
   const period = f.period as Period;
@@ -138,6 +141,7 @@ export function parseFlags(argv: string[]): Flags {
     printPack: f["print-pack"] ?? null,
     reconcilePack: f["reconcile-pack"]!,
     configRoot: f["config-root"]!,
+    rowFilters: f["row-filters"] === "off" ? null : f["row-filters"] ? f["row-filters"] : join(f["config-root"]!, "row-filters.json"),
     reconcileToleranceCents: f["reconcile-tolerance-cents"] === undefined ? null : positive("reconcile-tolerance-cents", f["reconcile-tolerance-cents"]),
     reconcileTrailRows: f["reconcile-trail-rows"] === undefined ? null : positive("reconcile-trail-rows", f["reconcile-trail-rows"]),
     patientNameFormat: nameFormat(f["patient-name-format"]!),

@@ -138,7 +138,10 @@ function options(argv: string[]) {
 type Opt = ReturnType<typeof options>;
 
 // ---------------------------------------------------------------- answer checks (--check-answers)
-type Compare = { type: "cell" | "columnSum" | "rowsByKey" | "figuresPresent"; column?: string; keyColumn?: string; valueColumn?: string; path?: string; paths?: string[]; kind?: "amount" | "count" };
+/** rowsByKey: one key column + valueColumn (key entries are figures), or keyColumns joined with "/" + values {column: amount|count}
+ * (key entries are objects with those columns). */
+type Compare = { type: "cell" | "columnSum" | "rowsByKey" | "figuresPresent"; column?: string; keyColumn?: string; valueColumn?: string;
+  keyColumns?: string[]; values?: Record<string, "amount" | "count">; path?: string; paths?: string[]; kind?: "amount" | "count" };
 type Rule = { datasets: string[]; item: string; key: string; unit: "dollars" | "cents"; compare: Compare[] };
 const COMPARE_TYPES = ["cell", "columnSum", "rowsByKey", "figuresPresent"];
 
@@ -157,7 +160,8 @@ export function loadAnswerRules(path: string): Rule[] {
       if (!COMPARE_TYPES.includes(c?.type)) bad(`compare type must be one of ${COMPARE_TYPES.join(", ")}`);
       if (c.type === "figuresPresent" ? !(Array.isArray(c.paths) && c.paths.length) : typeof c.path !== "string") bad(`${c.type} needs ${c.type === "figuresPresent" ? "paths" : "path"}`);
       if ((c.type === "cell" || c.type === "columnSum") && !c.column) bad(`${c.type} needs column`);
-      if (c.type === "rowsByKey" && (!c.keyColumn || !c.valueColumn)) bad("rowsByKey needs keyColumn and valueColumn");
+      if (c.type === "rowsByKey" && !(c.keyColumn && c.valueColumn) && !(Array.isArray(c.keyColumns) && c.keyColumns.length && c.values && Object.keys(c.values).length
+        && Object.values(c.values).every((k) => k === "amount" || k === "count"))) bad("rowsByKey needs keyColumn + valueColumn, or keyColumns + values {column: amount|count}");
     }
   }
   return j.rules as Rule[];
@@ -185,6 +189,20 @@ export function checkAnswer(rule: Rule, key: unknown, rows: readonly Record<stri
       const parts = rows.map((r) => fig(r[c.column!], "dollars", kind));
       const got = parts.some((x) => x === null) ? null : parts.reduce<number>((a, b) => a + b!, 0);
       if (want === null || got !== want) out.push(`sum of ${c.column} ${show(got, kind)}, key ${c.path} ${show(want, kind)}`);
+    } else if (c.type === "rowsByKey" && c.keyColumns) {
+      const obj = at(key, c.path!);
+      if (obj === null || typeof obj !== "object") { out.push(`key ${c.path} is not an object`); continue; }
+      const keyOf = (r: Record<string, unknown>) => c.keyColumns!.map((k) => String(r[k])).join("/");
+      const got = new Map(rows.map((r) => [keyOf(r), r]));
+      for (const [k, want] of Object.entries(obj as Record<string, Record<string, unknown>>)) {
+        const r = got.get(k);
+        if (!r) { out.push(`${c.keyColumns.join("/")} ${k}: in key ${c.path}, not in the result`); continue; }
+        for (const [col, kd] of Object.entries(c.values!)) {
+          const w = fig(want?.[col], rule.unit, kd), g = fig(r[col], "dollars", kd);
+          if (w === null || g !== w) out.push(`${k} ${col}: ${show(g, kd)}, key ${show(w, kd)}`);
+        }
+      }
+      for (const k of got.keys()) if (!(k in (obj as object))) out.push(`${c.keyColumns.join("/")} ${k}: in the result, not in key ${c.path}`);
     } else if (c.type === "rowsByKey") {
       const obj = at(key, c.path!);
       if (obj === null || typeof obj !== "object") { out.push(`key ${c.path} is not an object`); continue; }

@@ -141,6 +141,44 @@ for (const [prms, dir] of SETS) {
   });
 }
 
+/** D. every scenario folder of SET-1 whose truth.json has query_answers (tools/chiro-synth since 2026-11-06; regenerate older sets with
+ *  desk.ps1 -ChiroSample): the chiro bank's answers equal the key in every scenario, leaks included (the 835 pays what the bank may
+ *  not have received, so payer-paid is compared with the 835's figures, not the bank's). */
+const qaOf = (r: Map<string, Record<string, unknown>[]>) => {
+  const money = (x: unknown) => (cents(x) / 100).toFixed(2);
+  const by = (rows: Record<string, unknown>[], keys: string[], f: (x: Record<string, unknown>) => unknown) => Object.fromEntries(rows.map((x) => [keys.map((k) => String(x[k])).join("/"), f(x)]).sort(([a], [b]) => (a < b ? -1 : 1)));
+  const [c] = r.get("cash-flow")!;
+  return {
+    payer_paid: by(r.get("payer-paid")!, ["payer"], (x) => ({ payments: num(x, "payments"), claims_paid: num(x, "claims_paid"), paid: money(x.paid) })),
+    pi_open: by(r.get("pi-open-by-state")!, ["state", "coverage"], (x) => ({ open_cases: num(x, "open_cases"), billed: money(x.billed), carrier_paid: money(x.carrier_paid), open_balance: money(x.open_balance) })),
+    contracted: by(r.get("contracted-vs-charged")!, ["payer", "cpt"], (x) => ({ allowed: money(x.allowed), charges: num(x, "charges"), avg_charge: money(x.avg_charge) })),
+    cash: { in: money(c.cash_in), out: money(c.cash_out), net: money(c.net_cash_flow) },
+  };
+};
+for (const [prms, dir] of SETS) {
+  const setRoot = join(dir, "..");
+  const sets = existsSync(setRoot) ? readdirSync(setRoot).filter((s) => existsSync(join(setRoot, s, "_answer-key", "truth.json"))).sort() : [];
+  const withQa = sets.filter((s) => JSON.parse(readFileSync(join(setRoot, s, "_answer-key", "truth.json"), "utf8")).query_answers);
+  describe(`D. ${prms}: every SET-1 scenario's answers equal its answer key`, { skip: withQa.length ? false : `no SET-1 set under ${setRoot} has query_answers (regenerate: .\\test-console\\desk.ps1 -ChiroSample)` }, () => {
+    test(`all ${withQa.length} set(s) with query_answers (${sets.length - withQa.length} older set(s) without it skipped): payer, PI, contracted, cash, deposits, unearned`, async () => {
+      const problems: string[] = [];
+      for (const s of withQa) {
+        const key = JSON.parse(readFileSync(join(setRoot, s, "_answer-key", "truth.json"), "utf8"));
+        const r = await runAll(join(setRoot, s));
+        const got = qaOf(r);
+        for (const k of ["payer_paid", "pi_open", "contracted", "cash"] as const) {
+          try { assert.deepEqual(got[k], key.query_answers[k]); } catch { problems.push(`${s} ${k}: ${JSON.stringify(got[k]).slice(0, 160)} vs key ${JSON.stringify(key.query_answers[k]).slice(0, 160)}`); }
+        }
+        const dep = Object.fromEntries(r.get("bank-deposits-by-kind")!.map((x) => [x.kind, cents(x.amount)]));
+        const want = Object.fromEntries(Object.entries(key.bank_credits_by_group).map(([g, v]) => [g, cents(v)]));
+        try { assert.deepEqual(dep, want); } catch { problems.push(`${s} deposits ${JSON.stringify(dep)} vs ${JSON.stringify(want)}`); }
+        if (cents(r.get("care-plans-unearned")![0].unearned_net) !== cents(key.unearned_plan_revenue)) problems.push(`${s} unearned`);
+      }
+      assert.deepEqual(problems, []);
+    });
+  });
+}
+
 describe("C. the analyst routes (/pack-queries, /pack-run) on the chiro sets", { skip: SETS.every(([, d]) => existsSync(d)) ? false : "chiro sets not generated" }, () => {
   let child: ChildProcess | null = null, base = "", log = "", work = "";
   const post = async (route: string, body: unknown) => { const res = await fetch(`${base}/${route}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }); return { status: res.status, body: await res.json() as any }; };

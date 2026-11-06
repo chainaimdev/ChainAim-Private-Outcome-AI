@@ -438,6 +438,47 @@ def era_835(a, m):
     return isa + seg + "\n" + "\n".join(s + seg for s in out) + "\n"
 
 
+def query_answers(m, tx, cr, dr):
+    """The answers of the chiro query bank (config/domain-packs/finance/rcm/chiro/queries.json), from this model, so a check of the
+    bank's SQL does not depend on that SQL. Amounts are money() strings; keys join key columns with '/'.
+      payer_paid  835 payer (N1*PR name): payments (EFT remittances in the period), claims_paid (CLP04 > 0), paid (sum BPR02)
+      pi_open     '<state>/<coverage>' of open PI cases: open_cases, billed, carrier_paid, open_balance (billed - carrier paid)
+      contracted  '<payer>/<cpt>' of the fee schedule with charges: allowed, charges, avg_charge (ledger charge rows of that payer
+                  and code, half-up to the cent)
+      cash        bank detail of the statement period: in, out (positive), net"""
+    from decimal import Decimal, ROUND_HALF_UP
+    payer_paid = defaultdict(lambda: dict(payments=0, claims_paid=0, cents=0))
+    for r in m["remits"]:
+        if r["route"] == "eft" and m["start"] <= r["date"] <= m["end"]:
+            x = payer_paid[PAYER[r["payer"]][1]]
+            x["payments"] += 1
+            x["claims_paid"] += sum(1 for c in r["claims"] if c["paid"] > 0)
+            x["cents"] += r["cents"]
+    pi = defaultdict(lambda: dict(open_cases=0, billed=0, carrier_paid=0))
+    for c in m["pi"]:
+        if c["status"] == "open":
+            x = pi[f"{c['state']}/{c['coverage']}"]
+            x["open_cases"] += 1
+            x["billed"] += c["billed"]
+            x["carrier_paid"] += c["carrier_paid"]
+    charges = defaultdict(list)
+    for t in tx:
+        if t[4] == "Charge":
+            charges[(t[10], t[5])].append(t[8])
+    contracted = {}
+    for code, cpt, allowed in m["fees"]:
+        ch = charges.get((PAYER[code][1], cpt))
+        if ch:
+            avg = (Decimal(sum(ch)) / len(ch) / 100).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+            contracted[f"{PAYER[code][1]}/{cpt}"] = dict(allowed=money(allowed), charges=len(ch), avg_charge=f"{avg:.2f}")
+    return dict(
+        payer_paid={k: dict(payments=v["payments"], claims_paid=v["claims_paid"], paid=money(v["cents"])) for k, v in sorted(payer_paid.items())},
+        pi_open={k: dict(open_cases=v["open_cases"], billed=money(v["billed"]), carrier_paid=money(v["carrier_paid"]), open_balance=money(v["billed"] - v["carrier_paid"]))
+                 for k, v in sorted(pi.items())},
+        contracted=dict(sorted(contracted.items())),
+        cash={"in": money(cr), "out": money(-dr), "net": money(cr + dr)})
+
+
 # ---------------------------------------------------------------- writers
 def write_set(a, m, credits, debits, batches, plan=None):
     tag = f"{a.set_name}-{a.scenario.upper()}"
@@ -562,6 +603,7 @@ def write_set(a, m, credits, debits, batches, plan=None):
     for x in matches:
         by_group[x["group"]] += x["cents"]
     unearned = sum(sum(e["cents"] for e in m["pay"] if e.get("plan") == pl["id"]) - pl["price"] * pl["visits_used"] // pl["visits_bought"] for pl in m["plans"])
+    qa = query_answers(m, tx, cr, dr)
     truth = dict(generator="gen_chiro_set.py", prms=a.prms, scenario=a.scenario, set=a.set_name, seed=a.seed,
                  flags={k: v for k, v in vars(a).items() if k != "out"},
                  counts=dict(patients=len(m["patients"]), visits=len(m["visits"]), claims=len(m["claims"]), remittances_eft=sum(1 for r in m["remits"] if r["route"] == "eft"),
@@ -571,6 +613,7 @@ def write_set(a, m, credits, debits, batches, plan=None):
                  patients_by_class={c: sum(1 for p in m["patients"] if p["cls"] == c) for c in ("commercial", "medicare", "medicaid", "pi", "prepay")},
                  bank_credits_by_group={g: money(c) for g, c in sorted(by_group.items())},
                  unearned_plan_revenue=money(unearned),
+                 query_answers=qa,
                  expected_exceptions=plan.exceptions if plan else [],
                  not_applicable=plan.not_applicable if plan else [],
                  unmatched_bank_credits=sum(1 for x in matches if x["expect"] != "match"),
@@ -588,7 +631,8 @@ def write_set(a, m, credits, debits, batches, plan=None):
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Synthetic chiropractic data set (ChiroTouch or Jane + ERA 835 + BofA) with an answer key.")
     ap.add_argument("--prms", choices=["chirotouch", "jane"], required=True)
-    ap.add_argument("--out", required=True, help="output folder, e.g. sample-data/prms/chiro-1-chirotouch/SET-1/POS")
+    ap.add_argument("--out", help="output folder, e.g. sample-data/prms/chiro-1-chirotouch/SET-1/POS (required unless --list-scenarios)")
+    ap.add_argument("--list-scenarios", action="store_true", help="print the scenarios that apply to --prms, one per line, and exit (desk.ps1 -ChiroSample)")
     ap.add_argument("--set-name", default="SET1", help="tag in file names (default SET1)")
     ap.add_argument("--scenario", default="pos", choices=SCENARIOS, help="pos, neg-all (every leak, on separate items) or neg-<leak>")
     ap.add_argument("--leak-seed", type=int, default=1, help="seed of the leak streams (NEG only; the base set always uses --seed)")
@@ -631,6 +675,16 @@ def main(argv=None):
     ap.add_argument("--npi", default="1234567893")
     ap.add_argument("--merchant-id", default="8788000000001")
     a = ap.parse_args(argv)
+    if a.list_scenarios:
+        for sc in SCENARIOS:
+            try:
+                scenario_leaks(sc, a.prms)
+            except SystemExit:
+                continue  # a leak this PRMS cannot have (AUTODEBIT_RETURNED on Jane)
+            print(sc)
+        return 0
+    if not a.out:
+        ap.error("--out is required")
     if not 0 < a.underpay_pct < 100 or a.short_max_cents < 102 or not 0 < a.unposted_min_cents <= a.unposted_max_cents:
         ap.error("--underpay-pct must be 1-99, --short-max-cents >= 102, 0 < --unposted-min-cents <= --unposted-max-cents")
     if a.plan_visits <= 0 or a.plan_months <= 0 or a.min_visits < 1 or a.max_visits < a.min_visits:

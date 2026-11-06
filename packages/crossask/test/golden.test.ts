@@ -11,5 +11,6 @@ const check = (module: string, name: string, skip = "") => {
   assert.equal(r.status, 0, `golden check failed:\n${r.stdout}${r.stderr}`);
 };
 
-test("crossask golden master: extractSql, resultText, fanOutJoins and the two prompts unchanged", () => check("../src/index.ts", "crossask", "crossAsk,analystClient,gatewayChat,explainReconcile"));
+// parseAttestHeaders takes a header getter (a function), which a JSON case cannot hold; ARCH-411 tests cover it.
+test("crossask golden master: extractSql, resultText, fanOutJoins and the two prompts unchanged", () => check("../src/index.ts", "crossask", "crossAsk,analystClient,gatewayChat,explainReconcile,parseAttestHeaders"));
 test("verifyAnswer golden master: the number check unchanged", () => check("../src/verify.ts", "verify", "verifyMoney"));
