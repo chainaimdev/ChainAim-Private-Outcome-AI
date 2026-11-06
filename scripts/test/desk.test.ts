@@ -62,6 +62,15 @@ test("model attestation (ARCH-411): attest.enabled auto/on/off and gpuCheck go t
   assert.match(down, /--profile attest/);
 });
 
+test("re-judge of false reconcile mismatches (owner rule: one script): inside ca-near-watch, both options together, checked before any start", () => {
+  assert.match(code, /\[string\]\$RejudgeReceiver = "",/);
+  assert.match(code, /\[string\]\$RejudgeReason = "",/);
+  assert.match(code, /& docker exec ca-near-watch node --env-file=\/run\/secrets\/near-watch\.env src\/rejudge\.ts --all-mismatches --receiver \$RejudgeReceiver --reason \$RejudgeReason/);
+  assert.ok(code.indexOf("-RejudgeReceiver and -RejudgeReason go together") < code.indexOf("# 1. pre-flight"), "options checked before anything starts");
+  assert.ok(code.indexOf("& $privUp @privArgs") < code.indexOf("src/rejudge.ts"), "re-judge runs after the start");
+  assert.ok(!/ADMIN_API_KEY/.test(code), "the admin key is never named or read here: it stays inside ca-near-watch");
+});
+
 test("this PC's watch list and gas go to nearadminup.ps1; the paywall's NEAR RPC is tested from inside ca-paywall", () => {
   assert.match(code, /\$adminArgs\.Watch = \$watch/); assert.match(code, /\$adminArgs\.GasPerPaymentNear =/);
   assert.match(code, /docker exec ca-paywall node -e \$js/);

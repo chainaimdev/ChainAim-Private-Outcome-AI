@@ -1021,3 +1021,16 @@ Built in the AI's workspace on a snapshot of the owner's repo (main = e8626e8, v
   GET /jobs/<id>/attestation -> summary verified; call 0 verified (provider_tee, ecdsa, signer 0xfe0071895500a9755c18044948ab4f4e1a7f337e,
   tdx true, gpu true with --gpu-check on, signature true, hashes true, chat chatcmpl-906e15d2-29e9-4e88-9e86-bcae8c0642bb);
   call 1 not_applicable. First live end-to-end attestation (ARCH-414 live run part; the cloud.near.ai/verify cross-check still open).
+- Committed 9e7788b, tagged v1.4.1 (v1.4.0 already on GitHub at 5d0da1f, so the v1.3.x line continues as v1.4.x).
+
+### 2026-11-06 false reconcile mismatches (jobs 09ebdf3d..., bef914c0...) and the one-script rule
+- Cause (read in chainaim-adminUI-NEAR near-watch decode.ts / reconcile.ts / watchlist.ts; receiver confirmed on nearblocks for
+  A5EX3c...fSNH): the paywall paid chainaim-payto-seller.testnet, but near-watch's pay-to (NEAR_PAY_TO_TESTNET in near-watch.env)
+  was another account when it read the transfers, so isX402 was stored false and the rows were final mismatches. Money was right.
+- chainaim-adminUI-NEAR: mismatch detail names the receiver; operator re-judge (Reconciler.rejudge, POST /admin/reconcile/rejudge,
+  admin key only, src/rejudge.ts --hash | --all-mismatches); a row turns matched only if its transfer went to the named receiver,
+  that receiver is a watched pay-to now and amount/payer/token agree; never automatic. near-watch tests 55 pass, 0 fail, 1 skip.
+- This repo: CLAUDE.md rule 8 (one consolidated script, desk.ps1, never piecemeal); desk.ps1 -RejudgeReceiver / -RejudgeReason
+  (runs src/rejudge.ts --all-mismatches inside ca-near-watch after the start); desk.test.ts guard. npm test 466/466.
+- Owner PC: desk.ps1 -RejudgeReceiver chainaim-payto-seller.testnet -RejudgeReason "..." -> admin UI Jobs tab shows all 3 jobs
+  reconcile matched (near-watch started 15:41:04 UTC).

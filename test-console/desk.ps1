@@ -21,6 +21,13 @@ one READY table across both. Neither launcher is changed or renamed; each team k
                 "auto" (default) lets up.ps1 switch it on when NEARAI_API_KEY is in chainaim.env (or the running ca-gateway)
                 and the current model mode has a model marked "attest": "nearai"; "on" requires it, "off" skips it.
                 attest.gpuCheck "on" (default) / "off" goes to up.ps1 -AttestGpuCheck.
+  -RejudgeReceiver ACCOUNT  -RejudgeReason "TEXT"
+                after the start, clear FALSE reconcile mismatches in the NEAR admin UI (near-watch src/rejudge.ts
+                --all-mismatches; chainaim-adminUI-NEAR src/reconcile.ts rejudge). ACCOUNT is the pay-to you checked the
+                transfers went to (on the explorer). Each mismatch row is checked on its own and turns matched only when
+                its stored transfer went to exactly ACCOUNT, ACCOUNT is near-watch's pay-to now, and amount, payer and
+                token agree with the paywall's claim; any other row stays a mismatch and is listed. TEXT (1-200
+                characters, no double quotes) is kept in each re-judged row's detail. The admin key stays inside ca-near-watch.
   -NoBrowser    do not open the pages
   -Settings     settings file (default config\local\desk.json; copy config\local\desk.example.json)
 
@@ -43,6 +50,8 @@ param(
   [switch]$Agent,
   [switch]$Attest,
   [switch]$NoBrowser,
+  [string]$RejudgeReceiver = "",
+  [string]$RejudgeReason = "",
   [string]$Settings = "config\local\desk.json"
 )
 $ErrorActionPreference = "Stop"
@@ -66,6 +75,14 @@ function HttpJson([string]$url) {
   }
 }
 function Quiet([scriptblock]$block) { $prev = $ErrorActionPreference; $ErrorActionPreference = "Continue"; try { & $block } finally { $ErrorActionPreference = $prev } }
+
+# Re-judge options are checked before anything starts.
+if ($RejudgeReceiver -or $RejudgeReason) {
+  if (-not ($RejudgeReceiver -and $RejudgeReason)) { Stop-Here "-RejudgeReceiver and -RejudgeReason go together" }
+  if ($RejudgeReceiver -notmatch '^[a-z0-9]([a-z0-9._-]{0,62}[a-z0-9])?$') { Stop-Here "-RejudgeReceiver must be a NEAR account id, e.g. chainaim-payto-seller.testnet" }
+  if ($RejudgeReason.Length -gt 200 -or $RejudgeReason -match '["\x00-\x1f]') { Stop-Here "-RejudgeReason must be 1-200 characters on one line, without double quotes" }
+  if ($Check -or $Stop -or $Test) { Stop-Here "-RejudgeReceiver runs after a start; leave out -Check, -Stop and -Test" }
+}
 
 # ---------------------------------------------------------------- -Test needs nothing else
 if ($Test) {
@@ -247,8 +264,21 @@ Say "RUN" "test-console\up.ps1 -ReplaceRunning -PaidJobs $($privArgs.PaidJobs)$(
 & $privUp @privArgs
 if ($LASTEXITCODE) { Stop-Here "test-console\up.ps1 stopped (exit $LASTEXITCODE): its STOP line above names the fix" }
 
-# 5. one table across both
+# 5. operator re-judge of FALSE reconcile mismatches (only with -RejudgeReceiver): inside ca-near-watch, so its admin key
+#    comes from near-watch's own env file and never reaches this window. Every row is checked on its own by near-watch.
+if ($RejudgeReceiver) {
+  if (-not $admin) { Stop-Here "-RejudgeReceiver needs the NEAR admin side (adminUi.enabled in $Settings)" }
+  Say "RUN" "re-judge every reconcile mismatch against receiver $RejudgeReceiver (near-watch src/rejudge.ts --all-mismatches)"
+  $rj = @(Quiet { & docker exec ca-near-watch node --env-file=/run/secrets/near-watch.env src/rejudge.ts --all-mismatches --receiver $RejudgeReceiver --reason $RejudgeReason 2>&1 })
+  $rjCode = $LASTEXITCODE
+  foreach ($l in $rj) { Say "REJUDGE" ([string]$l) }
+  if ($rjCode -ne 0) { Problem "some mismatch rows were not re-judged (exit $rjCode): each line above says why; they stay mismatch" }
+  else { Say "OK" "re-judge done; the NEAR admin UI Reconcile tab shows the rows as matched with the reason" }
+}
+
+# 6. one table across both
 $bad = Report
+$bad += $script:problems
 if ($bad) { Write-Host ""; Say "NOT READY" "$bad problem(s) above; each names its fix"; exit 1 }
 Write-Host ""; Say "READY" "console http://127.0.0.1:8730$(if ($admin) { '   NEAR admin UI http://127.0.0.1:8800/#jobs' })   stop: .\test-console\desk.ps1 -Stop"
 if (-not $NoBrowser) { Start-Process "http://127.0.0.1:8730"; if ($admin) { Start-Process "http://127.0.0.1:8800/#jobs" } }
