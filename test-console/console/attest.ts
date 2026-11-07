@@ -35,6 +35,8 @@ export type CallAttestation = {
   index: number; model: string | null; status: CallStatus; reason: string | null;
   servedModel: string | null; chatId: string | null; signatureKind: string | null; signingAlgo: string | null; signingAddress: string | null;
   reportFetchedAt: string | null; tdx: boolean | null; gpu: boolean | null; signature: boolean | null; hashes: boolean | null;
+  /** Fix 4: ca-attest's signature evidence (judge.ts evidenceOf): the signed text (model id + two hashes) and the signature hex. */
+  signedText: string | null; signatureHex: string | null;
 };
 /** verified: every attested call verified; partly: some; not_applicable: the job made no attested call. */
 export type JobSummary = "verified" | "partly" | "unverified" | "unavailable" | "not_applicable" | "pending";
@@ -42,7 +44,7 @@ export type JobAttestation = { jobId: string; summary: JobSummary; at: string; c
 
 const empty = (index: number, model: string | null, status: CallStatus, reason: string | null): CallAttestation => ({
   index, model, status, reason, servedModel: null, chatId: null, signatureKind: null, signingAlgo: null, signingAddress: null,
-  reportFetchedAt: null, tdx: null, gpu: null, signature: null, hashes: null,
+  reportFetchedAt: null, tdx: null, gpu: null, signature: null, hashes: null, signedText: null, signatureHex: null,
 });
 
 export function summarize(calls: readonly CallAttestation[]): Exclude<JobSummary, "pending"> {
@@ -117,7 +119,7 @@ export class AttestClient {
       chunk.forEach(({ i, a }, n) => {
         const v = results?.[n];
         calls[i] = v && (v.status === "verified" || v.status === "unverified" || v.status === "unavailable")
-          ? { index: i, model: served[i].model ?? null, status: v.status, reason: v.reason ?? null, servedModel: v.servedModel ?? a.servedModel, chatId: v.chatId ?? null, signatureKind: v.signatureKind ?? null, signingAlgo: v.signingAlgo ?? null, signingAddress: v.signingAddress ?? null, reportFetchedAt: v.reportFetchedAt ?? null, tdx: v.tdx ?? null, gpu: v.gpu ?? null, signature: v.signature ?? null, hashes: v.hashes ?? null }
+          ? { index: i, model: served[i].model ?? null, status: v.status, reason: v.reason ?? null, servedModel: v.servedModel ?? a.servedModel, chatId: v.chatId ?? null, signatureKind: v.signatureKind ?? null, signingAlgo: v.signingAlgo ?? null, signingAddress: v.signingAddress ?? null, reportFetchedAt: v.reportFetchedAt ?? null, tdx: v.tdx ?? null, gpu: v.gpu ?? null, signature: v.signature ?? null, hashes: v.hashes ?? null, signedText: typeof v.signedText === "string" ? v.signedText : null, signatureHex: typeof v.signatureHex === "string" ? v.signatureHex : null }
           : { ...empty(i, served[i].model ?? null, "unavailable", failure || "attest service: malformed answer"), servedModel: a.servedModel, chatId: a.chatId ?? null };
       });
     }

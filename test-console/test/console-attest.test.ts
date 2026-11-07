@@ -16,6 +16,9 @@ const MODEL = "deepseek-ai/DeepSeek-V4.1-Flash-1017";
 const H1 = "1".repeat(64), H2 = "2".repeat(64);
 const HDRS: Record<string, string> = { "x-chainaim-provider-id": "chatcmpl-abc", "x-chainaim-served-model": MODEL, "x-chainaim-req-sha256": H1, "x-chainaim-resp-sha256": H2 };
 const MARKER = "Jane Roe owes 991200345678";
+/** Fix 4: the signature evidence ca-attest returns per call (judge.ts evidenceOf). */
+const EV_TEXT = `${MODEL}:${H1}:${H2}`;
+const EV_SIG = "0x" + "44".repeat(64) + "1b";
 
 const listen = async (s: Server) => { await new Promise<void>((r) => s.listen(0, "127.0.0.1", () => r())); return `http://127.0.0.1:${(s.address() as AddressInfo).port}`; };
 const close = (s: Server) => new Promise<void>((r) => { s.closeAllConnections(); s.close(() => r()); });
@@ -99,7 +102,7 @@ describe("ARCH-411 AttestClient against a loopback ca-attest", () => {
       const calls = (JSON.parse(raw) as { calls: { chatId?: string; servedModel: string }[] }).calls;
       const list = answer;
       res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify({ results: calls.map((c, i) => ({ chatId: c.chatId ?? null, servedModel: c.servedModel, status: list[i].status, reason: list[i].reason, signatureKind: "provider_tee", signingAlgo: "ecdsa", signingAddress: "0xfe0071895500a9755c18044948ab4f4e1a7f337e", reportFetchedAt: "2026-11-06T13:50:00.000Z", tdx: true, gpu: true, signature: true, hashes: true })) }));
+      res.end(JSON.stringify({ results: calls.map((c, i) => ({ chatId: c.chatId ?? null, servedModel: c.servedModel, status: list[i].status, reason: list[i].reason, signatureKind: "provider_tee", signingAlgo: "ecdsa", signingAddress: "0xfe0071895500a9755c18044948ab4f4e1a7f337e", reportFetchedAt: "2026-11-06T13:50:00.000Z", tdx: true, gpu: true, signature: true, hashes: true, signedText: EV_TEXT, signatureHex: EV_SIG })) }));
     });
     url = await listen(svc);
   });
@@ -120,6 +123,7 @@ describe("ARCH-411 AttestClient against a loopback ca-attest", () => {
     const a = c.get("job1")!;
     assert.equal(a.summary, "verified");
     assert.deepEqual(a.calls.map((x) => [x.index, x.status, x.chatId]), [[0, "verified", "chatcmpl-0"], [1, "verified", "chatcmpl-1"]]);
+    assert.deepEqual(a.calls.map((x) => [x.signedText, x.signatureHex]), [[EV_TEXT, EV_SIG], [EV_TEXT, EV_SIG]], "fix 4: ca-attest's evidence is kept");
     assert.equal(done.length, 1);
     assert.equal(bodies.length, 1);
     assert.ok(!bodies[0].includes("Jane Roe") && !bodies[0].includes("991200345678"), "no text reaches ca-attest");
@@ -147,6 +151,7 @@ describe("ARCH-411 AttestClient against a loopback ca-attest", () => {
     const a = down.get("job4")!;
     assert.equal(a.summary, "unavailable");
     assert.deepEqual(a.calls.map((x) => [x.status, x.reason]), [["unavailable", "attest service: unreachable"], ["not_applicable", null]]);
+    assert.deepEqual([a.calls[0].signedText, a.calls[0].signatureHex], [null, null], "fix 4: no evidence without an answer");
     answer = 500;
     const c = client();
     c.start("job5", [attested(0)]);
@@ -155,7 +160,7 @@ describe("ARCH-411 AttestClient against a loopback ca-attest", () => {
   });
 
   it("ARCH-411: summary rules: all verified / some / none, unverified beats unavailable", () => {
-    const call = (status: "verified" | "unverified" | "unavailable" | "not_applicable") => ({ index: 0, model: null, status, reason: null, servedModel: null, chatId: null, signatureKind: null, signingAlgo: null, signingAddress: null, reportFetchedAt: null, tdx: null, gpu: null, signature: null, hashes: null });
+    const call = (status: "verified" | "unverified" | "unavailable" | "not_applicable") => ({ index: 0, model: null, status, reason: null, servedModel: null, chatId: null, signatureKind: null, signingAlgo: null, signingAddress: null, reportFetchedAt: null, tdx: null, gpu: null, signature: null, hashes: null, signedText: null, signatureHex: null });
     assert.equal(summarize([call("verified"), call("not_applicable")]), "verified");
     assert.equal(summarize([call("verified"), call("unavailable")]), "partly");
     assert.equal(summarize([call("unavailable"), call("unverified")]), "unverified");

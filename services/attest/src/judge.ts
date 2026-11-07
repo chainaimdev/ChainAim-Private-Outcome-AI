@@ -89,7 +89,12 @@ export type SignatureOutcome =
 
 export type CallStatus = "verified" | "unverified" | "unavailable";
 
-/** ARCH-410 / ARCH-412: ids, addresses, booleans and reasons only; never text. */
+/**
+ * ARCH-410 / ARCH-412: ids, addresses, booleans and reasons only; never text. Fix 4 (owner decision 2026-11-06): plus the
+ * signature evidence, so anyone can re-check it: signedText ("<servedModel>:<sha256 req>:<sha256 resp>" or "<req>:<resp>",
+ * a model id and two hashes) and signatureHex. Each is kept only when it has exactly that shape (see evidenceOf); anything
+ * else from NEAR AI is null, so no free text can pass through.
+ */
 export type CallResult = {
   chatId: string | null;
   servedModel: string;
@@ -108,7 +113,21 @@ export type CallResult = {
   signature: boolean | null;
   /** The signed hashes equal the gateway's. null = not reached. */
   hashes: boolean | null;
+  /** The text NEAR AI signed, when NEAR AI returned a signature and the text has the signed-text shape; else null. */
+  signedText: string | null;
+  /** The signature in hex (ecdsa 65 bytes, ed25519 64 bytes), when well-formed for its algorithm; else null. */
+  signatureHex: string | null;
 };
+
+/** NEAR AI's signed text: an optional model id, then two lowercase SHA-256 hex hashes (near-watch accepts the same). */
+export const SIGNED_TEXT = /^(?:[A-Za-z0-9._:\/@-]{1,128}:)?[0-9a-f]{64}:[0-9a-f]{64}$/;
+const SIG_HEX: Record<string, RegExp> = { ecdsa: /^(0x)?[0-9a-fA-F]{130}$/, ed25519: /^(0x)?[0-9a-fA-F]{128}$/ };
+
+/** The evidence worth passing on from one signature answer: each value only when it has its exact shape. */
+export function evidenceOf(text: string, signature: string, signingAlgo: string): { signedText: string | null; signatureHex: string | null } {
+  const re = SIG_HEX[signingAlgo.toLowerCase()];
+  return { signedText: text.length <= 258 && SIGNED_TEXT.test(text) ? text : null, signatureHex: re && re.test(signature) ? signature : null };
+}
 
 const HEX64 = /^[0-9a-f]{64}$/;
 
@@ -126,6 +145,7 @@ export function judgeCall(
   const base: CallResult = {
     chatId: call.chatId ?? null, servedModel: call.servedModel, status: "unverified", reason: null,
     signatureKind: null, signingAlgo: null, signingAddress: null, reportFetchedAt: null, tdx: null, gpu: null, signature: null, hashes: null,
+    signedText: null, signatureHex: null,
   };
   const out = (status: CallStatus, reason: string | null, extra: Partial<CallResult> = {}): CallResult => ({ ...base, ...extra, status, reason });
 
@@ -137,7 +157,8 @@ export function judgeCall(
   const kind = sig.signatureKind;
   const signer = sig.signingAddress.toLowerCase();
   const algo = sig.signingAlgo.toLowerCase();
-  const seen = { signatureKind: kind, signingAlgo: algo, signingAddress: signer };
+  // Fix 4: the evidence travels with every result past this point (verified or not), so a failure can be re-checked too.
+  const seen = { signatureKind: kind, signingAlgo: algo, signingAddress: signer, ...evidenceOf(sig.text, sig.signature, algo) };
   // NEAR docs: never infer the kind from the text's shape.
   if (kind === "gateway") return out("unverified", "signed by NEAR AI's gateway, not by the model's TEE: model not attested", seen);
   if (kind !== "provider_tee") return out("unverified", `unknown signature kind ${kind === null ? "(absent)" : JSON.stringify(kind)}`, seen);

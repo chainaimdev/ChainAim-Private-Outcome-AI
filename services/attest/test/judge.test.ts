@@ -6,7 +6,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { describe, it } from "node:test";
-import { judgeAttestation, judgeCall, pruneHistory, type AttestationChecks, type CallEvidence, type ReportFetch, type SignatureOutcome } from "../src/judge.ts";
+import { evidenceOf, judgeAttestation, judgeCall, pruneHistory, type AttestationChecks, type CallEvidence, type ReportFetch, type SignatureOutcome } from "../src/judge.ts";
 
 const MODEL = "deepseek-ai/DeepSeek-V4.1-Flash-1017";
 const SIGNER = "0xfe0071895500a9755c18044948ab4f4e1a7f337e";
@@ -159,10 +159,45 @@ describe("ARCH-410 judgeCall", () => {
     assert.match(judgeCall(call({ servedModel: "other/model" }), sig(), SIGNER, [fetchAt(BEFORE)], OPTS).reason!, /not attested by ca-attest/);
   });
 
-  it("ARCH-410 / ARCH-412: a result carries ids, addresses, booleans and reasons only", () => {
+  it("ARCH-410 / ARCH-412 + fix 4: a result carries ids, addresses, booleans, reasons and well-formed signature evidence only", () => {
     const r = judgeCall(call(), sig(), SIGNER, [fetchAt(BEFORE)], OPTS);
-    assert.deepEqual(Object.keys(r).sort(), ["chatId", "gpu", "hashes", "reason", "reportFetchedAt", "servedModel", "signature", "signatureKind", "signingAddress", "signingAlgo", "status", "tdx"]);
-    assert.ok(!JSON.stringify(r).includes("0xsig"), "the signature itself is not echoed");
+    assert.deepEqual(Object.keys(r).sort(), ["chatId", "gpu", "hashes", "reason", "reportFetchedAt", "servedModel", "signature", "signatureHex", "signatureKind", "signedText", "signingAddress", "signingAlgo", "status", "tdx"]);
+    assert.equal(r.signatureHex, null, "a malformed signature (0xsig) is never echoed");
+    assert.ok(!JSON.stringify(r).includes("0xsig"));
+    assert.equal(r.signedText, `${MODEL}:${REQ}:${RESP}`, "the signed text is a model id and two hashes");
+  });
+
+  // The real values NEAR AI returned (services/attest/test/fixtures/nearai-recorded.json, recorded 2026-11-06).
+  const REC_TEXT = "deepseek-ai/DeepSeek-V4.1-Flash-1017:8bb07e5acc99523f3d5e08eb788648998976334f860fb952b773ac3598c8e3b0:fa7c7a023fd7b09410bac0fb2fea040f35305391c645a950a4ee1967dd9f2fa0";
+  const REC_SIG = "0x44082da011ba9919ba0c291710d642187720563cc005d523c9bbffe149a9582f3bf7c9c9e9260cc1ce7dabdfeefac9e9bf79342efc1c4c705ceaa74ab22b5cb21b";
+
+  it("fix 4: the recorded real NEAR AI text and ecdsa signature are kept as evidence", () => {
+    assert.deepEqual(evidenceOf(REC_TEXT, REC_SIG, "ecdsa"), { signedText: REC_TEXT, signatureHex: REC_SIG });
+    const r = judgeCall(call(), sig({ signature: REC_SIG }), SIGNER, [fetchAt(BEFORE)], OPTS);
+    assert.equal(r.status, "verified");
+    assert.deepEqual([r.signedText, r.signatureHex], [`${MODEL}:${REQ}:${RESP}`, REC_SIG]);
+  });
+
+  it("fix 4: evidence of any other shape is null (free text, wrong length, wrong algo, uppercase hashes)", () => {
+    const cases: [string, string, string, { signedText: string | null; signatureHex: string | null }][] = [
+      ["the revenue was 42", REC_SIG, "ecdsa", { signedText: null, signatureHex: REC_SIG }],
+      [REC_TEXT.toUpperCase(), REC_SIG, "ecdsa", { signedText: null, signatureHex: REC_SIG }],
+      [`a b:${REQ}:${RESP}`, REC_SIG, "ecdsa", { signedText: null, signatureHex: REC_SIG }],
+      [REC_TEXT, REC_SIG.slice(0, -2), "ecdsa", { signedText: REC_TEXT, signatureHex: null }],
+      [REC_TEXT, "ab".repeat(64), "ecdsa", { signedText: REC_TEXT, signatureHex: null }],
+      [REC_TEXT, "ab".repeat(64), "ed25519", { signedText: REC_TEXT, signatureHex: "ab".repeat(64) }],
+      [REC_TEXT, REC_SIG, "rsa", { signedText: REC_TEXT, signatureHex: null }],
+      [`${REQ}:${RESP}`, REC_SIG, "ecdsa", { signedText: `${REQ}:${RESP}`, signatureHex: REC_SIG }],
+    ];
+    for (const [text, s, algo, want] of cases) assert.deepEqual(evidenceOf(text, s, algo), want, `${text.slice(0, 20)} / ${algo}`);
+  });
+
+  it("fix 4: a failed check still carries the evidence (so the failure can be re-checked); none when no signature came back", () => {
+    const mismatch = judgeCall(call({ responseSha256: h("response bytes!") }), sig({ signature: REC_SIG }), SIGNER, [fetchAt(BEFORE)], OPTS);
+    assert.equal(mismatch.status, "unverified");
+    assert.deepEqual([mismatch.signedText, mismatch.signatureHex], [`${MODEL}:${REQ}:${RESP}`, REC_SIG]);
+    const none = judgeCall(call(), { available: false, reason: "signature not available after 30 s (HTTP 404)" }, undefined, [fetchAt(BEFORE)], OPTS);
+    assert.deepEqual([none.signedText, none.signatureHex], [null, null]);
   });
 });
 

@@ -71,6 +71,8 @@ export type WatchAttestedCall = {
   signatureKind: "provider_tee" | "gateway" | null; signingAlgo: "ecdsa" | "ed25519" | null; signingAddress: string | null;
   reportFetchedAt: string | null; tdx: boolean | null; gpu: boolean | null; signature: boolean | null; hashes: boolean | null;
   status: "verified" | "unverified" | "unavailable" | "not_applicable"; reason: string | null;
+  /** Fix 4 (near-watch >= v1.0.9): the signed text (model id + two hashes) and the signature hex; null when absent or out of bounds. */
+  signedText: string | null; signatureHex: string | null;
 };
 /** Per quoted job: its network and, per model call in run order, the step name and the priced model id. */
 export type AttestMeta = { network: string; calls: { step: "query" | "answer"; model: string }[] };
@@ -122,6 +124,9 @@ const WATCH_MODEL_ID = /^[A-Za-z0-9._:\/@-]{1,128}$/;
 const WATCH_PROVIDER_ID = /^[A-Za-z0-9_.:-]{1,128}$/;
 const WATCH_ECDSA = /^0x[0-9a-fA-F]{40}$/;
 const WATCH_ED25519 = /^(0x)?[0-9a-fA-F]{64}$/;
+const WATCH_SIGNED_TEXT = /^(?:[A-Za-z0-9._:\/@-]{1,128}:)?[0-9a-f]{64}:[0-9a-f]{64}$/;
+const WATCH_SIG_ECDSA = /^(0x)?[0-9a-fA-F]{130}$/;
+const WATCH_SIG_ED25519 = /^(0x)?[0-9a-fA-F]{128}$/;
 const WATCH_MAX_CALLS = 32;
 const ok = (v: string | null, re: RegExp): string | null => (v !== null && re.test(v) ? v : null);
 /** A reason as near-watch takes it: printable ASCII on one line, at most 200 characters; empty -> null. */
@@ -161,6 +166,9 @@ export function attestedEvent(a: JobAttestation, meta: AttestMeta, now = Date.no
       tdx: c.tdx, gpu: c.gpu, signature: c.signature, hashes: c.hashes,
       status: c.status,
       reason: watchReason(c.reason),
+      signedText: typeof c.signedText === "string" && c.signedText.length <= 258 ? ok(c.signedText, WATCH_SIGNED_TEXT) : null,
+      // near-watch needs signingAlgo for a signature: without a known algo the signature is not sent.
+      signatureHex: algo === "ecdsa" ? ok(c.signatureHex, WATCH_SIG_ECDSA) : algo === "ed25519" ? ok(c.signatureHex, WATCH_SIG_ED25519) : null,
     };
   });
   return { v: 1, event: "job_attested", ts: iso(now), jobId: a.jobId, network: meta.network, summary: SUMMARY_TO_WATCH[a.summary], calls };

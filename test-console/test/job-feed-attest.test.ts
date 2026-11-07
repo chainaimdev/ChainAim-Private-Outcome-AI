@@ -30,10 +30,14 @@ const ID = (n: number) => n.toString(16).padStart(32, "b");
 const NETWORK = "near:testnet";
 const SIGNER = "0x" + "ab".repeat(20);
 const TS = "2026-11-07T02:19:00.000Z";
+/** Fix 4: signature evidence in the shape NEAR AI returned it (services/attest/test/fixtures/nearai-recorded.json). */
+const TEXT = `${SERVED}:${"8b".repeat(32)}:${"fa".repeat(32)}`;
+const SIG = "0x" + "44".repeat(64) + "1b";
 
 const verifiedCall = (index: number): CallAttestation => ({
   index, model: MODEL, status: "verified", reason: null, servedModel: SERVED, chatId: `chatcmpl-${index}abc`, signatureKind: "provider_tee",
   signingAlgo: "ecdsa", signingAddress: SIGNER, reportFetchedAt: "2026-11-07T02:10:00.000Z", tdx: true, gpu: true, signature: true, hashes: true,
+  signedText: TEXT, signatureHex: SIG,
 });
 const att = (jobId: string, summary: JobAttestation["summary"], calls: CallAttestation[]): JobAttestation => ({ jobId, summary, at: TS, calls });
 const meta: AttestMeta = attestMetaOf(NETWORK, RESULT, quote);
@@ -51,9 +55,9 @@ describe("ARCH-411/501: job_attested is built in near-watch's shape", () => {
     assert.ok(e && e.event === "job_attested");
     if (!e || e.event !== "job_attested") return;
     assert.deepEqual([e.v, e.ts, e.jobId, e.network, e.summary], [1, TS, ID(2), NETWORK, "attested"]);
-    assert.deepEqual(Object.keys(e.calls[0]).sort(), ["gpu", "hashes", "model", "providerId", "reason", "reportFetchedAt", "servedModel", "signature", "signatureKind", "signingAddress", "signingAlgo", "status", "step", "tdx"]);
+    assert.deepEqual(Object.keys(e.calls[0]).sort(), ["gpu", "hashes", "model", "providerId", "reason", "reportFetchedAt", "servedModel", "signature", "signatureHex", "signatureKind", "signedText", "signingAddress", "signingAlgo", "status", "step", "tdx"]);
     assert.deepEqual(e.calls.map((c) => c.step), ["query", "answer"]);
-    assert.deepEqual(e.calls[1], { step: "answer", model: MODEL, servedModel: SERVED, providerId: "chatcmpl-1abc", signatureKind: "provider_tee", signingAlgo: "ecdsa", signingAddress: SIGNER, reportFetchedAt: "2026-11-07T02:10:00.000Z", tdx: true, gpu: true, signature: true, hashes: true, status: "verified", reason: null });
+    assert.deepEqual(e.calls[1], { step: "answer", model: MODEL, servedModel: SERVED, providerId: "chatcmpl-1abc", signatureKind: "provider_tee", signingAlgo: "ecdsa", signingAddress: SIGNER, reportFetchedAt: "2026-11-07T02:10:00.000Z", tdx: true, gpu: true, signature: true, hashes: true, status: "verified", reason: null, signedText: TEXT, signatureHex: SIG });
   });
   test("values near-watch would refuse are sent as null, never dropping the event; reasons become one printable line of at most 200", () => {
     const odd: CallAttestation = { ...verifiedCall(0), status: "unverified", chatId: "x".repeat(150), signatureKind: "weird", signingAlgo: "rsa", signingAddress: "nope", reportFetchedAt: "not a time", reason: "bad\nlineé " + "r".repeat(300) };
@@ -63,8 +67,26 @@ describe("ARCH-411/501: job_attested is built in near-watch's shape", () => {
     assert.equal(e.summary, "partial");
     assert.deepEqual([e.calls[0].providerId, e.calls[0].signatureKind, e.calls[0].signingAlgo, e.calls[0].signingAddress, e.calls[0].reportFetchedAt], [null, null, null, null, null]);
     assert.match(e.calls[0].reason!, /^[\x20-\x7E]{1,200}$/);
+    assert.deepEqual([e.calls[0].signedText, e.calls[0].signatureHex], [TEXT, null], "a signature without a known algo is not sent; the signed text still is");
     assert.equal(watchReason("   "), null);
     assert.equal(watchReason(null), null);
+  });
+  test("fix 4: evidence near-watch would refuse is sent as null (free text, wrong length, wrong algo length)", () => {
+    const bad: [Partial<CallAttestation>, string | null, string | null][] = [
+      [{ signedText: "the revenue was 42" }, null, SIG],
+      [{ signedText: `${"x".repeat(200)}:${"8b".repeat(32)}:${"fa".repeat(32)}` }, null, SIG],
+      [{ signatureHex: SIG.slice(0, -2) }, TEXT, null],
+      [{ signatureHex: "0xnothex" }, TEXT, null],
+      [{ signingAlgo: "ed25519", signingAddress: "cd".repeat(32) }, TEXT, null],
+      [{ signingAlgo: "ed25519", signingAddress: "cd".repeat(32), signatureHex: "ef".repeat(64) }, TEXT, "ef".repeat(64)],
+      [{ signedText: null, signatureHex: null }, null, null],
+    ];
+    for (const [over, text, sig] of bad) {
+      const e = attestedEvent(att(ID(5), "verified", [{ ...verifiedCall(0), ...over }, verifiedCall(1)]), meta);
+      assert.ok(e && e.event === "job_attested");
+      if (!e || e.event !== "job_attested") return;
+      assert.deepEqual([e.calls[0].signedText, e.calls[0].signatureHex], [text, sig], JSON.stringify(over).slice(0, 60));
+    }
   });
   test("an attestation whose call count differs from the job is refused (a console bug, never sent)", () => {
     assert.throws(() => attestedEvent(att(ID(4), "verified", [verifiedCall(0)]), meta), /1 call\(s\), the job 2/);
@@ -77,7 +99,7 @@ describe("ARCH-501..503: the REAL near-watch accepts and stores what the console
   after(async () => { await nw?.close(); });
   const feedOn = (logs: string[], at = "2026-11-07T02:20:00Z") => new JobFeed({ url: nw.ingestUrl, key: INGEST_KEY, keyEnv: "X", timeoutMs: 5000, maxInflight: 10, expiryCheckSec: 30 }, (l) => logs.push(l), () => Date.parse(at));
   const job = (jobId: string) => ({ jobId, network: NETWORK, expiresAt: Date.parse("2026-11-07T02:33:52Z"), out: RESULT, quote });
-  const stored = (jobId: string) => (nw.store as unknown as { getAttestation(id: string): { summary: string; calls: { step: string; status: string; providerId: string | null }[] } | undefined }).getAttestation(jobId);
+  const stored = (jobId: string) => (nw.store as unknown as { getAttestation(id: string): { summary: string; calls: { step: string; status: string; providerId: string | null; signedText?: string | null; signatureHex?: string | null }[] } | undefined }).getAttestation(jobId);
 
   test("quoted then attested (verified): stored as attested with both calls, nothing refused", async () => {
     const logs: string[] = [];
@@ -90,6 +112,7 @@ describe("ARCH-501..503: the REAL near-watch accepts and stores what the console
     const a = stored(ID(10));
     assert.equal(a?.summary, "attested");
     assert.deepEqual(a?.calls.map((c) => [c.step, c.status, c.providerId]), [["query", "verified", "chatcmpl-0abc"], ["answer", "verified", "chatcmpl-1abc"]]);
+    assert.deepEqual(a?.calls.map((c) => [c.signedText, c.signatureHex]), [[TEXT, SIG], [TEXT, SIG]], "fix 4: near-watch (v1.0.9+) stores the signature evidence");
   });
   test("unavailable (signature not ready) is accepted as its own summary, then a later verified result replaces it", async () => {
     const feed = feedOn([]);
