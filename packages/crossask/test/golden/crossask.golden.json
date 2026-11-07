@@ -136,6 +136,11 @@
     "ANSWER_SYSTEM": "Answer the question in plain words using ONLY the result table given: one short sentence per row, or a short summary.\nQuote numbers exactly as they appear in the result. Do not comment on how the result was computed.\nIf the result does not answer the question, say so and say what is missing.",
     "EXPLAIN_QUESTION": "Explain this deposit reconciliation for the practice's office manager: what did not reconcile, why, how much, and which payments or bank rows to check first.",
     "EXPLAIN_SYSTEM": "You explain a deposit reconciliation that code has already computed. Use ONLY facts and figures from the EVIDENCE. Never compute, round or estimate a new figure; copy amounts exactly as written (two decimals). Every directional amount in the evidence is signed as bank minus Curve: a minus sign means money missing from the bank (say short, missing or below), a plus sign means extra money in the bank (say over, extra or above). Keep that direction. Name each exception by its code, date, amount and payment IDs or bank rows. Items marked watch are timing, not loss. Plain sentences, no tables. If the evidence shows no exceptions, say that everything reconciled.",
+    "FIGURES_TEXT": {
+      "calculated": "Calculated, NOT made up by the AI. AI only explains.",
+      "link": "Show where each number came from",
+      "review": "Review before use: AI explanation may differ from the figures below."
+    },
     "SQL_SYSTEM": "You write DuckDB SQL for a question about the tables below.\nReply with exactly one SELECT (or WITH ... SELECT) statement inside a ```sql block, and nothing else.\nUse only the listed tables and columns. Write every column name in double quotes exactly as listed.\nTo combine files, join ONLY on relations marked key; for VARCHAR keys compare upper(trim(a.\"x\")) = upper(trim(b.\"y\")).\nNever join two tables on a relation marked category or many-to-many: every row would be repeated and counts and sums multiplied.\nWhen you need totals from two tables that share only such a column, aggregate each table first (GROUP BY that column) and join the aggregates.\nPrefer aggregates (count, sum, avg, min, max with GROUP BY) to listing rows; when you list rows, add LIMIT 50.\nRound money to 2 decimals. Never read files, change settings or use comments."
   },
   "functions": [
@@ -145,6 +150,7 @@
     "explainReconcile",
     "extractSql",
     "fanOutJoins",
+    "figuresVerdict",
     "fitPrompt",
     "gatewayChat",
     "parseAttestHeaders",
@@ -154,6 +160,7 @@
     "analystClient",
     "crossAsk",
     "explainReconcile",
+    "figuresVerdict",
     "gatewayChat",
     "parseAttestHeaders"
   ],

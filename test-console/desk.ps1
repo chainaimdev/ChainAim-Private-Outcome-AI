@@ -53,6 +53,16 @@ one READY table across both. Neither launcher is changed or renamed; each team k
                 to the sample bank statement's deposits) into sample-data\smb-fin\statements, then check them
                 (verify_ar_ap.py). Same seed, same files. Changes only those two files and their _answer-key.
   Stray words are refused (no positional parameters), so a typo such as "-Check memor" stops instead of running -Logs.
+  -Ship -ShipMessage "TEXT"  [-ShipFiles a,b] [-ShipBranch NAME] [-ShipRemote origin] [-ShipTrailer "TEXT"]
+         [-ShipSkipTests] [-ShipNoPush] [-ShipDryRun]
+                test, commit and push this checkout's changes in one command (owner, 2026-11-07). Refuses a detached HEAD,
+                a branch behind its remote (git fetch first; pull yourself, never done here) and a clean tree. Commits
+                every changed or new file git status shows, or only -ShipFiles (each must have a change; the rest is
+                listed as left out). Runs the -Test suites plus scripts\check-deps.ts first: any failure commits nothing.
+                Stages and commits only those paths (git commit -- paths, so nothing staged earlier rides along), then
+                git push REMOTE BRANCH and checks nothing is left unpushed. Never force-pushes, pulls, resets or checks out.
+                -ShipTrailer: an extra message paragraph (e.g. Co-Authored-By lines). -ShipDryRun: tests and the file
+                list only. -ShipNoPush: commit, no push. Runs on its own: no other mode switches with it.
   -NoBrowser    do not open the pages
   -Settings     settings file (default config\local\desk.json; copy config\local\desk.example.json)
 
@@ -95,6 +105,15 @@ param(
   [int]$ChiroLeakSeed = 1,
   [string]$RejudgeReceiver = "",
   [string]$RejudgeReason = "",
+  [switch]$Ship,
+  [string]$ShipMessage = "",
+  [string[]]$ShipFiles = @(),
+  [string]$ShipBranch = "",
+  [string]$ShipRemote = "origin",
+  [string]$ShipTrailer = "",
+  [switch]$ShipSkipTests,
+  [switch]$ShipNoPush,
+  [switch]$ShipDryRun,
   [string]$Settings = "config\local\desk.json"
 )
 $ErrorActionPreference = "Stop"
@@ -126,6 +145,10 @@ if ($RejudgeReceiver -or $RejudgeReason) {
   if ($RejudgeReason.Length -gt 200 -or $RejudgeReason -match '["\x00-\x1f]') { Stop-Here "-RejudgeReason must be 1-200 characters on one line, without double quotes" }
   if ($Check -or $Stop -or $Test) { Stop-Here "-RejudgeReceiver runs after a start; leave out -Check, -Stop and -Test" }
 }
+
+# -Ship options are checked before anything else runs.
+if ($Ship -and ($Check -or $Stop -or $Test -or $Build -or $WithStub -or $Agent -or $Attest -or $Logs.Count -or $Memory -or $Smoke -or $SmbSample -or $ChiroSample -or $RejudgeReceiver)) { Stop-Here "-Ship runs on its own: leave out the other mode switches" }
+if (-not $Ship -and ($ShipMessage -or $ShipFiles.Count -or $ShipBranch -or $ShipTrailer -or $ShipSkipTests -or $ShipNoPush -or $ShipDryRun)) { Stop-Here "the -Ship... options need -Ship" }
 
 # ---------------------------------------------------------------- -Logs: read-only, needs nothing else
 if ($Logs.Count) {
@@ -241,14 +264,72 @@ if ($Smoke) {
 }
 
 # ---------------------------------------------------------------- -Test needs nothing else
-if ($Test) {
+# The terminal suites, shared by -Test and -Ship. Output goes to the screen; the exit codes are returned.
+function Invoke-Suites {
   Say "TEST" "terminal suites (each starts its own servers; near-watch path from config\local\repos.json)"
-  & node --test "packages/crossask/test/*.test.ts" "scripts/test/*.test.ts" "services/gateway/test/*.test.ts" "test-console/test/*.test.ts"
+  & node --test "packages/crossask/test/*.test.ts" "scripts/test/*.test.ts" "services/gateway/test/*.test.ts" "test-console/test/*.test.ts" | Out-Host
   $a = $LASTEXITCODE
-  & npm --prefix services\analyst test
+  & npm --prefix services\analyst test | Out-Host
   $b = $LASTEXITCODE
-  if ($a -eq 0 -and $b -eq 0) { Say "OK" "all terminal suites passed"; exit 0 }
-  Say "FAIL" "a suite failed (root suites exit $a, analyst exit $b): see the not ok lines above"; exit 1
+  return @($a, $b)
+}
+if ($Test) {
+  $r = Invoke-Suites
+  if ($r[0] -eq 0 -and $r[1] -eq 0) { Say "OK" "all terminal suites passed"; exit 0 }
+  Say "FAIL" "a suite failed (root suites exit $($r[0]), analyst exit $($r[1])): see the not ok lines above"; exit 1
+}
+
+# ---------------------------------------------------------------- -Ship: test, commit and push this checkout's changes
+if ($Ship) {
+  if (-not $ShipMessage.Trim()) { Stop-Here "-Ship needs -ShipMessage with the commit message" }
+  if (-not (Get-Command git -ErrorAction SilentlyContinue)) { Stop-Here "git is not on PATH" }
+  $branch = "$(Quiet { & git rev-parse --abbrev-ref HEAD 2>$null })".Trim()
+  if (-not $branch -or $branch -eq "HEAD") { Stop-Here "not on a branch (detached HEAD): check out a branch first" }
+  if ($ShipBranch -and $branch -ne $ShipBranch) { Stop-Here "on branch $branch, but -ShipBranch is $ShipBranch" }
+  Say "GIT" "fetch $ShipRemote $branch"
+  Quiet { & git fetch $ShipRemote $branch }
+  if ($LASTEXITCODE) { Stop-Here "git fetch $ShipRemote $branch failed (exit $LASTEXITCODE): nothing changed" }
+  $behind = "$(Quiet { & git rev-list --count "HEAD..$ShipRemote/$branch" 2>$null })".Trim()
+  if ($behind -ne "0") { Stop-Here "$branch is $behind commit(s) behind $ShipRemote/$branch (bring the branch up to date and re-test first); nothing changed" }
+  $status = @(Quiet { & git status --porcelain --untracked-files=all 2>$null } | Where-Object { "$_".Length -gt 3 })
+  $changed = @($status | ForEach-Object { $p = "$_".Substring(3); if ($p -match ' -> ') { $p = ($p -split ' -> ')[-1] }; $p.Trim('"') })
+  if (-not $changed.Count) { Stop-Here "nothing to commit: the working tree is clean" }
+  if ($ShipFiles.Count) {
+    $want = @($ShipFiles | ForEach-Object { $_ -split "," } | ForEach-Object { $_.Trim().Replace('\', '/') } | Where-Object { $_ })
+    $noChange = @($want | Where-Object { $changed -notcontains $_ })
+    if ($noChange.Count) { Stop-Here ("-ShipFiles names files with no change: " + ($noChange -join ", ")) }
+    $left = @($changed | Where-Object { $want -notcontains $_ })
+    if ($left.Count) { Say "NOTE" ("left out of this commit (still changed): " + ($left -join ", ")) }
+  } else { $want = $changed }
+  Say "GIT" "branch $branch, $($want.Count) file(s) to commit:"
+  foreach ($f in $want) { Write-Host "  $f" }
+  if ($ShipSkipTests) { Say "NOTE" "tests skipped (-ShipSkipTests)" }
+  else {
+    Say "TEST" "scripts\check-deps.ts"
+    & node scripts\check-deps.ts | Out-Host
+    if ($LASTEXITCODE) { Stop-Here "check-deps failed (exit $LASTEXITCODE): nothing committed" }
+    $r = Invoke-Suites
+    if ($r[0] -or $r[1]) { Stop-Here "a suite failed (root suites exit $($r[0]), analyst exit $($r[1])): nothing committed" }
+    Say "OK" "all terminal suites passed"
+  }
+  if ($ShipDryRun) { Say "OK" "-ShipDryRun: nothing staged, committed or pushed"; exit 0 }
+  $addArgs = @("add", "--") + $want
+  Quiet { & git @addArgs }
+  if ($LASTEXITCODE) { Stop-Here "git add failed (exit $LASTEXITCODE): nothing committed" }
+  $commitArgs = @("commit", "-m", $ShipMessage)
+  if ($ShipTrailer) { $commitArgs += @("-m", $ShipTrailer) }
+  $commitArgs += @("--") + $want
+  Quiet { & git @commitArgs }
+  if ($LASTEXITCODE) { Stop-Here "git commit failed (exit $LASTEXITCODE): the files stay staged; nothing pushed" }
+  Say "OK" "committed $("$(Quiet { & git log --oneline -1 2>$null })".Trim())"
+  if ($ShipNoPush) { Say "OK" "-ShipNoPush: not pushed; push later with git push $ShipRemote $branch"; exit 0 }
+  Say "GIT" "push $ShipRemote $branch"
+  Quiet { & git push $ShipRemote $branch }
+  if ($LASTEXITCODE) { Stop-Here "git push failed (exit $LASTEXITCODE): the commit is kept locally; fix the cause above, then git push $ShipRemote $branch" }
+  $ahead = "$(Quiet { & git rev-list --count "$ShipRemote/$branch..HEAD" 2>$null })".Trim()
+  if ($ahead -ne "0") { Stop-Here "push reported success but $branch is still $ahead commit(s) ahead of $ShipRemote/$branch" }
+  Say "OK" "committed and pushed to $ShipRemote/$branch"
+  exit 0
 }
 
 # ---------------------------------------------------------------- settings and paths

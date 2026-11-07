@@ -91,7 +91,10 @@ export type CrossAskInput = { folder: string; question: string; model: string; /
   maxPromptChars?: number;
   /** A failed query's error text fed back to the model is cut to this many characters (DuckDB binder errors list every candidate
    * column). Absent: not cut. */
-  retryErrorMaxChars?: number };
+  retryErrorMaxChars?: number;
+  /** Also check whole numbers under 100 in the worded answer (verify.ts smallNumbers; owner 2026-11-07, tab 03 "Calculated, NOT
+   * made up by the AI"). The result's row count passes too, when the result is complete. Absent/false: the old rule. */
+  checkSmallNumbers?: boolean };
 export type Attempt = { sql: string; error?: string };
 /**
  * The query prompt within maxChars characters of message text: the system prompt and the table list + question are always sent;
@@ -324,13 +327,35 @@ export async function crossAsk(input: CrossAskInput, deps: CrossAskDeps): Promis
     out.served.push(reply);
     t?.callsMs.push(lastMs);
     out.answer = reply.text.trim();
-    out.unverified = verifyAnswer(out.answer, answerEvidence(input.question, table)).notFound;
+    const small = input.checkSmallNumbers ? { smallNumbers: true, ...(out.result.truncated ? {} : { rowCount: out.result.rows.length }) } : {};
+    out.unverified = verifyAnswer(out.answer, answerEvidence(input.question, table), small).notFound;
     for (const f of out.unverified) { const d = deriveFigure(f, out.result); if (d) out.derivations[f] = d; }
     // A placeholder left in the answer (e.g. "$<PHONE>.07": the gateway masked an amount and the model did not copy the
     // placeholder exactly, so it could not be restored) hides a value: never report that answer as fully checked.
     for (const p of out.answer.match(/<[A-Z][A-Z_]*(?:_\d+)?>|\[CARD REMOVED\]/g) ?? []) if (!out.unverified.includes(p)) out.unverified.push(p);
   }
   return out;
+}
+
+/**
+ * The figures line of tab 03 (owner-approved wording 2026-11-07), decided from a result:
+ *   "calculated"  every number in the AI's explanation is in the result, or (owner decision) is a figure the AI worked out that
+ *                 exact arithmetic on the result reproduces to the cent (derivations): shown green, those figures with a note
+ *   "review"      any number not found and not reproduced, or a placeholder left in the answer: shown as the review warning
+ *   null          no AI explanation (phrase none, no rows, or the answer step failed): no line
+ */
+export type FiguresVerdict = { verdict: "calculated" | "review" | null; derived: string[]; unmatched: string[] };
+export const FIGURES_TEXT = {
+  calculated: "Calculated, NOT made up by the AI. AI only explains.",
+  review: "Review before use: AI explanation may differ from the figures below.",
+  link: "Show where each number came from",
+} as const;
+export function figuresVerdict(r: Pick<CrossAskResult, "answer" | "served" | "unverified" | "derivations" | "sentToModel">): FiguresVerdict {
+  const explained = r.answer !== null && r.sentToModel.some((s) => s.step === "answer");
+  if (!explained) return { verdict: null, derived: [], unmatched: [] };
+  const derived = r.unverified.filter((f) => r.derivations[f] !== undefined);
+  const unmatched = r.unverified.filter((f) => r.derivations[f] === undefined);
+  return { verdict: unmatched.length ? "review" : "calculated", derived, unmatched };
 }
 
 // ---- the real analyst and gateway, shared by the console and the terminal script ------------------------------

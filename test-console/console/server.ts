@@ -39,6 +39,8 @@
  *   --crossask-max-prompt-chars N  text of one query request at most (default 40000; the gateway refuses over 48,000 characters
  *                              with the JSON keys counted): older failed attempts are left out first (crossask fitPrompt)
  *   --crossask-retry-error-chars N  a failed query's error fed back to the model is cut to N characters (default 2000)
+ *   --check-small-numbers on|off  also check whole numbers under 100 in the worded answer ("37 claims"; crossask verify.ts
+ *                              smallNumbers; owner 2026-11-07, tab 03 "Calculated, NOT made up by the AI"). Default on.
  *   Run log (privateAI-design-31 §3): one JSON line per question in <dir>/crossask-YYYY-MM-DD.jsonl (run-log.ts).
  *   --run-log off|meta|full    meta (default): no data values; full: also result rows, the answer and model replies
  *                              (synthetic data only); off: nothing written
@@ -168,6 +170,7 @@ const { values: flags } = parseArgs({
     "crossask-answer-rows": { type: "string", default: "50" },
     "crossask-max-prompt-chars": { type: "string", default: "40000" },
     "crossask-retry-error-chars": { type: "string", default: "2000" },
+    "check-small-numbers": { type: "string", default: "on" },
     "run-log": { type: "string", default: "meta" },
     "run-log-dir": { type: "string", default: fileURLToPath(new URL("../runs", import.meta.url)) },
     "run-log-max-rows": { type: "string", default: "50" },
@@ -275,6 +278,9 @@ const CROSSASK_RETRIES = positiveInt("crossask-sql-retries", 0);
 const CROSSASK_ROWS = positiveInt("crossask-answer-rows");
 const CROSSASK_MAX_PROMPT = positiveInt("crossask-max-prompt-chars", 2000);
 const CROSSASK_ERROR_CHARS = positiveInt("crossask-retry-error-chars", 100);
+if (!["on", "off"].includes(flags["check-small-numbers"]!)) throw new Error(`--check-small-numbers must be on or off, got ${flags["check-small-numbers"]}`);
+/** Tab 03's figures line says "NOT made up by the AI": with on (default) small whole numbers in the AI's wording are checked too. */
+const CHECK_SMALL = flags["check-small-numbers"] === "on";
 if (!(RUN_LOG_MODES as readonly string[]).includes(flags["run-log"]!)) throw new Error(`--run-log must be one of ${RUN_LOG_MODES.join(", ")}, got ${flags["run-log"]}`);
 const RUN_LOG = new RunLog({ mode: flags["run-log"] as RunLogMode, dir: resolve(flags["run-log-dir"]!), maxRows: Number(flags["run-log-max-rows"]), keepDays: Number(flags["run-log-keep-days"]) });
 /** Paywall response headers the paid chat passes back: the price, the receipt, retry advice and the gateway's own. */
@@ -679,7 +685,7 @@ createServer(async (req, res) => {
       const runIn = { folder: b.folder, question: b.question, model, answerModel, phrase, userSql: userSql !== undefined };
       const started = Date.now();
       try {
-        const out = await crossAsk({ folder: b.folder, question: b.question, model, answerModel, phrase, sqlRetries: CROSSASK_RETRIES, answerMaxRows: CROSSASK_ROWS, maxPromptChars: CROSSASK_MAX_PROMPT, retryErrorMaxChars: CROSSASK_ERROR_CHARS, sql: userSql },
+        const out = await crossAsk({ folder: b.folder, question: b.question, model, answerModel, phrase, sqlRetries: CROSSASK_RETRIES, answerMaxRows: CROSSASK_ROWS, maxPromptChars: CROSSASK_MAX_PROMPT, retryErrorMaxChars: CROSSASK_ERROR_CHARS, sql: userSql, checkSmallNumbers: CHECK_SMALL },
           { analyst: analystClient(ANALYST, CROSSASK_TIMEOUT_MS), chat: gatewayChat({ url: GATEWAY, key: KEY, timeoutMs: CROSSASK_TIMEOUT_MS }) });
         return dataJson(res, 200, { ...out, runLog: RUN_LOG.write(runIn, out, undefined, Date.now() - started) });
       } catch (e) {
@@ -713,7 +719,7 @@ createServer(async (req, res) => {
       if (JOBS.full()) return dataJson(res, 503, { error: `${PAID_JOBS.max} paid jobs are open (--job-max); pay or let one expire first` });
       let out;
       try {
-        out = await crossAsk({ folder: b.folder, question: b.question, model, answerModel, phrase, sqlRetries: CROSSASK_RETRIES, answerMaxRows: CROSSASK_ROWS, maxPromptChars: CROSSASK_MAX_PROMPT, retryErrorMaxChars: CROSSASK_ERROR_CHARS, sql: typeof b.sql === "string" && b.sql.trim() ? b.sql : undefined },
+        out = await crossAsk({ folder: b.folder, question: b.question, model, answerModel, phrase, sqlRetries: CROSSASK_RETRIES, answerMaxRows: CROSSASK_ROWS, maxPromptChars: CROSSASK_MAX_PROMPT, retryErrorMaxChars: CROSSASK_ERROR_CHARS, sql: typeof b.sql === "string" && b.sql.trim() ? b.sql : undefined, checkSmallNumbers: CHECK_SMALL },
           { analyst: analystClient(ANALYST, CROSSASK_TIMEOUT_MS), chat: gatewayChat({ url: GATEWAY, key: KEY, timeoutMs: CROSSASK_TIMEOUT_MS }), ...(JOB_FEED ? { clock: () => performance.now() } : {}) });
       } catch (e) {
         return dataJson(res, 502, { error: `the job did not run, so nothing can be paid: ${(e as Error).message}` });

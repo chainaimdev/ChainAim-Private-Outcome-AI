@@ -3,8 +3,21 @@
  * it was given. Pure. Moved unchanged from services/analyst/src/report.ts (decoupling Phase 2); used by crossAsk and by the
  * analyst's /verify route.
  */
+/**
+ * Options for verifyAnswer. smallNumbers (owner decision 2026-11-07, tab 03 "Calculated, NOT made up by the AI"): also check
+ * whole numbers under 100 ("37 claims", "12 payers", "45%", "$45"), which the default rule skips. Such a number passes when
+ * it is a value in the evidence, a number in allowFrom (the question: "top 5") or the result's rowCount ("6 plans").
+ * Dates (ISO, m/d/yyyy) and clock times are skipped; ordinals ("12th") and parts of ids ("Q3", "PL12", "<PERSON_1>") are not
+ * numbers. Default off, so the analyst's /verify route keeps its rule.
+ */
+export type AnswerCheckOptions = { smallNumbers?: boolean; allowFrom?: string; rowCount?: number };
+const SKIP_DATES_TIMES = /\b\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?Z?)?\b|\b\d{1,2}\/\d{1,2}\/\d{2,4}\b|\b\d{1,2}:\d{2}(?::\d{2})?\b/g;
+const SMALL = /(?<![\w.,])\d{1,2}(?![\d.,]\d|\w)/g;
+/** Every number written in a text, thousands commas removed ("1,069.50" -> 1069.5). */
+const valuesIn = (s: string): Set<number> => new Set((s.replace(/(\d),(?=\d{3}\b)/g, "$1").match(/\d+(?:\.\d+)?/g) ?? []).map(Number));
+
 /** Numbers in an answer that do not appear in the evidence. A heuristic: a figure the model derived (its own sum) is listed too, as "not found", not as wrong. */
-export function verifyAnswer(answer: string, evidence: string): { checked: number; notFound: string[] } {
+export function verifyAnswer(answer: string, evidence: string, opts: AnswerCheckOptions = {}): { checked: number; notFound: string[] } {
   const norm = (s: string) => { const neg = /^\(.*\)$/.test(s) || s.startsWith("-"); const v = Number(s.replace(/[^0-9.]/g, "")); return Number.isFinite(v) ? Math.round((neg ? -v : v) * 100) : NaN; };
   const NUM = /\(?-?\$?\d{1,3}(?:,\d{3})+(?:\.\d+)?\)?|\(?-?\$?\d+\.\d+\)?|\b\d{3,}\b/g;
   const known = new Set<number>();
@@ -17,6 +30,17 @@ export function verifyAnswer(answer: string, evidence: string): { checked: numbe
     if (Number.isNaN(v) || seen.has(m)) continue;
     seen.add(m); checked++;
     if (!known.has(v)) notFound.push(m);
+  }
+  if (opts.smallNumbers) {
+    const ok = valuesIn(evidence);
+    for (const v of valuesIn(opts.allowFrom ?? "")) ok.add(v);
+    if (opts.rowCount !== undefined) ok.add(opts.rowCount);
+    const text = answer.replace(SKIP_DATES_TIMES, (d) => " ".repeat(d.length));
+    for (const m of text.match(SMALL) ?? []) {
+      if (seen.has(m)) continue;
+      seen.add(m); checked++;
+      if (!ok.has(Number(m))) notFound.push(m);
+    }
   }
   return { checked, notFound };
 }

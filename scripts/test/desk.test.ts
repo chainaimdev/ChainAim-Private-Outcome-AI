@@ -158,3 +158,20 @@ test("this PC's watch list and gas go to nearadminup.ps1; the paywall's NEAR RPC
   assert.ok(Array.isArray(ex.adminUi.watch) && ex.adminUi.watch.length > 0);
   assert.equal(ex.paidJobs.feePerModelCallUsd, undefined, "prices live in up.ps1's price files, not here");
 });
+
+test("-Ship: test, commit and push in one command (owner, 2026-11-07); refuses behind/detached/clean; only the listed paths; never force", () => {
+  assert.match(code, /\[switch\]\$Ship,/);
+  assert.match(code, /\[string\]\$ShipMessage = "",/);
+  assert.match(code, /\[string\[\]\]\$ShipFiles = @\(\),/);
+  assert.match(code, /\[string\]\$ShipRemote = "origin",/);
+  const s = code.slice(code.indexOf("if ($Ship) {"), code.indexOf("# ---------------------------------------------------------------- settings and paths"));
+  assert.ok(s.length > 0 && code.indexOf("if ($Ship) {") < code.indexOf("# 1. pre-flight"), "no start");
+  assert.ok(code.indexOf("-Ship runs on its own") < code.indexOf("if ($Logs.Count)"), "options checked before anything runs");
+  assert.ok(s.indexOf("rev-list --count \"HEAD..") < s.indexOf("Invoke-Suites"), "behind the remote: stop before testing");
+  assert.ok(s.indexOf("Invoke-Suites") < s.indexOf("@(\"add\""), "tests before anything is staged");
+  assert.match(s, /\$commitArgs \+= @\("--"\) \+ \$want/, "commits only the listed paths");
+  assert.match(s, /\$addArgs = @\("add", "--"\) \+ \$want/);
+  assert.ok(!/add -A|add \.|"-A"|--force|push -f|reset|checkout|pull|stash/.test(s), "never force, pull, reset, checkout or stash");
+  assert.ok(!/docker|Stop-Process/.test(s), "touches no service");
+  assert.match(code, /function Invoke-Suites \{/);
+});
