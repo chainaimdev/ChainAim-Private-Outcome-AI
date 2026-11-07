@@ -378,6 +378,7 @@ describe("ARCH-205 (chainaim-adminUI-NEAR architecture-adminui-jobs.md) the job 
       const withFeed = await ask(body, port);
       const without = await ask(body);
       assert.equal(withFeed.status, 200, withFeed.text);
+      assert.equal(without.status, 200, `the suite's own console (no feed) answered: ${without.text}`);
       const a = JSON.parse(withFeed.text), b = JSON.parse(without.text);
       assert.deepEqual(Object.keys(a).sort(), Object.keys(b).sort());
       assert.deepEqual([a.totalUsd, a.amount, a.network, a.asset, a.payTo], [b.totalUsd, b.amount, b.network, b.asset, b.payTo]);

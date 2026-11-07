@@ -82,10 +82,12 @@
  *   --job-feed-timeout-ms N     one post (default 5000)
  *   --job-feed-max-inflight N   posts at once; beyond it an event is dropped and logged (default 20)
  *   --job-expiry-check-sec N    how often held jobs are checked for expiry (default 30)
+ *   --job-feed-attest-keep N    quoted jobs whose model-call list is kept for their job_attested event (default 500)
  *   NEAR AI model attestation (PLAN-private-ai-nearai-attestation.md ARCH-411; off unless --attest-url, which needs
  *   --paid-jobs on): after a job is quoted, ca-attest (services/attest) is asked about each of its calls that carry the
  *   gateway's attestation evidence, in the background (attest.ts); never awaited, never fails a job.
- *   GET /jobs/<id>/attestation answers the result (ids, hashes, addresses, booleans, reasons).
+ *   GET /jobs/<id>/attestation answers the result (ids, hashes, addresses, booleans, reasons). With --job-feed-url the
+ *   finished result is also sent to near-watch as job_attested (job-feed.ts), so the admin Jobs tab shows it.
  *   --attest-url URL            ca-attest, e.g. http://attest:8770 (default unset = off)
  *   --attest-timeout-ms N       one POST /verify (default 20000)
  *   --attest-keep N             job attestations kept in memory (default 500; oldest dropped first)
@@ -187,6 +189,7 @@ const { values: flags } = parseArgs({
     "job-feed-timeout-ms": { type: "string" },
     "job-feed-max-inflight": { type: "string" },
     "job-expiry-check-sec": { type: "string" },
+    "job-feed-attest-keep": { type: "string" },
     "attest-url": { type: "string" },
     "attest-timeout-ms": { type: "string" },
     "attest-keep": { type: "string" },
@@ -259,7 +262,8 @@ const JOB_FEED_CONFIG = MODE === "ui" ? undefined : jobFeedConfig(flags, process
 const JOB_FEED = JOB_FEED_CONFIG ? new JobFeed(JOB_FEED_CONFIG) : undefined;
 /** NEAR AI model attestation (ARCH-411): undefined unless --attest-url; start-up stops here on a bad flag. */
 const ATTEST_CONFIG = MODE === "ui" ? undefined : attestConfig(flags, PAID_JOBS !== undefined);
-const ATTEST = ATTEST_CONFIG ? new AttestClient(ATTEST_CONFIG) : undefined;
+// The finished result goes to near-watch as job_attested when the job feed is on (adminUI ARCH-501).
+const ATTEST = ATTEST_CONFIG ? new AttestClient(ATTEST_CONFIG, undefined, JOB_FEED ? (a) => JOB_FEED.attested(a) : undefined) : undefined;
 const JOBS = PAID_JOBS ? new JobStore(PAID_JOBS.max, PAID_JOBS.ttlMs, Date.now, JOB_FEED ? (j) => JOB_FEED.expired(j.jobId) : undefined) : undefined;
 /** The tab 03 pay box and its script, added to the page only with --paid-jobs on (the page is otherwise served as it is). */
 const PAID_JOBS_FRAGMENT = fileURLToPath(new URL("./paid-jobs.html", import.meta.url));

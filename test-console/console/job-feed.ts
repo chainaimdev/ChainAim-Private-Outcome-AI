@@ -6,6 +6,9 @@
  *                 answer model call) and the quote's breakdown
  *   job_released  when the paywall tells this console the job was settled (POST /internal/jobs/:id/released)
  *   job_expired   when a held job passes expiresAt unreleased (checked every --job-expiry-check-sec)
+ *   job_attested  when ca-attest has judged the job's model calls (attest.ts onDone; PLAN-private-ai-nearai-attestation.md
+ *                 ARCH-411, adminUI ARCH-501): summary and, per call, ids, an address, a report time, check results and a
+ *                 short reason, in exactly the shape near-watch's parseJobEvent accepts (it refuses unknown fields)
  * Never awaited by a request: a feed that is slow, down or refusing never blocks or fails a job. A failed post is
  * logged once as job_feed_failed with the job id and a reason (an HTTP status, "timeout", "unreachable", "too many in
  * flight") only.
@@ -15,11 +18,15 @@
  */
 import type { CrossAskResult } from "../../packages/crossask/src/index.ts";
 import type { JobQuote } from "../../packages/crossask/src/cost.ts";
+import type { JobAttestation, JobSummary } from "./attest.ts";
 
 export type JobFeedFlags = {
   "job-feed-url"?: string; "job-feed-key-env"?: string; "job-feed-timeout-ms"?: string; "job-feed-max-inflight"?: string; "job-expiry-check-sec"?: string;
+  "job-feed-attest-keep"?: string;
 };
-export type JobFeedConfig = { url: string; key: string; keyEnv: string; timeoutMs: number; maxInflight: number; expiryCheckSec: number };
+/** attestKeep: quoted jobs whose call list is kept for their job_attested (oldest dropped first; a re-check needs it too); default 500. */
+export type JobFeedConfig = { url: string; key: string; keyEnv: string; timeoutMs: number; maxInflight: number; expiryCheckSec: number; attestKeep?: number };
+export const DEFAULT_ATTEST_KEEP = 500;
 
 /** undefined without --job-feed-url; otherwise the checked configuration, or an Error naming what to set. The key is never in a message. */
 export function jobFeedConfig(flags: JobFeedFlags, env: Record<string, string | undefined>, paidJobsOn: boolean): JobFeedConfig | undefined {
@@ -33,7 +40,7 @@ export function jobFeedConfig(flags: JobFeedFlags, env: Record<string, string | 
   if (!/^[A-Z_][A-Z0-9_]*$/.test(keyEnv)) throw new Error(`--job-feed-key-env must be an environment variable name, got ${keyEnv}`);
   const key = env[keyEnv];
   if (!key || key.length < 24) throw new Error(`--job-feed-url needs the environment variable ${keyEnv}: near-watch's ingest key (NEAR_WATCH_INGEST_KEY there), at least 24 characters`);
-  const int = (name: "job-feed-timeout-ms" | "job-feed-max-inflight" | "job-expiry-check-sec", fallback: string, min: number, max: number): number => {
+  const int = (name: "job-feed-timeout-ms" | "job-feed-max-inflight" | "job-expiry-check-sec" | "job-feed-attest-keep", fallback: string, min: number, max: number): number => {
     const raw = flags[name] ?? fallback;
     const n = Number(raw);
     if (!Number.isInteger(n) || n < min || n > max) throw new Error(`--${name} must be a whole number from ${min} to ${max}, got ${raw}`);
@@ -44,6 +51,7 @@ export function jobFeedConfig(flags: JobFeedFlags, env: Record<string, string | 
     timeoutMs: int("job-feed-timeout-ms", "5000", 100, 120_000),
     maxInflight: int("job-feed-max-inflight", "20", 1, 1000),
     expiryCheckSec: int("job-expiry-check-sec", "30", 1, 3600),
+    attestKeep: int("job-feed-attest-keep", String(DEFAULT_ATTEST_KEEP), 1, 100_000),
   };
 }
 
@@ -52,9 +60,25 @@ export type ModelStep = {
   entityCounts?: Record<string, number>; residual?: "pass" | "refused";
 };
 export type JobStep = { name: "analyst"; ms: number; files: number; relations: number } | ModelStep | { name: "sql"; ms: number; rows: number };
+/** near-watch's names (jobs.ts ATTEST_SUMMARIES / ATTEST_STATUSES); "unavailable" = evidence not obtainable yet, never trusted. */
+export type WatchSummary = "attested" | "partial" | "unverified" | "unavailable" | "not_applicable";
+export const SUMMARY_TO_WATCH: Record<Exclude<JobSummary, "pending">, WatchSummary> = {
+  verified: "attested", partly: "partial", unverified: "unverified", unavailable: "unavailable", not_applicable: "not_applicable",
+};
+/** One call as near-watch's parseAttestedCall takes it (field for field; anything it would refuse is sent as null). */
+export type WatchAttestedCall = {
+  step: "query" | "answer"; model: string; servedModel: string | null; providerId: string | null;
+  signatureKind: "provider_tee" | "gateway" | null; signingAlgo: "ecdsa" | "ed25519" | null; signingAddress: string | null;
+  reportFetchedAt: string | null; tdx: boolean | null; gpu: boolean | null; signature: boolean | null; hashes: boolean | null;
+  status: "verified" | "unverified" | "unavailable" | "not_applicable"; reason: string | null;
+};
+/** Per quoted job: its network and, per model call in run order, the step name and the priced model id. */
+export type AttestMeta = { network: string; calls: { step: "query" | "answer"; model: string }[] };
+
 export type JobEvent =
   | { v: 1; event: "job_quoted"; ts: string; jobId: string; network: string; amount: string; totalUsd: string; expiresAt: string; steps: JobStep[]; breakdown: JobQuote["breakdown"] }
-  | { v: 1; event: "job_released" | "job_expired"; ts: string; jobId: string; network: string };
+  | { v: 1; event: "job_released" | "job_expired"; ts: string; jobId: string; network: string }
+  | { v: 1; event: "job_attested"; ts: string; jobId: string; network: string; summary: WatchSummary; calls: WatchAttestedCall[] };
 
 const iso = (ms: number): string => new Date(ms).toISOString();
 
@@ -93,11 +117,62 @@ export function quotedEvent(j: { jobId: string; network: string; expiresAt: numb
   };
 }
 
+// near-watch's bounds (services/near-watch/src/jobs.ts): a value outside them is sent as null, so one odd id never loses the event.
+const WATCH_MODEL_ID = /^[A-Za-z0-9._:\/@-]{1,128}$/;
+const WATCH_PROVIDER_ID = /^[A-Za-z0-9_.:-]{1,128}$/;
+const WATCH_ECDSA = /^0x[0-9a-fA-F]{40}$/;
+const WATCH_ED25519 = /^(0x)?[0-9a-fA-F]{64}$/;
+const WATCH_MAX_CALLS = 32;
+const ok = (v: string | null, re: RegExp): string | null => (v !== null && re.test(v) ? v : null);
+/** A reason as near-watch takes it: printable ASCII on one line, at most 200 characters; empty -> null. */
+export function watchReason(r: string | null): string | null {
+  if (r === null) return null;
+  const s = r.replace(/[^\x20-\x7E]+/g, " ").replace(/ {2,}/g, " ").trim().slice(0, 200).trim();
+  return s || null;
+}
+
+/** The model calls of a quoted job (steps query/answer in run order, the same order as out.served and attest.ts calls). */
+export function attestMetaOf(network: string, out: CrossAskResult, quote: JobQuote): AttestMeta {
+  const calls = jobSteps(out, quote).filter((s): s is ModelStep => s.name === "query" || s.name === "answer").map((s) => ({ step: s.name, model: s.model }));
+  return { network, calls };
+}
+
+/**
+ * job_attested for near-watch, or null while the check is still pending. Throws when the attestation does not line up with the
+ * job's calls (a different count): that is a console bug, logged as job_feed_failed, never sent.
+ */
+export function attestedEvent(a: JobAttestation, meta: AttestMeta, now = Date.now()): JobEvent | null {
+  if (a.summary === "pending") return null;
+  if (a.calls.length !== meta.calls.length) throw new Error(`attestation has ${a.calls.length} call(s), the job ${meta.calls.length}`);
+  if (a.calls.length > WATCH_MAX_CALLS) throw new Error(`more than ${WATCH_MAX_CALLS} model calls`);
+  const calls = a.calls.map((c, i): WatchAttestedCall => {
+    const m = meta.calls[i];
+    const algo = c.signingAlgo === "ecdsa" || c.signingAlgo === "ed25519" ? c.signingAlgo : null;
+    const fetched = c.reportFetchedAt !== null && !Number.isNaN(Date.parse(c.reportFetchedAt)) ? new Date(Date.parse(c.reportFetchedAt)).toISOString() : null;
+    return {
+      step: m.step,
+      model: ok(m.model, WATCH_MODEL_ID) ?? "unknown",
+      servedModel: ok(c.servedModel, WATCH_MODEL_ID),
+      providerId: ok(c.chatId, WATCH_PROVIDER_ID),
+      signatureKind: c.signatureKind === "provider_tee" || c.signatureKind === "gateway" ? c.signatureKind : null,
+      signingAlgo: algo,
+      signingAddress: algo === "ecdsa" ? ok(c.signingAddress, WATCH_ECDSA) : algo === "ed25519" ? ok(c.signingAddress, WATCH_ED25519) : null,
+      reportFetchedAt: fetched,
+      tdx: c.tdx, gpu: c.gpu, signature: c.signature, hashes: c.hashes,
+      status: c.status,
+      reason: watchReason(c.reason),
+    };
+  });
+  return { v: 1, event: "job_attested", ts: iso(now), jobId: a.jobId, network: meta.network, summary: SUMMARY_TO_WATCH[a.summary], calls };
+}
+
 /** Posts events without blocking the caller; remembers each open job's network for its released/expired event. */
 export class JobFeed {
   readonly counters = { sent: 0, failed: 0 };
   private inflight = 0;
   private readonly networks = new Map<string, string>();
+  /** Quoted jobs' call lists for job_attested; kept after release (the check may finish later), the oldest dropped beyond attestKeep. */
+  private readonly attestMeta = new Map<string, AttestMeta>();
   private readonly cfg: JobFeedConfig;
   private readonly log: (line: string) => void;
   private readonly now: () => number;
@@ -112,7 +187,19 @@ export class JobFeed {
     try { event = quotedEvent(j, this.now()); }
     catch (e) { return this.failed(j.jobId, (e as Error).message); }
     this.networks.set(j.jobId, j.network);
+    this.attestMeta.delete(j.jobId);
+    this.attestMeta.set(j.jobId, attestMetaOf(j.network, j.out, j.quote));
+    while (this.attestMeta.size > (this.cfg.attestKeep ?? DEFAULT_ATTEST_KEEP)) this.attestMeta.delete(this.attestMeta.keys().next().value!);
     this.post(event);
+  }
+  /** ca-attest's result for a quoted job (attest.ts onDone). Pending results are not sent; a later one for the same job replaces it there. */
+  attested(a: JobAttestation): void {
+    const meta = this.attestMeta.get(a.jobId);
+    if (!meta) return this.failed(a.jobId, "no job_quoted for this job in this console (restarted, or older than --job-feed-attest-keep)");
+    let event: JobEvent | null;
+    try { event = attestedEvent(a, meta, this.now()); }
+    catch (e) { return this.failed(a.jobId, (e as Error).message); }
+    if (event) this.post(event);
   }
   released(jobId: string): void { this.closed(jobId, "job_released"); }
   expired(jobId: string): void { this.closed(jobId, "job_expired"); }
