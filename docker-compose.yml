@@ -37,6 +37,15 @@ services:
     labels: *source
     networks: { chainaim-test: { aliases: [presidio.railway.internal] } }
     restart: "no"
+    # Start order (owner run 2026-11-07): gunicorn listens before its worker has loaded the language models, and the
+    # gateway gives up after its 120 s wait. /health answers only once the analyzer app (and its models) is loaded, so the
+    # gateway below starts only when this is healthy. Python is in the image; no extra tool is added.
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:3000/health', timeout=5)"]
+      interval: 5s
+      timeout: 6s
+      retries: 60
+      start_period: 60s
 
   openrouter-stub:
     profiles: [test]
@@ -68,7 +77,10 @@ services:
       - ./config:/config:ro
     ports: ["127.0.0.1:8720:8700"]
     networks: { chainaim-test: { aliases: [gateway.railway.internal] } }
-    depends_on: [presidio]
+    # Starts only once Presidio answers /health; if its own Presidio wait still times out it exits, and Docker starts it again.
+    depends_on:
+      presidio: { condition: service_healthy }
+    restart: on-failure:3
 
   paywall:
     build: { context: services/paywall, labels: *source }

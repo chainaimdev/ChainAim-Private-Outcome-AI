@@ -193,6 +193,15 @@ tr:last-child td { border-bottom: 0; }
 td.num { font-variant-numeric: tabular-nums; }
 td.ph { background: none; border: 0; padding: 9px 13px; white-space: nowrap; }
 table.kv th { width: 11rem; white-space: nowrap; }
+/* tab 03 results, queries and AI proofs never scroll sideways (owner 2026-11-07) */
+table.result-kv th { width: 13rem; white-space: normal; letter-spacing: .06em; }
+table.result-kv td, table.result-wide td { overflow-wrap: anywhere; }
+table.result-wide th { white-space: normal; letter-spacing: .06em; }
+table.result-kv td.num, table.result-wide td.num { white-space: nowrap; }
+#xaskOut pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+#xattest table { table-layout: fixed; width: 100%; }
+#xattest td { overflow-wrap: anywhere; padding: 6px 10px; }
+#xattest td:first-child { width: 38%; }
 /* Blockchain queries twisty: picklists in a row that wraps, results as cards that never scroll sideways */
 /* Dataset picker (DESIGN/xrplh-29) */
 #t5 [hidden] { display: none !important; } /* .xmodels and the Set label set display themselves; hidden must still win */
@@ -1364,11 +1373,26 @@ $("ledger").onclick = () => busy($("ledger"), async () => {
     el("p", { className: "muted", textContent: "Each line holds classes, counts and model names only. No text, no placeholders, no map." })));
 });
 // ---- Ask across files: /analyst/relations and /crossask (services/analyst/src/crossask.ts on the console server) ----
+/**
+ * The result table (owner 2026-11-07: tidy, no sideways scrolling). Headers read as words (cash_in -> Cash in; the exact
+ * column name stays in the tooltip). A one-row result with more than three columns is shown as a label/value list, so a
+ * template's single summary row never needs a wide table; more rows keep the columns, with headers that wrap.
+ */
 function resultTable(columns, rows) {
-  const t = el("table");
-  t.append(el("thead", {}, el("tr", {}, ...columns.map((h) => el("th", { textContent: h })))));
+  const label = (c) => String(c).replace(/_/g, " ").replace(/\s+/g, " ").trim().replace(/^./, (x) => x.toUpperCase());
+  const text = (v) => (v === null || v === undefined ? "" : String(v));
+  const numClass = (v) => (typeof v === "number" || /^-?\d+(\.\d+)?$/.test(text(v)) ? "num" : "");
+  if (rows.length === 1 && columns.length > 3) {
+    const t = el("table", { className: "kv result-kv" });
+    const tb = el("tbody");
+    for (const c of columns) tb.append(el("tr", {}, el("th", { textContent: label(c), title: c }), el("td", { className: numClass(rows[0][c]), textContent: text(rows[0][c]) })));
+    t.append(tb);
+    return el("div", { className: "scroll" }, t);
+  }
+  const t = el("table", { className: "result-wide" });
+  t.append(el("thead", {}, el("tr", {}, ...columns.map((h) => el("th", { textContent: label(h), title: h })))));
   const tb = el("tbody");
-  for (const r of rows) tb.append(el("tr", {}, ...columns.map((c) => el("td", { className: typeof r[c] === "number" ? "num" : "", textContent: r[c] === null || r[c] === undefined ? "" : String(r[c]) }))));
+  for (const r of rows) tb.append(el("tr", {}, ...columns.map((c) => el("td", { className: numClass(r[c]), textContent: text(r[c]) }))));
   t.append(tb);
   return el("div", { className: "scroll" }, t);
 }

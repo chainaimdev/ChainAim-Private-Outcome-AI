@@ -59,6 +59,11 @@ test("tab 03 page: a template with sql fills the query box and hides the query m
   assert.match(page, /<select id="xaskAnswerModel">/, "Words the answer stays");
   // like a pack's first question, the first template starts picked (its exact query, not the page's built-in text)
   assert.match(page, /xExact\(d\.templates\[0\]\.sql \?\? ""\)/, "the first template is picked when the dataset opens");
+  // tidy results (owner 2026-11-07): a one-row result is a label/value list; long query text and proof values wrap
+  assert.match(page, /if \(rows\.length === 1 && columns\.length > 3\)/);
+  assert.match(page, /className: "kv result-kv"/);
+  assert.match(page, /#xaskOut pre \{ white-space: pre-wrap; overflow-wrap: anywhere; \}/);
+  assert.match(page, /#xattest td \{ overflow-wrap: anywhere;/);
 });
 
 test("the two roots: samples inside the repository (git-ignored), private outside it; both are allowed data roots", () => {

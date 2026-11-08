@@ -181,8 +181,13 @@
         ];
         const t = document.createElement("table");
         for (const [k, v] of rows) { const tr = t.insertRow(); tr.insertCell().textContent = k; tr.insertCell().textContent = v; }
-        const a = document.createElement("a"); a.href = "https://cloud.near.ai/verify"; a.target = "_blank"; a.rel = "noopener";
-        a.textContent = "Verify it yourself at cloud.near.ai/verify (paste the chat id) ↗";
+        // NEAR AI's Verification Center takes ?model=<NEAR model id> for a model's enclave attestation (the page's own text,
+        // 2026-11-07; docs.near.ai/cloud/verification). The NEAR model id is the signed text's first field (<model>:<reqSHA256>:<respSHA256>).
+        // A reply's own receipt is passed in the URL fragment in a format not published where we could read it, so it is not sent.
+        const nearModel = typeof c.signedText === "string" && c.signedText.includes(":") ? c.signedText.slice(0, c.signedText.indexOf(":")) : null;
+        const a = document.createElement("a"); a.target = "_blank"; a.rel = "noopener";
+        a.href = nearModel ? `https://cloud.near.ai/verify?model=${encodeURIComponent(nearModel)}` : "https://cloud.near.ai/verify";
+        a.textContent = nearModel ? `Check ${nearModel}'s enclave on NEAR AI's Verification Center ↗` : "NEAR AI's Verification Center ↗";
         d.append(s, t, a);
         li.append(d);
       }
