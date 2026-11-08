@@ -56,8 +56,23 @@ test("Dental (domain-pack) questions: a Topic picklist, one question per intent 
   assert.match(page, /function dsIntents\(topic\)/);
   assert.match(page, /el\("select", \{ id: "dsTopic" \}/);
   assert.match(fnBody("dsStyleRender"), /"Answer as"/);
-  assert.match(fnBody("dsStyleRender"), /ds\.style === "explained" \? el\("label", \{ className: "blabel ds-model" \}/, "the model picker shows only for Explained");
+  // owner 2026-11-07: the model picker is always shown when the question can be Explained (it was Explained-only), and it
+  // starts on the console's --default-answer-model when the gateway lists it
+  assert.match(fnBody("dsStyleRender"), /it\.model \? el\("label", \{ className: "blabel ds-model" \}/, "the model picker shows whenever Explained is offered");
+  assert.match(fnBody("dsStyleRender"), /\$\("dsModel"\)\?\.value \|\| defaultAnswerModel/, "the default answer model is the first choice");
   const ask = fnBody("packAsk");
   assert.equal((ask.match(/howStrip\(\[/g) ?? []).length, 2, "both answer paths say how the answer was obtained");
   assert.match(ask, /Nothing was sent to any model/);
+});
+
+test("tab 03 AI proof (owner 2026-11-07): after a paid release the page asks GET /jobs/<id>/attestation, in plain words, safely", () => {
+  const pj = readFileSync(new URL("../../test-console/console/paid-jobs.html", import.meta.url), "utf8");
+  assert.match(pj, /function attestPanel\(jobId\)/);
+  assert.match(pj, /fetch\(`\/jobs\/\$\{jobId\}\/attestation`\)/);
+  assert.match(pj, /if \(!config \|\| !config\.attest \|\| !\/\^\[0-9a-f\]\{32\}\$\/\.test\(jobId\)\) return;/, "only with --attest-url, only a job id");
+  assert.match(pj, /if \(n < config\.attest\.pollMax\) setTimeout\(ask, config\.attest\.pollMs\)/, "polling is bounded by the console's flags");
+  assert.ok(!/innerHTML/.test(pj), "every value is set as text");
+  assert.match(pj, /attestPanel\(job\.jobId\)/, "manual payment");
+  assert.match(pj, /if \(result !== undefined && settled && ranJob\) attestPanel\(ranJob\)/, "agent payment");
+  assert.match(pj, /Covers what the gateway sent after masking; correctness is the figure check above/, "says what it does not cover");
 });

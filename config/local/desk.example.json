@@ -8,5 +8,6 @@
     "enabled": true,
     "watch": ["buyer1=buyer=<buyer account>.testnet", "relayer=relayer=<relayer account>.testnet"],
     "gasPerPaymentNear": "0.000333"
-  }
+  },
+  "console": { "defaultAnswerModel": "nearai/deepseek-v4.1-flash", "defaultPayer": "agent" }
 }

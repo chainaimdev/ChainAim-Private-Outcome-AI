@@ -373,7 +373,8 @@ footer.fine { margin-top: 30px; padding-top: 16px; border-top: 1px solid var(--r
           <div id="xTemplates"></div>
           <textarea id="xaskQ" spellcheck="false">By month, how much cash came into and went out of our bank account, and what was the net cash flow? Could it cover a loan installment of 20,368 a month?</textarea>
           <div class="xmodels">
-            <label class="blabel">Writes the query (sees column names only)<select id="xaskModel"><option value="">loading the models…</option></select></label>
+            <label class="blabel" id="xaskModelWrap">Writes the query (sees column names only)<select id="xaskModel"><option value="">loading the models…</option></select></label>
+            <span class="blabel" id="xaskExact" hidden>Writes the query: exact query, no model (the same table every run; see it under "Or type the query yourself")</span>
             <label class="blabel">Words the answer (sees the result rows)<select id="xaskAnswerModel"><option value="">no worded answer: table only</option></select></label>
           </div>
           <details><summary class="muted" id="xaskSqlSummary">Or type the query yourself (no model writes it)</summary>
@@ -735,12 +736,14 @@ const AUTO = "chainaim/auto";
 const MODEL_KEY = "chainaim.console.model";
 const savedModel = { get() { try { return localStorage.getItem(MODEL_KEY); } catch { return null; } }, set(v) { try { localStorage.setItem(MODEL_KEY, v); } catch { /* storage blocked: the pick lasts until reload */ } } };
 let pickedModel; // undefined until the list loads: chat then sends no model and the gateway ranks
+let defaultAnswerModel = null; // the console's --default-answer-model (tab 03 "Explained"), when the gateway lists it
 (async () => {
   const sel = $("model"), info = $("modelInfo");
   let list = [], def = AUTO;
   try {
     const r = await call("/gateway/models");
     list = r.models ?? []; def = r.defaultModel || AUTO;
+    defaultAnswerModel = r.defaultAnswerModel && list.includes(r.defaultAnswerModel) ? r.defaultAnswerModel : null;
     modelLimits = r.limits ?? {}; maxOutputTokens = r.maxOutputTokens ?? null;
   } catch { /* handled below */ }
   if (!list.length) {
@@ -1448,7 +1451,7 @@ document.querySelector('nav.rail button[data-go="t5"]').addEventListener("click"
     if (tab && /^t[1-5]$/.test(tab)) document.querySelector(`nav.rail button[data-go="${tab}"]`)?.click();
     // default to Bedrock (private-cloud zone; the gateway masks what it sends) when it is in the list
     for (const [param, id] of [["model", "xaskModel"], ["answer", "xaskAnswerModel"]]) {
-      const v = qp.get(param) || "bedrock/nemotron-nano-3-30b", sel = $(id);
+      const v = qp.get(param) || (param === "answer" && defaultAnswerModel) || "bedrock/nemotron-nano-3-30b", sel = $(id);
       if (v && sel && [...sel.options].some((x) => x.value === v)) sel.value = v;
     }
   };
@@ -1474,8 +1477,9 @@ $("xaskGo").onclick = () => busy($("xaskGo"), async () => {
   out.replaceChildren();
   const served = r.served.filter((s) => s.model);
   const sentData = r.sentToModel.some((s) => s.hasData);
+  const exactRun = Boolean(sql) && sql === ds.exactSql.trim();
   out.append(block(verdict(
-    cell("Query by", sql ? "you" : served[0]?.model ?? "-", "", served[0]?.zone ? `zone ${served[0].zone}` : ""),
+    cell("Query by", exactRun ? "exact query" : sql ? "you" : served[0]?.model ?? "-", "", exactRun ? "no model; the same table every run" : served[0]?.zone ? `zone ${served[0].zone}` : ""),
     cell("Answer by", r.answer !== null ? served.at(-1)?.model ?? "-" : "-", "", r.answer !== null && served.at(-1)?.zone ? `zone ${served.at(-1).zone}` : "table only"),
     cell("Rows", r.result ? r.result.rows.length + (r.result.truncated ? "+" : "") : "-"),
     cell("Data sent to a model", sentData ? "result rows" : "none", sentData ? "" : "clear", sentData ? "masked by the gateway" : "column names only"))));
@@ -1490,7 +1494,19 @@ $("xaskGo").onclick = () => busy($("xaskGo"), async () => {
   out.append(runLogLine(r.runLog));
 });
 // ---- Datasets (config/datasets.json, DESIGN/xrplh-29): picks the folder, describes it, and supplies the questions ----
-const ds = { list: [], cur: null, pick: null, rootPath: "", rootLabel: "", bank: null, intent: null, style: "table" };
+const ds = { list: [], cur: null, pick: null, rootPath: "", rootLabel: "", bank: null, intent: null, style: "table", exactSql: "" };
+/**
+ * A crossask template with sql (config/datasets.json, owner 2026-11-07) works like a pack's exact query: its SELECT goes in
+ * the query box, "Writes the query" is hidden (no model writes it) and "Words the answer" stays. "" undoes it; SQL the
+ * person typed themselves is kept.
+ */
+function xExact(sql) {
+  const prev = ds.exactSql;
+  ds.exactSql = sql || "";
+  if (ds.exactSql || $("xaskSql").value.trim() === prev.trim()) $("xaskSql").value = ds.exactSql;
+  $("xaskModelWrap").hidden = Boolean(ds.exactSql);
+  $("xaskExact").hidden = !ds.exactSql;
+}
 /** "Samples > smb-fin/statements" instead of the full path; the full path stays in the tooltip. Paths outside the root are shown whole. */
 function shortPath(p) {
   if (!p) return p;
@@ -1518,6 +1534,7 @@ async function dsSelect(keepSet) {
   const d = ds.list.find((x) => x.id === $("dsSel").value); ds.cur = d; ds.pick = null; ds.intent = null;
   if (!d) return;
   const pack = d.engine === "domain-pack";
+  xExact("");
   document.querySelector("#t5 .xmodels").hidden = pack;
   $("xaskSqlSummary").textContent = pack ? "Advanced: write your own SQL over the reconciliation tables (exceptions, matches, unmatched_curve, unmatched_bank, group_totals, file_checks, bank, deposit, ledger, patients, ...)" : "Or type the query yourself (no model writes it)";
   const setSel = $("dsSet");
@@ -1544,10 +1561,15 @@ async function dsTemplates(d) {
     ds.bank = null;
     const row = el("div", { className: "tpl-group" }, ...d.templates.map((t) => {
       const b = el("button", { type: "button", className: "ghost", textContent: t.label, title: t.q });
-      b.onclick = () => { for (const x of row.querySelectorAll("button")) x.classList.remove("on"); b.classList.add("on"); ds.pick = null; $("xaskQ").value = t.q; $("xaskQ").focus(); };
+      b.onclick = () => { for (const x of row.querySelectorAll("button")) x.classList.remove("on"); b.classList.add("on"); ds.pick = null; $("xaskQ").value = t.q; xExact(t.sql ?? ""); $("xaskQ").focus(); };
       return b;
     }));
     box.replaceChildren(d.templates.length ? row : empty("No templates for this dataset yet: type a question."));
+    // Like a pack's topic list (its first question is picked), the first template starts picked, so its exact query is what
+    // Ask runs (owner 2026-11-07). A deep link's own question (?q=) is kept instead.
+    const deepQ = new URLSearchParams(location.search).get("q");
+    const first = row.querySelector("button");
+    if (first && !(deepQ && $("xaskQ").value === deepQ)) { first.classList.add("on"); $("xaskQ").value = d.templates[0].q; xExact(d.templates[0].sql ?? ""); }
     return;
   }
   try { ds.bank = await postData("/analyst/pack-queries", { pack: d.pack }); }
@@ -1590,13 +1612,14 @@ function dsStyleRender() {
     return el("label", { className: "ds-opt" }, r, el("span", { textContent: text }), el("span", { className: "muted", textContent: sub }));
   };
   const models = [...$("xaskModel").options].filter((o) => o.value);
-  const keep = $("dsModel")?.value || $("xaskAnswerModel").value || $("xaskModel").value;
+  const keep = $("dsModel")?.value || defaultAnswerModel || $("xaskAnswerModel").value || $("xaskModel").value;
   const modelSel = el("select", { id: "dsModel" }, ...models.map((o) => el("option", { value: o.value, textContent: o.textContent })));
   if ([...modelSel.options].some((o) => o.value === keep)) modelSel.value = keep;
   $("dsStyle").replaceChildren(el("span", { className: "blabel", textContent: "Answer as" }),
     ...(it.exact ? [opt("table", "Table", "exact, computed on this PC; no model")] : []),
     ...(it.model ? [opt("explained", "Explained", "a model words the computed facts; every figure is checked")] : []),
-    ds.style === "explained" ? el("label", { className: "blabel ds-model" }, "Model", modelSel) : el("span"));
+    // the model list is always shown when the question can be Explained, so the models on offer are visible (owner 2026-11-07)
+    it.model ? el("label", { className: "blabel ds-model" }, ds.style === "explained" ? "Model" : "Model (used for Explained)", modelSel) : el("span"));
   ds.pick = ds.style === "explained" ? it.model : it.exact;
   $("xaskQ").value = (ds.style === "explained" ? it.model.question : null) ?? it.label;
   $("xaskSql").value = "";
@@ -1637,7 +1660,11 @@ async function packAsk(out) {
 $("dsRoot").addEventListener("change", () => dsLoad().catch((e) => { $("dsDesc").textContent = e.message; }));
 $("dsSel").addEventListener("change", () => dsSelect().catch((e) => { $("dsDesc").textContent = e.message; }));
 $("dsSet").addEventListener("change", () => dsSelect($("dsSet").value).catch((e) => { $("dsDesc").textContent = e.message; }));
-$("xaskQ").addEventListener("input", () => { if (ds.pick) { ds.pick = null; for (const x of document.querySelectorAll('#dsQuestions input[name="dsQ"]')) x.checked = false; } });
+$("xaskQ").addEventListener("input", () => {
+  if (ds.pick) { ds.pick = null; for (const x of document.querySelectorAll('#dsQuestions input[name="dsQ"]')) x.checked = false; }
+  // A changed question no longer matches the template's exact query: a model writes the query again.
+  if (ds.exactSql) { xExact(""); for (const x of document.querySelectorAll("#xTemplates button.on")) x.classList.remove("on"); }
+});
 // ---- Blockchain queries twisty (services/chain-query through /chain/*; read-only) -------------------------------------
 let chainData = null;
 const chainEl = (tag, text, cls) => { const e = document.createElement(tag); if (text !== undefined && text !== null) e.textContent = String(text); if (cls) e.className = cls; return e; };

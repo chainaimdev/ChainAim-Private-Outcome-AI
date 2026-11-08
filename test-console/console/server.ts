@@ -171,6 +171,8 @@ const { values: flags } = parseArgs({
     "crossask-max-prompt-chars": { type: "string", default: "40000" },
     "crossask-retry-error-chars": { type: "string", default: "2000" },
     "check-small-numbers": { type: "string", default: "on" },
+    "default-answer-model": { type: "string", default: "" },
+    "default-payer": { type: "string", default: "me" },
     "run-log": { type: "string", default: "meta" },
     "run-log-dir": { type: "string", default: fileURLToPath(new URL("../runs", import.meta.url)) },
     "run-log-max-rows": { type: "string", default: "50" },
@@ -196,6 +198,8 @@ const { values: flags } = parseArgs({
     "attest-url": { type: "string" },
     "attest-timeout-ms": { type: "string" },
     "attest-keep": { type: "string" },
+    "attest-poll-ms": { type: "string", default: "3000" },
+    "attest-poll-max": { type: "string", default: "40" },
     mode: { type: "string", default: "all" },
     bind: { type: "string", default: "127.0.0.1" },
     api: { type: "string" },
@@ -281,6 +285,17 @@ const CROSSASK_ERROR_CHARS = positiveInt("crossask-retry-error-chars", 100);
 if (!["on", "off"].includes(flags["check-small-numbers"]!)) throw new Error(`--check-small-numbers must be on or off, got ${flags["check-small-numbers"]}`);
 /** Tab 03's figures line says "NOT made up by the AI": with on (default) small whole numbers in the AI's wording are checked too. */
 const CHECK_SMALL = flags["check-small-numbers"] === "on";
+/** Tab 03 defaults (owner 2026-11-07): the model that words an Explained answer, and who pays when paid jobs are on. Only
+ * defaults: the page falls back to its own choice when the model is not in the gateway's list, or no agent is configured. */
+const DEFAULT_ANSWER_MODEL = flags["default-answer-model"]!.trim();
+if (DEFAULT_ANSWER_MODEL && !/^[\w.-]+\/[\w.:-]+$/.test(DEFAULT_ANSWER_MODEL)) throw new Error(`--default-answer-model must look like provider/name, got ${DEFAULT_ANSWER_MODEL}`);
+if (!["me", "agent"].includes(flags["default-payer"]!)) throw new Error(`--default-payer must be me or agent, got ${flags["default-payer"]}`);
+const DEFAULT_PAYER = flags["default-payer"] as "me" | "agent";
+/** Tab 03 attestation panel (owner 2026-11-07): how often and how many times the page asks GET /jobs/<id>/attestation. */
+const ATTEST_POLL_MS = Number(flags["attest-poll-ms"]);
+const ATTEST_POLL_MAX = Number(flags["attest-poll-max"]);
+if (!Number.isInteger(ATTEST_POLL_MS) || ATTEST_POLL_MS < 500 || ATTEST_POLL_MS > 60_000) throw new Error(`--attest-poll-ms must be a whole number from 500 to 60000, got ${flags["attest-poll-ms"]}`);
+if (!Number.isInteger(ATTEST_POLL_MAX) || ATTEST_POLL_MAX < 1 || ATTEST_POLL_MAX > 1000) throw new Error(`--attest-poll-max must be a whole number from 1 to 1000, got ${flags["attest-poll-max"]}`);
 if (!(RUN_LOG_MODES as readonly string[]).includes(flags["run-log"]!)) throw new Error(`--run-log must be one of ${RUN_LOG_MODES.join(", ")}, got ${flags["run-log"]}`);
 const RUN_LOG = new RunLog({ mode: flags["run-log"] as RunLogMode, dir: resolve(flags["run-log-dir"]!), maxRows: Number(flags["run-log-max-rows"]), keepDays: Number(flags["run-log-keep-days"]) });
 /** Paywall response headers the paid chat passes back: the price, the receipt, retry advice and the gateway's own. */
@@ -464,7 +479,7 @@ createServer(async (req, res) => {
       const models = data.map((m) => m.id).filter((id): id is string => typeof id === "string");
       // Context length per model and the gateway's output budget let the page warn before a prompt is too big.
       const limits = Object.fromEntries(data.filter((m) => typeof m.id === "string" && typeof m.context_length === "number").map((m) => [m.id, m.context_length]));
-      json(res, 200, { status: r.status, defaultModel: DEFAULT_MODEL, models, limits, maxOutputTokens: generatedMaxOutput() });
+      json(res, 200, { status: r.status, defaultModel: DEFAULT_MODEL, defaultAnswerModel: DEFAULT_ANSWER_MODEL || null, models, limits, maxOutputTokens: generatedMaxOutput() });
       return;
     }
     if (api === "gateway" && req.method === "POST" && ROUTES[name]) {
@@ -703,7 +718,7 @@ createServer(async (req, res) => {
     }
     if (PAID_JOBS && JOBS && api === "jobs" && name === "config" && req.method === "GET") {
       if (!hostOk(req)) return dataJson(res, 403, { error: `open the console as http://127.0.0.1:${PORT}` });
-      return dataJson(res, 200, { wallet: NEAR_WALLET, walletName: NEAR_WALLETS[NEAR_WALLET!].name, ttlMin: PAID_JOBS.ttlMs / 60_000 });
+      return dataJson(res, 200, { wallet: NEAR_WALLET, walletName: NEAR_WALLETS[NEAR_WALLET!].name, ttlMin: PAID_JOBS.ttlMs / 60_000, defaultPayer: DEFAULT_PAYER, attest: ATTEST ? { pollMs: ATTEST_POLL_MS, pollMax: ATTEST_POLL_MAX } : null });
     }
     // Run, meter, quote, hold, register: the page gets the cost and the job id, never the result.
     if (PAID_JOBS && JOBS && api === "jobs" && name === "crossask" && req.method === "POST") {

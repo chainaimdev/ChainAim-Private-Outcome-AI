@@ -284,7 +284,8 @@ describe("ARCH-101 / ARCH-112 the page and the relay", () => {
     assert.match(script, /if \(url !== "\/crossask" \|\| !tick\.checked\) return free\(url, body\);/);
     assert.equal(script.match(/\/jobs\/crossask/g)?.length, 1);
     const cfg = await call(consolePort, "GET", "/jobs/config");
-    assert.deepEqual(JSON.parse(cfg.text), { wallet: "intear-wallet", walletName: "Intear Wallet", ttlMin: 15 });
+    // defaultPayer (owner 2026-11-07): "me" unless the console runs with --default-payer agent
+    assert.deepEqual(JSON.parse(cfg.text), { wallet: "intear-wallet", walletName: "Intear Wallet", ttlMin: 15, defaultPayer: "me", attest: null });
   });
 
   test("ARCH-112: the release relay adds no gateway key and logs neither the payment nor the result", async () => {

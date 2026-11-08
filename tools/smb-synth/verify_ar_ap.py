@@ -10,7 +10,8 @@ Checks, per file: the exact column header; unique document numbers; Open Balance
 Due Date = Date + Terms ("Net N"); Days Past Due = max(0, as-of - Due Date) with as-of from the answer key; the Aging
 Bucket of those days. Totals: count, open total and per-bucket totals equal _answer-key/ar-ap-key.json; netPositionCents =
 receivables open - payables open. Bank (unless --bank none): every "DIRECT DEPOSIT - <NAME> DES:" credit has exactly one
-invoice to <NAME> whose Paid equals the credit, listed in the key's bankTies.
+invoice to <NAME> whose Paid equals the credit, listed in the key's bankTies; and the key's bankCashByMonth equals the
+statement re-added here by month (rows dated m/d/yyyy; credits in, debits out as a positive figure, net = their sum).
 """
 import argparse
 import csv
@@ -123,6 +124,21 @@ def main(argv):
                     problems.append(f"bank deposit {payer} {amount} cents: not in the answer key's bankTies")
             if len(ties) != len(credits):
                 problems.append(f"answer key lists {len(ties)} bank ties, the statement has {len(credits)} direct deposits")
+            # Cash per month, re-added from the statement by its own rule (a dated row), against the key.
+            months = {}
+            with open(bank, encoding="utf-8-sig", newline="") as fh:
+                for r in csv.DictReader(fh):
+                    d = re.fullmatch(r"(\d{1,2})/(\d{1,2})/(\d{4})", (r.get("DATE") or "").strip())
+                    if not d:
+                        continue
+                    amount = cents(r["AMOUNT"])
+                    m = months.setdefault(f"{d[3]}-{int(d[1]):02d}", [0, 0, 0])
+                    m[0] += max(amount, 0)
+                    m[1] += max(-amount, 0)
+                    m[2] += amount
+            want = {k: {"cash_in": v[0], "cash_out": v[1], "net_cash_flow": v[2]} for k, v in sorted(months.items())}
+            if key.get("bankCashByMonth") != want:
+                problems.append(f"bankCashByMonth {key.get('bankCashByMonth')} != the statement by month {want} (rerun gen_ar_ap.py --force)")
 
     for x in problems:
         print(f"FAIL  {x}")

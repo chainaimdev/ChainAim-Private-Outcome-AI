@@ -39,7 +39,10 @@
   const tenantPick = document.createElement("select");
   tenantPick.id = "xpayTenant"; tenantPick.disabled = true;
   who.append("Who pays? ", me.l, "· ", bot.l, tenantPick);
-  box.append(label, who, info, pay);
+  // Model attestation of the paid job (owner 2026-11-07): filled after the result is released, only with --attest-url.
+  const proof = document.createElement("div");
+  proof.id = "xattest";
+  box.append(label, who, info, pay, proof);
   ask.closest(".row-actions").after(box);
 
   let config = null;
@@ -74,6 +77,12 @@
     agent = j;
     tenantPick.replaceChildren(...j.tenants.map((t) => { const o = document.createElement("option"); o.value = t.id; o.textContent = `${t.id} · ${t.accountId}`; return o; }));
     who.hidden = !tick.checked;
+    // --default-payer agent (owner 2026-11-07): the box starts ticked with the AI agent paying; Me stays one click away.
+    const c = await fetch("/jobs/config").then((x) => (x.ok ? x.json() : null)).catch(() => null);
+    if (c && c.defaultPayer === "agent") {
+      tick.checked = true; bot.r.checked = true; me.r.checked = false; tenantPick.disabled = false;
+      await tick.onchange();
+    }
   }).catch((e) => console.info("[tab 03] agent mode is not available:", e.message));
   // The browser can restore the box as ticked when the page is reloaded: load the wallet config then too, not only on a click.
   if (tick.checked) tick.onchange();
@@ -102,7 +111,7 @@
     }
     const reader = r.body.getReader();
     const decoder = new TextDecoder();
-    let buffer = "", result, quoted = null, settled = null;
+    let buffer = "", result, quoted = null, settled = null, ranJob = null;
     for (;;) {
       const { value, done } = await reader.read();
       if (done) break;
@@ -117,7 +126,7 @@
           const found = Object.entries(d.counts ?? {});
           step(found.length ? `Question masked on this PC before the agent's model saw it: ${found.map(([k, n]) => `${k} ×${n}`).join(", ")}` : "Question checked on this PC before the agent's model saw it: nothing to mask");
         } else if (type === "tool_called") step("The agent asked ChainAim to run the job");
-        else if (type === "job_ran") step(`Job run and held (id ${String(d.jobId).slice(0, 8)}…); the result stays hidden until paid`);
+        else if (type === "job_ran" && (ranJob = /^[0-9a-f]{32}$/.test(String(d.jobId)) ? String(d.jobId) : null, true)) step(`Job run and held (id ${String(d.jobId).slice(0, 8)}…); the result stays hidden until paid`);
         else if (type === "quoted") { quoted = d; step(`Quoted ${Number(d.totalUsd)} USDC on ${d.network} to ${d.payTo}`); }
         else if (type === "signed") step(`Payment signed by ${d.account} (ChainAim's relayer pays the gas)`);
         else if (type === "settled") { settled = d; step("Settled on NEAR · ", explorerLink(d.network, d.transaction)); }
@@ -127,10 +136,79 @@
         else if (type === "error") throw new Error(`${d.reason}${d.transaction ? ` (transaction ${d.transaction})` : ""}`);
       }
     }
+    if (result !== undefined && settled && ranJob) attestPanel(ranJob);
     if (result === undefined || !settled) throw new Error(`The agent's steps ended before the result arrived${settled ? ` (transaction ${settled.transaction}: it was paid)` : ""}.`);
     info.replaceChildren(`Paid ${Number(quoted?.totalUsd)} USDC by the AI agent from ${t.accountId} on ${settled.network} · receipt `, explorerLink(settled.network, settled.transaction));
     info.className = "muted";
     return result;
+  }
+
+  /**
+   * AI proof of a paid job: GET /jobs/<id>/attestation (the console asks ca-attest in the background after the quote, so
+   * the page asks again every attest.pollMs, at most attest.pollMax times, until the verdict is final). Plain words first;
+   * the checks, signer, chat id and signed text sit under "Show proof". Covers the masked text the gateway sent, not the
+   * buyer's original, and not whether the answer is right (that is the figure check).
+   */
+  function attestPanel(jobId) {
+    proof.replaceChildren();
+    if (!config || !config.attest || !/^[0-9a-f]{32}$/.test(jobId)) return;
+    const head = document.createElement("p"); head.className = "muted"; head.textContent = "AI proof: checking the model calls…";
+    const list = document.createElement("ul");
+    proof.append(head, list);
+    const tick3 = (v) => (v === true ? "✓" : v === false ? "✗" : "not checked");
+    const callLine = (c) => {
+      const li = document.createElement("li");
+      const who = `Call ${c.index + 1} · ${c.model ?? c.servedModel ?? "model"}: `;
+      const text = c.status === "verified" ? "✓ verified on NEAR AI's sealed hardware (Intel TDX enclave, NVIDIA GPU)"
+        : c.status === "not_applicable" ? "not attestable (this provider gives no enclave proof)"
+        : c.status === "unavailable" ? (c.reason === "checking" ? "checking…" : `not ready yet: ${c.reason ?? "no evidence"}`)
+        : `✗ not verified: ${c.reason ?? "no reason given"}`;
+      li.textContent = who + text;
+      li.className = c.status === "verified" ? "" : c.status === "unverified" ? "err" : "muted";
+      if (c.status === "verified" || c.status === "unverified") {
+        const d = document.createElement("details");
+        const s = document.createElement("summary"); s.className = "muted"; s.textContent = "Show proof";
+        const rows = [
+          ["Genuine Intel TDX enclave", tick3(c.tdx)],
+          ["Genuine NVIDIA GPU in confidential mode", tick3(c.gpu)],
+          ["Answer signed inside the enclave", tick3(c.signature)],
+          ["Signed bytes match what ChainAim sent and received", tick3(c.hashes)],
+          ["Signature kind", c.signatureKind ?? "—"],
+          ["Enclave signing key", c.signingAddress ? `${c.signingAddress} (${c.signingAlgo ?? "?"})` : "—"],
+          ["Enclave report checked", c.reportFetchedAt ? new Date(c.reportFetchedAt).toLocaleString() : "—"],
+          ["NEAR AI chat id", c.chatId ?? "—"],
+          ["Signed text", c.signedText ?? "—"],
+        ];
+        const t = document.createElement("table");
+        for (const [k, v] of rows) { const tr = t.insertRow(); tr.insertCell().textContent = k; tr.insertCell().textContent = v; }
+        const a = document.createElement("a"); a.href = "https://cloud.near.ai/verify"; a.target = "_blank"; a.rel = "noopener";
+        a.textContent = "Verify it yourself at cloud.near.ai/verify (paste the chat id) ↗";
+        d.append(s, t, a);
+        li.append(d);
+      }
+      return li;
+    };
+    let n = 0;
+    const ask = async () => {
+      n++;
+      let a = null;
+      try { const r = await fetch(`/jobs/${jobId}/attestation`); a = r.ok ? await r.json() : null; } catch { a = null; }
+      if (a && Array.isArray(a.calls)) {
+        list.replaceChildren(...a.calls.map(callLine));
+        const verified = a.calls.filter((c) => c.status === "verified").length, attestable = a.calls.filter((c) => c.status !== "not_applicable").length;
+        head.className = a.summary === "unverified" ? "err" : "muted";
+        head.textContent = a.summary === "verified" ? `AI proof: ✓ ${verified} of ${attestable} NEAR AI call(s) verified. The masked data sent to the model and its answer were processed and signed inside a hardware-sealed enclave; nobody in between could read or change them. (Covers what the gateway sent after masking; correctness is the figure check above.)`
+          : a.summary === "partly" ? `AI proof: ${verified} of ${attestable} NEAR AI call(s) verified; see each call below.`
+          : a.summary === "unverified" ? "AI proof: ✗ the NEAR AI call could not be verified; see the reason below."
+          : a.summary === "not_applicable" ? "AI proof: none of this job's models can be attested (only NEAR AI gives enclave proof)."
+          : a.summary === "unavailable" ? "AI proof: the evidence was not ready; the NEAR admin UI's Jobs tab shows any later re-check."
+          : "AI proof: checking the model calls…";
+        if (a.summary !== "pending") return;
+      }
+      if (n < config.attest.pollMax) setTimeout(ask, config.attest.pollMs);
+      else if (!a || a.summary === "pending") head.textContent = "AI proof: still checking; the NEAR admin UI's Jobs tab will show the result.";
+    };
+    ask();
   }
 
   /** Shows the total and a Pay button; resolves with the released result, or rejects with one plain sentence. */
@@ -163,6 +241,7 @@
           link.textContent = `${r.transaction.slice(0, 8)}…${r.transaction.slice(-6)} ↗`;
           info.replaceChildren(`Paid ${Number(job.totalUsd)} USDC on ${job.network} · receipt `, link);
           info.className = "muted";
+          attestPanel(job.jobId);
           resolve(r.result);
         } catch (e) { pay.replaceChildren(); reject(e); }
       };
@@ -173,7 +252,7 @@
   const free = postData;
   postData = async (url, body) => {
     if (url !== "/crossask" || !tick.checked) return free(url, body);
-    pay.replaceChildren();
+    pay.replaceChildren(); proof.replaceChildren();
     if (agentChosen()) return agentStep(body);
     const job = await free("/jobs/crossask", body);
     return payStep(job);

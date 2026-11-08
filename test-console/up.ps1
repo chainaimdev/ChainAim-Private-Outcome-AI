@@ -93,6 +93,8 @@ param(
   [string]$AgentModelId = "nvidia.nemotron-nano-3-30b",
   [int]$AgentTimeoutSec = 300,
   [int]$AgentPort = 8760,
+  [string]$DefaultAnswerModel = "",
+  [ValidateSet("me", "agent")][string]$DefaultPayer = "me",
   [ValidateSet("on", "off")][string]$Attest = "on",
   [ValidateSet("on", "off")][string]$AttestGpuCheck = "on",
   [int]$AttestPort = 8770,
@@ -246,6 +248,12 @@ try {
     "--gateway=http://gateway.railway.internal:8700", "--paywall=http://paywall:8080", "--analyst=http://analyst:8740", "--chain-query=http://chain-query:8750",
     "--spy=http://openrouter-stub:5004", "--data-config=/app/config/data-sources.docker.json", "--ledger-source=dir:/gateway-data/ledger",
     "--dataset-root=private=/data/priv-ai-data/chainaim3003", "--models-file=/app/$($ModelsFile.Replace('\', '/'))", "--near-wallet=$NearWallet")
+  # Tab 03 defaults (owner 2026-11-07): only added when set, so the command is otherwise exactly as before.
+  if ($DefaultAnswerModel) {
+    if ($DefaultAnswerModel -notmatch '^[\w.-]+/[\w.:-]+$') { Stop-Here "-DefaultAnswerModel must look like provider/name, e.g. nearai/deepseek-v4.1-flash" }
+    $consoleCmd += "--default-answer-model=$DefaultAnswerModel"
+  }
+  if ($DefaultPayer -ne "me") { $consoleCmd += "--default-payer=$DefaultPayer" }
   if ($PaidJobs -eq "on") {
     $consoleCmd += @("--paid-jobs=on", "--jobs-internal-host=0.0.0.0", "--jobs-internal-port=8731", "--pricing-catalog=/app/$cat",
       "--fee-per-model-call-usd=$($ps['FEE_PER_MODEL_CALL_USD'])", "--fee-analyst-usd=$($ps['FEE_ANALYST_USD'])", "--near-gas-fee-usd=$($ps['NEAR_GAS_FEE_USD'])",

@@ -42,9 +42,19 @@ test("gen writes both files and the key, ties the ACME deposit to one invoice, a
     assert.equal(key.payables.count, 7);
     assert.equal(key.netPositionCents, key.receivables.openCents - key.payables.openCents);
     assert.deepEqual(key.bankTies.map((t: any) => [t.customer, t.paidCents]), [["ACME CORP", 150000]]);
+    // Cash flow vs installment (owner 2026-11-07): the dated statement rows by month, the HEADER row (no date) left out.
+    assert.deepEqual(key.bankCashByMonth, { "2026-10": { cash_in: 150000, cash_out: 8540, net_cash_flow: 141460 } });
     const v = run(VERIFY, ["--dir", dir]);
     assert.equal(v.status, 0, v.stdout + v.stderr);
     assert.match(v.stdout, /ALL CHECKS PASS: 8 invoices, 7 bills, as of 10\/15\/2026/);
+    // A wrong monthly figure in the key is caught by the verifier's own re-adding of the statement.
+    const keyPath = join(dir, "_answer-key", "ar-ap-key.json");
+    const good = readFileSync(keyPath, "utf8");
+    writeFileSync(keyPath, JSON.stringify({ ...key, bankCashByMonth: { "2026-10": { cash_in: 150000, cash_out: 8541, net_cash_flow: 141459 } } }));
+    const bad = run(VERIFY, ["--dir", dir]);
+    assert.equal(bad.status, 1, bad.stdout);
+    assert.match(bad.stdout, /FAIL  bankCashByMonth .* != the statement by month/);
+    writeFileSync(keyPath, good);
     // Same seed, same files.
     const before = readFileSync(join(dir, "AP-OPEN-BILLS.csv"), "utf8");
     assert.equal(run(GEN, ["--out-dir", dir, "--seed", "7", "--force"]).status, 0);

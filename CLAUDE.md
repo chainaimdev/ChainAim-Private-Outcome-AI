@@ -44,7 +44,8 @@ not advice. Hooks enforce several of them mechanically.
 
 8. **One consolidated script for the user, never piecemeal (owner rule, 2026-11-06).** Whenever the user must start,
    restart, rebuild, check, stop or act on the running stack (both repositories: this one and chainaim-adminUI-NEAR),
-   give exactly ONE command: `.\test-console\desk.ps1` with the switches it needs (`-Check`, `-Stop`, `-Test`,
+   give exactly ONE command: `.\test-console\desk.ps1` with the switches it needs (`-All` = tests + start + log windows +
+   UI smoke check, `-Check`, `-Stop`, `-Test`,
    `-Attest`, `-RejudgeReceiver` / `-RejudgeReason`, ...). Never hand the user a sequence of `docker`, `up.ps1`,
    `nearadminup.ps1`, `switch-models.ps1`, `docker exec` or `curl` commands to run one by one. If a needed action is
    not in `desk.ps1` yet, add it to `desk.ps1` (and a guard in `scripts/test/desk.test.ts`) first, then give the one

@@ -53,8 +53,25 @@ one READY table across both. Neither launcher is changed or renamed; each team k
                 to the sample bank statement's deposits) into sample-data\smb-fin\statements, then check them
                 (verify_ar_ap.py). Same seed, same files. Changes only those two files and their _answer-key.
   Stray words are refused (no positional parameters), so a typo such as "-Check memor" stops instead of running -Logs.
+  -All  [-AllSkipTests] [-AllSkipSmoke] [-AllSmbSample [-SmbSeed 1]] [-Windows analyst,console-api] [the -Smoke... options]
+        [-Agent] [-Attest] [-Build]
+                everything in one command (owner, 2026-11-07), in this order, stopping at the first failure:
+                1. terminal suites: scripts\check-deps.ts and the -Test suites (no containers needed);
+                   with -AllSmbSample, then this script's own -SmbSample (smb-fin-1 receivables, payables and answer key
+                   regenerated and verified, so the smoke check compares with a current key; owner 2026-11-07);
+                2. the normal start: both repositories' Docker launchers (images rebuilt only when the code changed,
+                   Docker's cache), the READY table;
+                3. log windows: one PowerShell window per -Windows service following its container log (docker logs -f;
+                   default analyst); close a window to stop watching, the service keeps running;
+                4. the browser pages, console 8730 and NEAR admin UI 8800 (unless -NoBrowser), as soon as READY;
+                5. the UI template smoke check (-Smoke, same options) against the running console API. A smoke FAIL is
+                   a result check: the stack keeps running and both UIs stay open. Exit 0 only when every step passed.
+  -Windows NAME[,NAME]  also usable with a plain start: open these log windows after READY (names as for -Logs).
   -Ship -ShipMessage "TEXT"  [-ShipFiles a,b] [-ShipBranch NAME] [-ShipRemote origin] [-ShipTrailer "TEXT"]
-         [-ShipSkipTests] [-ShipNoPush] [-ShipDryRun]
+         [-ShipTag vX.Y.Z [-ShipTagMessage "TEXT"]] [-ShipSkipTests] [-ShipNoPush] [-ShipDryRun]
+                -ShipTag (owner 2026-11-07): an annotated tag on the new commit (message -ShipTagMessage, else -ShipMessage),
+                pushed after the branch and checked on the remote. Refused before any test when the tag already exists
+                here or on the remote; never moves or deletes a tag. With -ShipNoPush the tag is made here only.
                 test, commit and push this checkout's changes in one command (owner, 2026-11-07). Refuses a detached HEAD,
                 a branch behind its remote (git fetch first; pull yourself, never done here) and a clean tree. Commits
                 every changed or new file git status shows, or only -ShipFiles (each must have a change; the rest is
@@ -63,6 +80,8 @@ one READY table across both. Neither launcher is changed or renamed; each team k
                 git push REMOTE BRANCH and checks nothing is left unpushed. Never force-pushes, pulls, resets or checks out.
                 -ShipTrailer: an extra message paragraph (e.g. Co-Authored-By lines). -ShipDryRun: tests and the file
                 list only. -ShipNoPush: commit, no push. Runs on its own: no other mode switches with it.
+  -RequireModels local,bedrock,nearai   model families that must be in the tab 02 / tab 03 pick lists (the gateway's
+                /v1/models via the console API); one missing is a READY-table problem naming the switch-models.ps1 fix.
   -NoBrowser    do not open the pages
   -Settings     settings file (default config\local\desk.json; copy config\local\desk.example.json)
 
@@ -105,15 +124,23 @@ param(
   [int]$ChiroLeakSeed = 1,
   [string]$RejudgeReceiver = "",
   [string]$RejudgeReason = "",
+  [switch]$All,
+  [switch]$AllSkipTests,
+  [switch]$AllSkipSmoke,
+  [switch]$AllSmbSample,
+  [string[]]$Windows = @(),
   [switch]$Ship,
   [string]$ShipMessage = "",
   [string[]]$ShipFiles = @(),
   [string]$ShipBranch = "",
   [string]$ShipRemote = "origin",
   [string]$ShipTrailer = "",
+  [string]$ShipTag = "",
+  [string]$ShipTagMessage = "",
   [switch]$ShipSkipTests,
   [switch]$ShipNoPush,
   [switch]$ShipDryRun,
+  [string[]]$RequireModels = @("local", "bedrock", "nearai"),
   [string]$Settings = "config\local\desk.json"
 )
 $ErrorActionPreference = "Stop"
@@ -137,6 +164,8 @@ function HttpJson([string]$url) {
   }
 }
 function Quiet([scriptblock]$block) { $prev = $ErrorActionPreference; $ErrorActionPreference = "Continue"; try { & $block } finally { $ErrorActionPreference = $prev } }
+# Service name -> container, shared by -Logs and -Windows.
+$LogContainers = [ordered]@{ "gateway" = "ca-gateway"; "paywall" = "ca-paywall"; "presidio" = "ca-presidio"; "analyst" = "ca-analyst"; "chain-query" = "ca-chain-query"; "console-api" = "ca-console-api"; "agent" = "ca-agent"; "attest" = "ca-attest"; "near-watch" = "ca-near-watch" }
 
 # Re-judge options are checked before anything starts.
 if ($RejudgeReceiver -or $RejudgeReason) {
@@ -148,11 +177,25 @@ if ($RejudgeReceiver -or $RejudgeReason) {
 
 # -Ship options are checked before anything else runs.
 if ($Ship -and ($Check -or $Stop -or $Test -or $Build -or $WithStub -or $Agent -or $Attest -or $Logs.Count -or $Memory -or $Smoke -or $SmbSample -or $ChiroSample -or $RejudgeReceiver)) { Stop-Here "-Ship runs on its own: leave out the other mode switches" }
-if (-not $Ship -and ($ShipMessage -or $ShipFiles.Count -or $ShipBranch -or $ShipTrailer -or $ShipSkipTests -or $ShipNoPush -or $ShipDryRun)) { Stop-Here "the -Ship... options need -Ship" }
+# -All and -Windows options are checked before anything else runs.
+if ($All -and ($Check -or $Stop -or $Test -or $Ship -or $Logs.Count -or $Memory -or $Smoke -or $SmbSample -or $ChiroSample)) { Stop-Here "-All runs the tests, the start and the smoke check itself: leave out -Check, -Stop, -Test, -Ship, -Logs, -Memory, -Smoke, -SmbSample and -ChiroSample" }
+if (-not $All -and ($AllSkipTests -or $AllSkipSmoke -or $AllSmbSample)) { Stop-Here "-AllSkipTests, -AllSkipSmoke and -AllSmbSample need -All" }
+$WindowNames = @($Windows | ForEach-Object { $_ -split "," } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+if ($All -and -not $WindowNames.Count) { $WindowNames = @("analyst") }
+foreach ($n in $WindowNames) { if (-not $LogContainers.Contains($n)) { Stop-Here "-Windows $n is not a service here; use one of: $($LogContainers.Keys -join ', ')" } }
+if ($WindowNames.Count -and ($Check -or $Stop -or $Test -or $Ship -or $Logs.Count -or $Memory -or $Smoke -or $SmbSample -or $ChiroSample)) { Stop-Here "-Windows opens log windows after a start: use it with a plain start or -All" }
+if ($All -and -not $AllSkipSmoke) {
+  if (@("default", "all") -notcontains $SmokeSets) { Stop-Here "-SmokeSets must be default or all" }
+  if (@("on", "off") -notcontains $SmokeCheckAnswers) { Stop-Here "-SmokeCheckAnswers must be on or off" }
+  if ($SmokeModel -notmatch '^[\w.-]+/[\w.:-]+$') { Stop-Here "-SmokeModel must look like provider/name, e.g. bedrock/nemotron-nano-3-30b" }
+}
+if (-not $Ship -and ($ShipMessage -or $ShipFiles.Count -or $ShipBranch -or $ShipTrailer -or $ShipTag -or $ShipTagMessage -or $ShipSkipTests -or $ShipNoPush -or $ShipDryRun)) { Stop-Here "the -Ship... options need -Ship" }
+if ($ShipTag -and $ShipTag -notmatch '^v\d+\.\d+\.\d+$') { Stop-Here "-ShipTag must look like v1.4.8" }
+if ($ShipTagMessage -and -not $ShipTag) { Stop-Here "-ShipTagMessage needs -ShipTag" }
 
 # ---------------------------------------------------------------- -Logs: read-only, needs nothing else
 if ($Logs.Count) {
-  $known = [ordered]@{ "gateway" = "ca-gateway"; "paywall" = "ca-paywall"; "presidio" = "ca-presidio"; "analyst" = "ca-analyst"; "chain-query" = "ca-chain-query"; "console-api" = "ca-console-api"; "agent" = "ca-agent"; "attest" = "ca-attest"; "near-watch" = "ca-near-watch" }
+  $known = $LogContainers
   $names = @($Logs | ForEach-Object { $_ -split "," } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
   foreach ($n in $names) { if (-not $known.Contains($n)) { Stop-Here "-Logs $n is not a service here; use one of: $($known.Keys -join ', ')" } }
   if ($LogLines -lt 1 -or $LogLines -gt 2000) { Stop-Here "-LogLines must be 1-2000" }
@@ -279,6 +322,26 @@ if ($Test) {
   Say "FAIL" "a suite failed (root suites exit $($r[0]), analyst exit $($r[1])): see the not ok lines above"; exit 1
 }
 
+# ---------------------------------------------------------------- -All step 1: the terminal suites, before any start
+if ($All) {
+  if ($AllSkipTests) { Say "NOTE" "-All: terminal suites skipped (-AllSkipTests)" }
+  else {
+    Say "ALL" "step 1 of 5: terminal suites"
+    & node scripts\check-deps.ts | Out-Host
+    if ($LASTEXITCODE) { Stop-Here "-All step 1: check-deps failed (exit $LASTEXITCODE); nothing started" }
+    $r = Invoke-Suites
+    if ($r[0] -or $r[1]) { Stop-Here "-All step 1: a suite failed (root suites exit $($r[0]), analyst exit $($r[1])); nothing started" }
+    Say "OK" "all terminal suites passed"
+  }
+  # -AllSmbSample: this script's own -SmbSample as a child (gen_ar_ap.py --force, then verify_ar_ap.py), before any start.
+  if ($AllSmbSample) {
+    Say "ALL" "step 1b: smb-fin-1 sample receivables, payables and answer key (-SmbSample, seed $SmbSeed)"
+    & $PSCommandPath -SmbSample -SmbSeed $SmbSeed -Settings $Settings
+    if ($LASTEXITCODE) { Stop-Here "-All step 1b: -SmbSample failed (exit $LASTEXITCODE); nothing started" }
+  }
+  Say "ALL" "step 2 of 5: start both stacks"
+}
+
 # ---------------------------------------------------------------- -Ship: test, commit and push this checkout's changes
 if ($Ship) {
   if (-not $ShipMessage.Trim()) { Stop-Here "-Ship needs -ShipMessage with the commit message" }
@@ -291,6 +354,15 @@ if ($Ship) {
   if ($LASTEXITCODE) { Stop-Here "git fetch $ShipRemote $branch failed (exit $LASTEXITCODE): nothing changed" }
   $behind = "$(Quiet { & git rev-list --count "HEAD..$ShipRemote/$branch" 2>$null })".Trim()
   if ($behind -ne "0") { Stop-Here "$branch is $behind commit(s) behind $ShipRemote/$branch (bring the branch up to date and re-test first); nothing changed" }
+  if ($ShipTag) {
+    # A tag is never moved or replaced: refuse before any test when it exists here or on the remote.
+    Quiet { & git rev-parse -q --verify "refs/tags/$ShipTag" *> $null }
+    if ($LASTEXITCODE -eq 0) { Stop-Here "tag $ShipTag already exists here: pick the next version; nothing changed" }
+    $remoteTag = "$(Quiet { & git ls-remote --tags $ShipRemote "refs/tags/$ShipTag" 2>$null })".Trim()
+    if ($LASTEXITCODE) { Stop-Here "git ls-remote $ShipRemote failed (exit $LASTEXITCODE): cannot check the tag; nothing changed" }
+    if ($remoteTag) { Stop-Here "tag $ShipTag already exists on ${ShipRemote}: pick the next version; nothing changed" }
+    Say "GIT" "tag $ShipTag is free here and on $ShipRemote"
+  }
   $status = @(Quiet { & git status --porcelain --untracked-files=all 2>$null } | Where-Object { "$_".Length -gt 3 })
   $changed = @($status | ForEach-Object { $p = "$_".Substring(3); if ($p -match ' -> ') { $p = ($p -split ' -> ')[-1] }; $p.Trim('"') })
   if (-not $changed.Count) { Stop-Here "nothing to commit: the working tree is clean" }
@@ -322,13 +394,26 @@ if ($Ship) {
   Quiet { & git @commitArgs }
   if ($LASTEXITCODE) { Stop-Here "git commit failed (exit $LASTEXITCODE): the files stay staged; nothing pushed" }
   Say "OK" "committed $("$(Quiet { & git log --oneline -1 2>$null })".Trim())"
-  if ($ShipNoPush) { Say "OK" "-ShipNoPush: not pushed; push later with git push $ShipRemote $branch"; exit 0 }
+  if ($ShipTag) {
+    $tagMsg = if ($ShipTagMessage) { $ShipTagMessage } else { $ShipMessage }
+    Quiet { & git tag -a $ShipTag -m $tagMsg }
+    if ($LASTEXITCODE) { Stop-Here "git tag $ShipTag failed (exit $LASTEXITCODE): the commit is kept; nothing pushed" }
+    Say "OK" "tagged $ShipTag (annotated) on $("$(Quiet { & git rev-parse --short HEAD 2>$null })".Trim())"
+  }
+  if ($ShipNoPush) { Say "OK" "-ShipNoPush: not pushed; push later with git push $ShipRemote $branch$(if ($ShipTag) { " and git push $ShipRemote $ShipTag" })"; exit 0 }
   Say "GIT" "push $ShipRemote $branch"
   Quiet { & git push $ShipRemote $branch }
   if ($LASTEXITCODE) { Stop-Here "git push failed (exit $LASTEXITCODE): the commit is kept locally; fix the cause above, then git push $ShipRemote $branch" }
   $ahead = "$(Quiet { & git rev-list --count "$ShipRemote/$branch..HEAD" 2>$null })".Trim()
   if ($ahead -ne "0") { Stop-Here "push reported success but $branch is still $ahead commit(s) ahead of $ShipRemote/$branch" }
-  Say "OK" "committed and pushed to $ShipRemote/$branch"
+  if ($ShipTag) {
+    Say "GIT" "push $ShipRemote $ShipTag"
+    Quiet { & git push $ShipRemote "refs/tags/$ShipTag" }
+    if ($LASTEXITCODE) { Stop-Here "git push of tag $ShipTag failed (exit $LASTEXITCODE): the branch is pushed, the tag is kept here; git push $ShipRemote $ShipTag" }
+    $pushedTag = "$(Quiet { & git ls-remote --tags $ShipRemote "refs/tags/$ShipTag" 2>$null })".Trim()
+    if (-not $pushedTag) { Stop-Here "push reported success but $ShipRemote does not list tag $ShipTag" }
+  }
+  Say "OK" "committed and pushed to $ShipRemote/$branch$(if ($ShipTag) { ", tag $ShipTag" })"
   exit 0
 }
 
@@ -437,6 +522,24 @@ function Report {
       $notes += "The paywall's NEAR RPC does not answer (rate-limited or down), so NEAR payments would be refused (nothing is charged). Fix once: add NEAR_RPC_URL_TESTNET=https://near-testnet.drpc.org to $secrets\near-testnet.env, then run this again."
     }
   }
+  # The model pick lists of tab 02 (Private chat) and tab 03 (Across Files) are the gateway's /v1/models, through the console
+  # API. Each required family must be listed (owner 2026-11-07: local, Bedrock and NEAR AI). Listed is checked here, not
+  # answering: a local model also needs Ollama with it pulled (-Memory shows that); Bedrock and NEAR AI need their keys.
+  $gm = HttpJson "http://127.0.0.1:8735/gateway/models"
+  $ids = @(if ($gm -and $gm.models) { @($gm.models) | ForEach-Object { [string]$_ } })
+  if (-not $ids.Count) { Write-Host ("  {0,-20} {1,-5} {2}" -f "models (tabs 02/03)", "DOWN", "the console API listed no models (http://127.0.0.1:8735/gateway/models)"); $bad++ }
+  else {
+    foreach ($fam in $RequireModels) {
+      $hit = @($ids | Where-Object { $_.StartsWith($fam + "/") })
+      if ($hit.Count) { Write-Host ("  {0,-20} {1,-5} {2}" -f "models $fam", "OK", ($hit -join ", ")) }
+      else {
+        Write-Host ("  {0,-20} {1,-5} {2}" -f "models $fam", "MISS", "not in the gateway's list: $($ids -join ', ')"); $bad++
+        if ($fam -eq "nearai") { $notes += "NEAR AI is not in the gateway's model mode: run .\test-console\switch-models.ps1 -To ollama-cpu-8gb-all-nearai once (NEARAI_API_KEY in $secrets\chainaim.env), then this again." }
+        else { $notes += "No $fam model in the gateway's model mode: switch-models.ps1 -To ollama-cpu-8gb-all-nearai lists local, Bedrock and NEAR AI together." }
+      }
+    }
+    if ($gm.defaultAnswerModel) { Write-Host ("  {0,-20} {1,-5} {2}" -f "Explained default", "OK", [string]$gm.defaultAnswerModel) }
+  }
   foreach ($n in $notes) { Write-Host "  $n" }
   return $bad
 }
@@ -509,7 +612,13 @@ if ($agentMode -ne "auto") { $privArgs.Agent = $agentMode }
 if ($agentMode -ne "off" -and $P.agent -and $P.agent.tenants) { $privArgs.AgentTenants = [string]$P.agent.tenants }
 if ($attestMode -ne "auto") { $privArgs.Attest = $attestMode }
 $privArgs.AttestGpuCheck = $attestGpu
-Say "RUN" "test-console\up.ps1 -ReplaceRunning -PaidJobs $($privArgs.PaidJobs)$(if ($Build) { ' -Build' })$(if ($WithStub) { ' -Test' })$(if ($agentMode -ne 'auto') { ' -Agent ' + $agentMode })$(if ($attestMode -ne 'auto') { ' -Attest ' + $attestMode }) -AttestGpuCheck $attestGpu"
+# Tab 03 defaults (owner 2026-11-07): the AI agent pays, NEAR AI words Explained answers; desk.json console.* changes them.
+$defAnswer = if ($P.console -and $null -ne $P.console.defaultAnswerModel) { [string]$P.console.defaultAnswerModel } else { "nearai/deepseek-v4.1-flash" }
+$defPayer = if ($P.console -and $P.console.defaultPayer) { [string]$P.console.defaultPayer } else { "agent" }
+if (@("me", "agent") -notcontains $defPayer) { Stop-Here "$Settings console.defaultPayer must be me or agent" }
+if ($defAnswer) { $privArgs.DefaultAnswerModel = $defAnswer }
+$privArgs.DefaultPayer = $defPayer
+Say "RUN" "test-console\up.ps1 -ReplaceRunning -PaidJobs $($privArgs.PaidJobs)$(if ($Build) { ' -Build' })$(if ($WithStub) { ' -Test' })$(if ($agentMode -ne 'auto') { ' -Agent ' + $agentMode })$(if ($attestMode -ne 'auto') { ' -Attest ' + $attestMode }) -AttestGpuCheck $attestGpu -DefaultPayer $defPayer$(if ($defAnswer) { ' -DefaultAnswerModel ' + $defAnswer })"
 & $privUp @privArgs
 if ($LASTEXITCODE) { Stop-Here "test-console\up.ps1 stopped (exit $LASTEXITCODE): its STOP line above names the fix" }
 
@@ -530,4 +639,28 @@ $bad = Report
 $bad += $script:problems
 if ($bad) { Write-Host ""; Say "NOT READY" "$bad problem(s) above; each names its fix"; exit 1 }
 Write-Host ""; Say "READY" "console http://127.0.0.1:8730$(if ($admin) { '   NEAR admin UI http://127.0.0.1:8800/#jobs' })   stop: .\test-console\desk.ps1 -Stop"
+
+# 7. log windows (-Windows, or analyst by default with -All): one PowerShell window per container log; the service is not
+#    touched, closing a window only stops watching it.
+foreach ($n in $WindowNames) {
+  $c = $LogContainers[$n]
+  $inner = '$host.UI.RawUI.WindowTitle = ''desk log: ' + $n + ' (' + $c + ')''; docker logs -f --tail 50 ' + $c
+  Say "WINDOW" "$n log ($c) in its own window"
+  Start-Process powershell -ArgumentList @("-NoExit", "-NoProfile", "-Command", $inner)
+}
+
+# 8. the pages open as soon as the stack is READY, before the smoke check, so a smoke FAIL never hides the UIs
 if (-not $NoBrowser) { Start-Process "http://127.0.0.1:8730"; if ($admin) { Start-Process "http://127.0.0.1:8800/#jobs" } }
+
+# 9. -All step 4: the UI template smoke check against the stack just started (this script's own -Smoke, same options).
+#    A FAIL here is a result check (a wrong answer or a template error), not the stack: both UIs stay up and open.
+if ($All -and -not $AllSkipSmoke) {
+  Say "ALL" "step 5 of 5: UI template smoke check (both UIs are already up and open)"
+  & $PSCommandPath -Smoke -SmokeModel $SmokeModel -SmokeSets $SmokeSets -SmokeDatasets $SmokeDatasets -SmokeAnswerModel $SmokeAnswerModel -SmokeCheckAnswers $SmokeCheckAnswers -Settings $Settings
+  if ($LASTEXITCODE) {
+    Say "FAIL" "-All step 5: the UI smoke check reported FAIL (exit $LASTEXITCODE): see its FAIL lines and the report in test-console\runs"
+    Say "UP" "the stack is still running and both UIs are open: console http://127.0.0.1:8730$(if ($admin) { '   NEAR admin UI http://127.0.0.1:8800/#jobs' })"
+    exit 1
+  }
+} elseif ($All) { Say "NOTE" "-All: UI smoke check skipped (-AllSkipSmoke)" }
+if ($All) { Say "ALL OK" "terminal suites, both stacks, log windows, both UIs and the UI smoke check all passed" }

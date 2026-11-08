@@ -36,7 +36,7 @@ const BANK = { pack: "finance/rcm/dental", topics: [{ id: "leaks", label: "Leaks
 ] };
 
 type Seen = { method: string; path: string; body: any };
-type Mode = { crossFail?: boolean; zeroRows?: boolean; checkOk?: boolean; warnings?: boolean; rateLimited?: number;
+type Mode = { crossFail?: boolean; zeroRows?: boolean; checkOk?: boolean; warnings?: boolean; rateLimited?: number; datasets?: unknown;
   /** answer checks: the rows a pack query id returns, and the rows every crossask result returns */
   packRows?: Record<string, Record<string, unknown>[]>; crossRows?: Record<string, unknown>[] };
 
@@ -48,7 +48,7 @@ async function double(mode: Mode): Promise<{ server: Server; url: string; seen: 
     const url = new URL(req.url ?? "/", "http://x");
     seen.push({ method: req.method ?? "", path: url.pathname + url.search, body });
     const send = (status: number, j: unknown) => { res.writeHead(status, { "content-type": "application/json" }); res.end(JSON.stringify(j)); };
-    if (req.method === "GET" && url.pathname === "/datasets") return url.searchParams.get("root") === "samples" ? send(200, DATASETS) : send(400, { error: "unknown root" });
+    if (req.method === "GET" && url.pathname === "/datasets") return url.searchParams.get("root") === "samples" ? send(200, mode.datasets ?? DATASETS) : send(400, { error: "unknown root" });
     if (req.method === "POST" && url.pathname === "/analyst/pack-queries") return send(200, BANK);
     if (req.method === "POST" && url.pathname === "/analyst/pack-run") {
       const id = body.ids[0];
@@ -143,6 +143,23 @@ test("--sets all runs every set; --answer-model words the answer (phrase llm), a
       { folder: "/app/sample-data/chiro/SET-1/POS", question: "Q2?", model: DEFAULT_MODEL, answerModel: "local/qwen2.5-3b", phrase: "llm" },
     ]);
   });
+});
+
+test("a template with sql (smb-fin-1, owner 2026-11-07) is sent with it, as the page does, and listed as crossask-sql; one without sql is unchanged", async () => {
+  const SQL = "SELECT 1 AS receivables_open";
+  const datasets = { ...DATASETS, datasets: [{ ...DATASETS.datasets[0], templates: [{ label: "AR vs AP", q: "Owed?", sql: SQL }, { label: "Free", q: "Q1?" }] }] };
+  await withDouble({ datasets }, ["--datasets", "smb", "--answer-model", "nearai/deepseek-v4.1-flash"], ({ code, out, seen, dir }) => {
+    assert.equal(code, 0, out);
+    assert.deepEqual(posts(seen, "/crossask"), [
+      { folder: "/app/sample-data/smb", question: "Owed?", model: DEFAULT_MODEL, answerModel: "nearai/deepseek-v4.1-flash", phrase: "llm", sql: SQL },
+      { folder: "/app/sample-data/smb", question: "Q1?", model: DEFAULT_MODEL, answerModel: "nearai/deepseek-v4.1-flash", phrase: "llm" },
+    ]);
+    assert.match(out, /AR vs AP +crossask-sql +PASS/);
+    assert.match(out, /Free +crossask +PASS/);
+    const r = JSON.parse(readFileSync(join(dir, readdirSync(dir).find((n) => n.startsWith("ui-smoke-"))!), "utf8"));
+    assert.deepEqual(r.items.map((i: { kind: string }) => i.kind), ["crossask-sql", "crossask"]);
+  });
+  await withDouble({ datasets }, ["--datasets", "smb", "--dry-run"], ({ code, out }) => { assert.equal(code, 0, out); assert.match(out, /AR vs AP +crossask-sql +PLAN/); });
 });
 
 test("a gateway rate_limited refusal is waited out and sent again (--rate-limit-retries); with 0 retries it is FAIL", async () => {

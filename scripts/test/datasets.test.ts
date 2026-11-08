@@ -21,6 +21,46 @@ test("every dataset has an id, a label, a 1-2 sentence description, a relative f
   }
 });
 
+test("a crossask template's sql, when it has one, is a single SELECT (the analyst runs it as is; no model writes it)", () => {
+  for (const d of reg.datasets.filter((x: { engine: string }) => x.engine === "crossask")) {
+    for (const t of d.templates as { label: string; sql?: unknown }[]) {
+      if (t.sql === undefined) continue;
+      assert.equal(typeof t.sql, "string", `${d.id} ${t.label}: sql must be text`);
+      const s = (t.sql as string).trim();
+      assert.match(s, /^SELECT\b/i, `${d.id} ${t.label}: sql must start with SELECT`);
+      assert.ok(!s.includes(";"), `${d.id} ${t.label}: one statement, no ';'`);
+    }
+  }
+});
+
+test("smb-fin-1 (owner 2026-11-07): both templates run an exact query, each with an exact answer check (not figuresPresent)", () => {
+  const smb = reg.datasets.find((d: { id: string }) => d.id === "smb-fin-1");
+  assert.deepEqual(smb.templates.map((t: { label: string }) => t.label), ["Cash flow vs installment", "Receivables vs payables: need a loan?"]);
+  for (const t of smb.templates) assert.ok(typeof t.sql === "string" && t.sql.trim(), `${t.label}: sql`);
+  const checks = JSON.parse(readFileSync(new URL("../../config/answer-checks.json", import.meta.url), "utf8"));
+  for (const t of smb.templates) {
+    const rule = checks.rules.find((r: { datasets: string[]; item: string }) => r.datasets.includes("smb-fin-1") && r.item === t.label);
+    assert.ok(rule, `${t.label}: a rule in config/answer-checks.json`);
+    assert.ok(rule.compare.every((c: { type: string }) => c.type !== "figuresPresent"), `${t.label}: the exact query's columns are known, so compare them exactly`);
+    // every column a rule reads is one the template's SELECT names
+    for (const c of rule.compare) for (const col of [c.column, ...(c.keyColumns ?? []), ...Object.keys(c.values ?? {})].filter(Boolean)) {
+      assert.match(t.sql, new RegExp(`\\bAS ${col}\\b`), `${t.label}: the sql names column ${col}`);
+    }
+  }
+});
+
+test("tab 03 page: a template with sql fills the query box and hides the query model; a free question brings it back", () => {
+  const page = readFileSync(new URL("../../test-console/console/index.html", import.meta.url), "utf8");
+  assert.match(page, /id="xaskModelWrap"/);
+  assert.match(page, /id="xaskExact" hidden/);
+  assert.match(page, /xExact\(t\.sql \?\? ""\)/, "the template button passes its sql");
+  assert.match(page, /\$\("xaskModelWrap"\)\.hidden = Boolean\(ds\.exactSql\)/);
+  assert.match(page, /if \(ds\.exactSql\) \{ xExact\(""\)/, "editing the question undoes the exact query");
+  assert.match(page, /<select id="xaskAnswerModel">/, "Words the answer stays");
+  // like a pack's first question, the first template starts picked (its exact query, not the page's built-in text)
+  assert.match(page, /xExact\(d\.templates\[0\]\.sql \?\? ""\)/, "the first template is picked when the dataset opens");
+});
+
 test("the two roots: samples inside the repository (git-ignored), private outside it; both are allowed data roots", () => {
   assert.equal(reg.roots.samples, "sample-data");
   assert.match(reg.roots.private, /^[A-Za-z]:\\/);

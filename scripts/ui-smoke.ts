@@ -3,7 +3,9 @@
  * run against its dataset folder through the console API, with exactly the requests the page sends
  * (test-console/console/index.html, server.ts):
  *   GET  /datasets?root=<root>                                   the datasets, their folders (as the console API sees them) and sets
- *   POST /crossask {folder, question, model, answerModel?, phrase}  engine crossask: each template of config/datasets.json
+ *   POST /crossask {folder, question, model, answerModel?, phrase, sql?}  engine crossask: each template of config/datasets.json;
+ *                                                                a template with sql sends it (kind crossask-sql: no model writes
+ *                                                                the query, exactly as the page does when that template is picked)
  *   POST /analyst/pack-queries {pack}                            engine domain-pack: the pack's query bank
  *   POST /analyst/pack-run {folder, pack, ids:[id]}              each exact (sql) entry, one id per call as the page does
  *   POST /packask {folder, pack, id, model}                      each explained (model) entry: fact sheet, model, figure check
@@ -48,7 +50,7 @@
  *   --datasets-config FILE  the datasets' relative folders (default config/datasets.json)
  *
  * PASS / WARN / SKIP / FAIL:
- *   crossask      PASS: no error, a result, rows > 0. WARN: the console's join warnings, unverified figures, 0 rows with
+ *   crossask, crossask-sql  PASS: no error, a result, rows > 0. WARN: the console's join warnings, unverified figures, 0 rows with
  *                 --require-rows off. FAIL: HTTP error, an error, no result, 0 rows with --require-rows on.
  *   pack-sql      PASS: columns and no error. SKIP: skipped (missing file kind). FAIL: an error.
  *   answer check  (crossask and pack-sql with a rule) a result that differs from the answer key is FAIL; the note says which
@@ -63,10 +65,10 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 
 type Status = "PASS" | "WARN" | "SKIP" | "FAIL" | "PLAN";
-type Kind = "crossask" | "pack-sql" | "pack-explained" | "dataset";
+type Kind = "crossask" | "crossask-sql" | "pack-sql" | "pack-explained" | "dataset";
 type Item = { dataset: string; set: string; item: string; id?: string; kind: Kind; status: Status; rows: number | null; ms: number; tries?: number; note: string; sql?: string | null;
   check?: "ok" | "mismatch" | "none" };
-type Dataset = { id: string; label?: string; engine: string; pack: string | null; templates: { label: string; q: string }[]; templatesFrom: string | null;
+type Dataset = { id: string; label?: string; engine: string; pack: string | null; templates: { label: string; q: string; sql?: string }[]; templatesFrom: string | null;
   defaultSubfolder: string | null; folder: string; exists: boolean; allowed: boolean; files: string[]; sets: { name: string; files: string[] }[] };
 type BankEntry = { id: string; title: string; kind: "sql" | "model"; question?: string };
 
@@ -380,13 +382,16 @@ export async function run(argv: string[], out: (s: string) => void = (s) => proc
     for (const set of setsOf(d, o.sets)) {
       const folder = dsJoin(d.folder, set);
       for (const t of d.templates) {
-        if (o.dryRun) { add({ ...base(d, set, t.label, "crossask"), status: "PLAN", rows: null, ms: 0, note: oneLine(t.q, 80) }); continue; }
-        // The page's body (index.html "xaskGo"): answerModel and phrase llm only when an answer model is picked.
-        const body = { folder, question: t.q, model: o.model, ...(o.answerModel ? { answerModel: o.answerModel } : {}), phrase: o.answerModel ? "llm" : "none" };
+        // A template with sql runs that exact query (the page fills it in and hides the query model); otherwise a model writes it.
+        const exact = typeof t.sql === "string" && t.sql.trim() ? t.sql : undefined;
+        const kind: Kind = exact ? "crossask-sql" : "crossask";
+        if (o.dryRun) { add({ ...base(d, set, t.label, kind), status: "PLAN", rows: null, ms: 0, note: oneLine(t.q, 80) }); continue; }
+        // The page's body (index.html "xaskGo"): answerModel and phrase llm only when an answer model is picked; sql when the template has one.
+        const body = { folder, question: t.q, model: o.model, ...(o.answerModel ? { answerModel: o.answerModel } : {}), phrase: o.answerModel ? "llm" : "none", ...(exact ? { sql: exact } : {}) };
         const [r, ms, err] = await timed(() => modelCall("/crossask", body));
-        if (err) { add({ ...base(d, set, t.label, "crossask"), status: "FAIL", rows: null, ms, note: oneLine(err) }); continue; }
+        if (err) { add({ ...base(d, set, t.label, kind), status: "FAIL", rows: null, ms, note: oneLine(err) }); continue; }
         const v = withCheck(d, set, t.label, r!.json?.result?.rows, judgeCrossask(o, r!));
-        add({ ...base(d, set, t.label, "crossask"), ms, ...v, ...(o.reportSql ? {} : { sql: undefined }) });
+        add({ ...base(d, set, t.label, kind), ms, ...v, ...(o.reportSql ? {} : { sql: undefined }) });
       }
     }
   }

@@ -148,11 +148,53 @@
    "unit": "cents",
    "compare": [
     {
-     "type": "figuresPresent",
-     "paths": [
-      "receivables.openCents",
-      "payables.openCents"
-     ]
+     "type": "cell",
+     "column": "receivables_open",
+     "path": "receivables.openCents"
+    },
+    {
+     "type": "cell",
+     "column": "payables_open",
+     "path": "payables.openCents"
+    },
+    {
+     "type": "cell",
+     "column": "net_position",
+     "path": "netPositionCents"
+    },
+    {
+     "type": "cell",
+     "column": "invoices_open",
+     "path": "receivables.count",
+     "kind": "count"
+    },
+    {
+     "type": "cell",
+     "column": "bills_open",
+     "path": "payables.count",
+     "kind": "count"
+    }
+   ]
+  },
+  {
+   "datasets": [
+    "smb-fin-1"
+   ],
+   "item": "Cash flow vs installment",
+   "key": "ar-ap-key.json",
+   "unit": "cents",
+   "compare": [
+    {
+     "type": "rowsByKey",
+     "keyColumns": [
+      "month"
+     ],
+     "values": {
+      "cash_in": "amount",
+      "cash_out": "amount",
+      "net_cash_flow": "amount"
+     },
+     "path": "bankCashByMonth"
     }
    ]
   }

@@ -175,3 +175,47 @@ test("-Ship: test, commit and push in one command (owner, 2026-11-07); refuses b
   assert.ok(!/docker|Stop-Process/.test(s), "touches no service");
   assert.match(code, /function Invoke-Suites \{/);
 });
+
+test("-All: terminal suites before any start, then the start, log windows, the UI smoke check, the pages (owner, 2026-11-07)", () => {
+  assert.match(code, /\[switch\]\$All,/); assert.match(code, /\[string\[\]\]\$Windows = @\(\),/);
+  const t1 = code.indexOf("if ($All) {"), start = code.indexOf("# 1. pre-flight"), up = code.indexOf("& $privUp @privArgs");
+  const win = code.indexOf("Start-Process powershell -ArgumentList"), smoke = code.indexOf("& $PSCommandPath -Smoke"), pages = code.lastIndexOf("Start-Process \"http://127.0.0.1:8730\"");
+  assert.ok(t1 > 0 && t1 < start, "tests run before anything starts");
+  assert.ok(code.slice(t1, start).includes("Invoke-Suites"));
+  assert.ok(up < win && win < pages && pages < smoke, "start, then windows, then the pages, then smoke: a smoke FAIL never hides the UIs (owner run 2026-11-07)");
+  assert.ok(code.indexOf("$READY") === -1 && code.indexOf("Say \"READY\"") < win, "windows only after READY");
+  assert.match(code, /docker logs -f --tail 50 ' \+ \$c/, "a log window only follows a log");
+  assert.match(code, /if \(\$All -and -not \$WindowNames\.Count\) \{ \$WindowNames = @\("analyst"\) \}/);
+  assert.ok(code.indexOf("-All runs the tests") < code.indexOf("if ($Logs.Count)"), "options checked before anything runs");
+  assert.equal((code.match(/Stop-Process/g) ?? []).length, 1);
+});
+
+test("-Ship -ShipTag (owner 2026-11-07): an annotated tag, refused when it exists here or on the remote, pushed after the branch and checked", () => {
+  assert.match(code, /\[string\]\$ShipTag = "",/); assert.match(code, /\[string\]\$ShipTagMessage = "",/);
+  assert.match(code, /if \(\$ShipTag -and \$ShipTag -notmatch '\^v\\d\+\\\.\\d\+\\\.\\d\+\$'\)/, "vX.Y.Z only");
+  const s = code.slice(code.indexOf("if ($Ship) {"), code.indexOf("# ---------------------------------------------------------------- settings and paths"));
+  const exists = s.indexOf("rev-parse -q --verify \"refs/tags/$ShipTag\""), remote = s.indexOf("ls-remote --tags $ShipRemote");
+  assert.ok(exists > 0 && remote > 0 && remote < s.indexOf("Invoke-Suites"), "both checks before any test or commit");
+  const tag = s.indexOf("git tag -a $ShipTag -m $tagMsg"), commit = s.indexOf("Quiet { & git @commitArgs }");
+  const pushBranch = s.indexOf("git push $ShipRemote $branch }"), pushTag = s.indexOf("git push $ShipRemote \"refs/tags/$ShipTag\"");
+  assert.ok(commit < tag && tag < pushBranch && pushBranch < pushTag, "commit, tag, push the branch, then push the tag");
+  assert.match(s, /does not list tag \$ShipTag/, "the pushed tag is checked on the remote");
+  assert.ok(!/tag -d|tag -f|--delete|push -f|--force/.test(s), "never moves or deletes a tag");
+});
+
+test("-All -AllSmbSample: the smb-fin-1 key is regenerated (this script's own -SmbSample) after the suites and before any start (owner 2026-11-07)", () => {
+  assert.match(code, /\[switch\]\$AllSmbSample,/);
+  const t1 = code.indexOf("if ($All) {"), start = code.indexOf("# 1. pre-flight"), smb = code.indexOf("& $PSCommandPath -SmbSample -SmbSeed $SmbSeed");
+  assert.ok(t1 < code.indexOf("Invoke-Suites", t1) && code.indexOf("Invoke-Suites", t1) < smb && smb < start, "suites, then the sample, then the start");
+  assert.match(code, /-SmbSample failed \(exit \$LASTEXITCODE\); nothing started/);
+  assert.match(code, /if \(-not \$All -and \(\$AllSkipTests -or \$AllSkipSmoke -or \$AllSmbSample\)\)/, "-AllSmbSample needs -All");
+});
+
+test("READY needs local, Bedrock and NEAR AI in the tab 02 / 03 model lists (owner 2026-11-07); -RequireModels changes the families", () => {
+  assert.match(code, /\[string\[\]\]\$RequireModels = @\("local", "bedrock", "nearai"\),/);
+  const r = code.slice(code.indexOf("function Report"), code.indexOf("# ================================================================= -Stop"));
+  assert.match(r, /HttpJson "http:\/\/127\.0\.0\.1:8735\/gateway\/models"/);
+  assert.match(r, /foreach \(\$fam in \$RequireModels\)/);
+  assert.match(r, /switch-models\.ps1 -To ollama-cpu-8gb-all-nearai/);
+  assert.match(r, /\$bad\+\+/);
+});

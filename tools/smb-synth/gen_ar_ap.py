@@ -13,13 +13,17 @@ Writes into --out-dir:
   AR-OPEN-INVOICES.csv  Invoice No, Customer, Invoice Date, Due Date, Terms, Amount, Paid, Open Balance, Days Past Due, Aging Bucket
   AP-OPEN-BILLS.csv     Bill No, Vendor, Bill Date, Due Date, Terms, Amount, Paid, Open Balance, Days Past Due, Aging Bucket
   _answer-key/ar-ap-key.json   counts and open totals (cents) per file and aging bucket, the net position (receivables
-                        open minus payables open) and the invoices tied to bank deposits. The folder starts with "_", so the
+                        open minus payables open), the invoices tied to bank deposits and bankCashByMonth: the bank
+                        statement's cash per month ("YYYY-MM": {cash_in, cash_out, net_cash_flow}, cents, cash_out positive),
+                        for the "Cash flow vs installment" template (owner 2026-11-07). The folder starts with "_", so the
                         console never lists it (hideFolders) and the analyst never reads it as data.
 Rules: Open Balance = Amount - Paid > 0 (open items only); Due Date = Invoice/Bill Date + Terms ("Net N" days);
 Days Past Due = max(0, as-of - Due Date); Aging Bucket: Current (0), 1-30, 31-60, 61-90, 91+.
 --bank (relative to --out-dir unless absolute; "none" = no tie): each DEPOSITS row "DIRECT DEPOSIT - <NAME> DES:..." becomes
 one invoice to <NAME>, partly paid by exactly that deposit, dated before it, so receivables and the statement agree.
---invoices counts these tied invoices too. Dates are MM/DD/YYYY like the statement; amounts have two decimals.
+--invoices counts these tied invoices too. bankCashByMonth counts every statement row whose DATE is MM/DD/YYYY (the
+HEADER and SUMMARY rows carry none): AMOUNT > 0 is cash in, < 0 cash out; {} with --bank none or no statement.
+Dates are MM/DD/YYYY like the statement; amounts have two decimals.
 Exit 0 = written, 2 = usage error (including existing files without --force).
 """
 import argparse
@@ -85,6 +89,26 @@ def bank_deposits(path):
     return out
 
 
+def bank_cash_by_month(path):
+    """{"YYYY-MM": {cash_in, cash_out, net_cash_flow}} in cents over every dated statement row (cash_out positive)."""
+    with open(path, encoding="utf-8-sig", newline="") as fh:
+        r = list(csv.DictReader(fh))
+    out = {}
+    for row in r:
+        try:
+            when = datetime.strptime((row.get("DATE") or "").strip(), FMT)
+        except ValueError:
+            continue
+        c = cents(row["AMOUNT"])
+        m = out.setdefault(when.strftime("%Y-%m"), {"cash_in": 0, "cash_out": 0, "net_cash_flow": 0})
+        if c > 0:
+            m["cash_in"] += c
+        elif c < 0:
+            m["cash_out"] -= c
+        m["net_cash_flow"] += c
+    return dict(sorted(out.items()))
+
+
 def row(number, name, issued, terms, amount, paid, as_of):
     due = issued + timedelta(days=terms)
     dpd = max(0, (as_of - due).days)
@@ -127,11 +151,12 @@ def main(argv):
     if not a.force and any(os.path.exists(t) for t in targets):
         raise Usage(f"files exist in {a.out_dir}; add --force to overwrite (same --seed gives the same files)")
 
-    ties = []
+    ties, cash = [], {}
     if a.bank != "none":
         bank = a.bank if os.path.isabs(a.bank) else os.path.join(a.out_dir, a.bank)
         if os.path.isfile(bank):
             ties = bank_deposits(bank)
+            cash = bank_cash_by_month(bank)
         else:
             print(f"NOTE: no bank statement at {bank}: receivables are not tied to deposits")
     if len(ties) > a.invoices:
@@ -164,7 +189,7 @@ def main(argv):
             w.writerows(rows)
     sr, sp = summary(ar), summary(ap)
     key = {"tool": "smb-synth/gen_ar_ap.py", "seed": a.seed, "asOf": a.as_of, "receivables": sr, "payables": sp,
-           "netPositionCents": sr["openCents"] - sp["openCents"], "bankTies": tied}
+           "netPositionCents": sr["openCents"] - sp["openCents"], "bankTies": tied, "bankCashByMonth": cash}
     with open(targets[2], "w", encoding="utf-8", newline="\n") as fh:
         json.dump(key, fh, indent=2)
         fh.write("\n")
