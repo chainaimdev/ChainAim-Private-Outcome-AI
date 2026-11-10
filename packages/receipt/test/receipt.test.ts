@@ -80,6 +80,16 @@ test("ARCH-613 the body is checked field by field before signing", () => {
   assert.throws(() => signReceipt(half, signer), /counterOf \/ reduced must be both present or both absent/);
 });
 
+test("ARCH-613 a call without attestation carries no hashes; an attested call must carry both", () => {
+  const signer = signerFromKey(generateKeyPairSync("ed25519").privateKey);
+  const plain = { ...body({ x: 1 }), calls: [{ servedModel: "bedrock/nemotron", zone: "public-api", attestStatus: "none" as const }] };
+  assert.equal(verifyReceipt(signReceipt(plain, signer), signer.publicKeyPem).ok, true);
+  const missing = { ...body({ x: 1 }), calls: [{ servedModel: "m", attestStatus: "pending" as const }] };
+  assert.throws(() => signReceipt(missing, signer), /hashes on an attested call/);
+  const bad = { ...body({ x: 1 }), calls: [{ servedModel: "m", reqSha256: "xyz", attestStatus: "none" as const }] };
+  assert.throws(() => signReceipt(bad, signer), /64 lowercase hex characters in each hash/);
+});
+
 test("ARCH-616 the settlement is appended and signed without changing the body signature", () => {
   const signer = signerFromKey(generateKeyPairSync("ed25519").privateKey);
   const r = signReceipt(body({ x: 1 }), signer);

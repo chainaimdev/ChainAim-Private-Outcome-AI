@@ -36,6 +36,11 @@ test("ARCH-613 ARCH-620 -Test, -All and -Ship run the receipt and agent-policy p
   assert.match(suites, /"packages\/receipt\/test\/\*\.test\.ts"/);
   assert.match(suites, /"packages\/agent-policy\/test\/\*\.test\.ts"/);
   assert.match(suites, /"packages\/crossask\/test\/\*\.test\.ts"/);
+  assert.match(suites, /& npm --prefix services\\paywall test/);
+  assert.match(suites, /return @\(\$a, \$b, \$c\)/);
+  // every caller fails on the paywall suite too
+  assert.equal((code.match(/-or \$r\[2\]/g) ?? []).length, 2);
+  assert.match(code, /\$r\[2\] -eq 0/);
 });
 
 test("leftovers: only node processes on the old ports are stopped, never Docker's port owners", () => {

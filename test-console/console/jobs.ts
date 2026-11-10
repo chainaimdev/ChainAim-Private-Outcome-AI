@@ -99,22 +99,52 @@ export class JobStore {
 const JOB_ID = /^[0-9a-f]{32}$/;
 const send = (res: ServerResponse, status: number, body: unknown) => { res.writeHead(status, { "content-type": "application/json", "cache-control": "no-store" }); res.end(JSON.stringify(body)); };
 
+/** The most a release notice body may hold: the settlement's ids (privateAI-design-32 ARCH-616) are far below this. */
+export const RELEASE_NOTICE_MAX_BYTES = 4096;
+
+/** The JSON body of a request up to max bytes; undefined for an empty, oversized or non-JSON body (the body is never logged). */
+function readSmallJson(req: IncomingMessage, max: number): Promise<unknown> {
+  return new Promise((resolve) => {
+    const chunks: Buffer[] = [];
+    let size = 0;
+    let over = false;
+    req.on("data", (c: Buffer) => { size += c.length; if (size > max) over = true; else chunks.push(c); });
+    req.on("error", () => resolve(undefined));
+    req.on("end", () => {
+      if (over || size === 0) return resolve(undefined);
+      try { resolve(JSON.parse(Buffer.concat(chunks).toString("utf8"))); } catch { resolve(undefined); }
+    });
+  });
+}
+
 /** The second listener (ARCH-105): GET /internal/jobs/:id and POST /internal/jobs/:id/released, x-jobs-key required. */
-/** onReleased: called with the job id after a released job is dropped (the job feed, adminUI ARCH-205). */
-export function internalHandler(store: JobStore, key: string, onReleased?: (jobId: string) => void): (req: IncomingMessage, res: ServerResponse) => void {
+/**
+ * onReleased: called after a released job is dropped (the job feed, adminUI ARCH-205), with the job as it was held and the
+ * paywall's release notice body (the settlement's ids, privateAI-design-32 ARCH-616; undefined when it sent none).
+ */
+export function internalHandler(store: JobStore, key: string, onReleased?: (jobId: string, job: HeldJob, notice: unknown) => void): (req: IncomingMessage, res: ServerResponse) => void {
   const want = Buffer.from(key, "utf8");
   return (req, res) => {
-    req.resume();
     const given = Buffer.from(String(req.headers["x-jobs-key"] ?? ""), "utf8");
-    if (given.length !== want.length || !timingSafeEqual(given, want)) return send(res, 401, { error: "x-jobs-key is missing or wrong" });
+    if (given.length !== want.length || !timingSafeEqual(given, want)) { req.resume(); return send(res, 401, { error: "x-jobs-key is missing or wrong" }); }
     const m = /^\/internal\/jobs\/([^/]+)(\/released)?$/.exec(new URL(req.url ?? "/", "http://internal").pathname);
-    if (!m) return send(res, 404, { error: "not found" });
+    if (!m) { req.resume(); return send(res, 404, { error: "not found" }); }
     const jobId = m[1];
     if (m[2] && req.method === "POST") {
-      if (!JOB_ID.test(jobId) || !store.drop(jobId)) return send(res, 404, { error: "no such job" });
-      onReleased?.(jobId);
-      return send(res, 200, { jobId, released: true });
+      void readSmallJson(req, RELEASE_NOTICE_MAX_BYTES).then((notice) => {
+        const job = JOB_ID.test(jobId) ? store.get(jobId) : undefined;
+        if (!job || !store.drop(jobId)) return send(res, 404, { error: "no such job" });
+        try {
+          onReleased?.(jobId, job, notice);
+        } catch (e) {
+          // The payment settled and the job is released whatever the hook does; its failure is logged with ids only.
+          console.error(JSON.stringify({ ts: new Date().toISOString(), event: "job_release_hook_failed", jobId, reason: String((e as Error).message ?? e).slice(0, 200) }));
+        }
+        send(res, 200, { jobId, released: true });
+      });
+      return;
     }
+    req.resume();
     if (!m[2] && req.method === "GET") {
       const job = JOB_ID.test(jobId) ? store.get(jobId) : undefined;
       if (!job) return send(res, 404, { error: "no such job" });

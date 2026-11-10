@@ -57,11 +57,17 @@ export function filesRoot(files: readonly ReceiptFile[]): string {
   return sha256Hex(canonicalJson(sorted));
 }
 
+/**
+ * One model call. A call on an attested route carries the gateway's request/response hashes (ARCH-408 headers) and its
+ * provider chat id when known; a call on a route without attestation has no evidence, so attestStatus is "none" and the
+ * hashes are absent.
+ */
 export type ReceiptCall = {
   servedModel: string;
-  chatId: string;
-  reqSha256: string;
-  respSha256: string;
+  zone?: string;
+  chatId?: string;
+  reqSha256?: string;
+  respSha256?: string;
   /** ca-attest's verdict for this call, or "none" on a route without attestation. */
   attestStatus: "verified" | "failed" | "pending" | "none";
 };
@@ -133,8 +139,11 @@ export function checkBody(b: ReceiptBody): void {
   if (filesRoot(b.files) !== b.filesRoot) fail("filesRoot", "the hash of files");
   if (!Array.isArray(b.calls)) fail("calls", "a list");
   for (const [i, c] of b.calls.entries()) {
-    if (!SHA256_HEX.test(c.reqSha256) || !SHA256_HEX.test(c.respSha256)) fail(`calls[${i}]`, "request and response SHA-256 hashes");
+    if (typeof c.servedModel !== "string" || c.servedModel === "") fail(`calls[${i}].servedModel`, "a non-empty string");
     if (!["verified", "failed", "pending", "none"].includes(c.attestStatus)) fail(`calls[${i}].attestStatus`, "verified, failed, pending or none");
+    const hashes = [c.reqSha256, c.respSha256];
+    if (c.attestStatus !== "none" && hashes.some((x) => x === undefined)) fail(`calls[${i}]`, "request and response SHA-256 hashes on an attested call");
+    if (hashes.some((x) => x !== undefined && !SHA256_HEX.test(x))) fail(`calls[${i}]`, "64 lowercase hex characters in each hash");
   }
   if (!/^[1-9]\d*$/.test(b.price.amountUnits)) fail("price.amountUnits", "a positive whole number as a string");
   if (!/^(0|[1-9]\d*)(\.\d+)?$/.test(b.price.priceUsd)) fail("price.priceUsd", "a decimal USD amount");

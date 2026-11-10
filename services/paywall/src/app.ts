@@ -227,15 +227,30 @@ export function createPaywall(config: PaywallConfig, deps: PaywallDeps = {}): Ho
     const settledJob = jobs ? jobIdOfPath(request?.path) : undefined;
     if (settledJob !== undefined) {
       jobs!.markReleased(settledJob);
-      void notifyReleased(settledJob);
+      const jobInvoice = (ctx.requirements.extra as { invoiceId?: unknown } | undefined)?.invoiceId;
+      // The settlement the console appends to the job's receipt (privateAI-design-32 ARCH-616): ids only, never a body.
+      void notifyReleased(settledJob, {
+        transaction: ctx.result.transaction,
+        network: ctx.result.network,
+        payer: ctx.result.payer ?? null,
+        ...(typeof jobInvoice === "string" ? { invoiceId: jobInvoice } : {}),
+      });
     }
   });
 
-  /** POST console /internal/jobs/:id/released; a failure is logged with the job id and a reason only (the console's TTL still drops the job). */
-  async function notifyReleased(jobId: string): Promise<void> {
+  /**
+   * POST console /internal/jobs/:id/released with the settlement's ids (transaction, network, payer, invoice); a failure
+   * is logged with the job id and a reason only (the console's TTL still drops the job).
+   */
+  async function notifyReleased(jobId: string, settlement: Record<string, unknown>): Promise<void> {
     let reason: string | undefined;
     try {
-      const r = await fetch(`${paidJobs!.resultUrl}/internal/jobs/${jobId}/released`, { method: "POST", headers: { "x-jobs-key": paidJobs!.key }, signal: AbortSignal.timeout(5000) });
+      const r = await fetch(`${paidJobs!.resultUrl}/internal/jobs/${jobId}/released`, {
+        method: "POST",
+        headers: { "x-jobs-key": paidJobs!.key, "content-type": "application/json" },
+        body: JSON.stringify(settlement),
+        signal: AbortSignal.timeout(5000),
+      });
       await r.body?.cancel();
       if (!r.ok) reason = `HTTP ${r.status}`;
     } catch (e) {

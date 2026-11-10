@@ -315,12 +315,15 @@ function Invoke-Suites {
   $a = $LASTEXITCODE
   & npm --prefix services\analyst test | Out-Host
   $b = $LASTEXITCODE
-  return @($a, $b)
+  # The paywall's own suite (privateAI-design-32 step 2: the release notice carries the settlement for the receipt).
+  & npm --prefix services\paywall test | Out-Host
+  $c = $LASTEXITCODE
+  return @($a, $b, $c)
 }
 if ($Test) {
   $r = Invoke-Suites
-  if ($r[0] -eq 0 -and $r[1] -eq 0) { Say "OK" "all terminal suites passed"; exit 0 }
-  Say "FAIL" "a suite failed (root suites exit $($r[0]), analyst exit $($r[1])): see the not ok lines above"; exit 1
+  if ($r[0] -eq 0 -and $r[1] -eq 0 -and $r[2] -eq 0) { Say "OK" "all terminal suites passed"; exit 0 }
+  Say "FAIL" "a suite failed (root suites exit $($r[0]), analyst exit $($r[1]), paywall exit $($r[2])): see the not ok lines above"; exit 1
 }
 
 # ---------------------------------------------------------------- -All step 1: the terminal suites, before any start
@@ -331,7 +334,7 @@ if ($All) {
     & node scripts\check-deps.ts | Out-Host
     if ($LASTEXITCODE) { Stop-Here "-All step 1: check-deps failed (exit $LASTEXITCODE); nothing started" }
     $r = Invoke-Suites
-    if ($r[0] -or $r[1]) { Stop-Here "-All step 1: a suite failed (root suites exit $($r[0]), analyst exit $($r[1])); nothing started" }
+    if ($r[0] -or $r[1] -or $r[2]) { Stop-Here "-All step 1: a suite failed (root suites exit $($r[0]), analyst exit $($r[1]), paywall exit $($r[2])); nothing started" }
     Say "OK" "all terminal suites passed"
   }
   # -AllSmbSample: this script's own -SmbSample as a child (gen_ar_ap.py --force, then verify_ar_ap.py), before any start.
@@ -382,7 +385,7 @@ if ($Ship) {
     & node scripts\check-deps.ts | Out-Host
     if ($LASTEXITCODE) { Stop-Here "check-deps failed (exit $LASTEXITCODE): nothing committed" }
     $r = Invoke-Suites
-    if ($r[0] -or $r[1]) { Stop-Here "a suite failed (root suites exit $($r[0]), analyst exit $($r[1])): nothing committed" }
+    if ($r[0] -or $r[1] -or $r[2]) { Stop-Here "a suite failed (root suites exit $($r[0]), analyst exit $($r[1]), paywall exit $($r[2])): nothing committed" }
     Say "OK" "all terminal suites passed"
   }
   if ($ShipDryRun) { Say "OK" "-ShipDryRun: nothing staged, committed or pushed"; exit 0 }

@@ -1047,3 +1047,26 @@ Built in the AI's workspace on a snapshot of the owner's repo (main = e8626e8, v
 - desk.ps1 Invoke-Suites runs both package suites; desk.test.ts guard (ARCH-613 ARCH-620 ...).
 - Owner PC, .\test-console\desk.ps1 -Test: root suites tests 579, pass 579, fail 0, skipped 0 (17175 ms); analyst tests 234,
   pass 234, fail 0 (22166 ms); "OK all terminal suites passed". check-deps.ts not run (it runs under -All / -Ship only).
+- Shipped as 59d5b59 (desk.ps1 -Ship -ShipFiles ...; check-deps and all suites passed first; pushed 1a2d250..59d5b59).
+
+## 2026-11-10 privateAI-design-32 step 2a: console receipt module (ARCH-613..616)
+
+- packages/receipt: calls on a route without attestation carry no hashes (attestStatus "none"); attested calls must
+  carry both; +1 test.
+- New test-console/console/receipt.ts: receiptConfig (--receipts on|off default off, --receipt-key-env, --receipt-dir
+  runtime/receipts, --receipt-max-files 500), datasetFiles (streamed SHA-256, refuses more than max), receiptCalls,
+  buildReceipt, ReceiptStore (memory + atomic <dir>/<jobId>.json), parseSettlement. Not wired into server.ts yet.
+- Owner PC, .\test-console\desk.ps1 -Test: root suites tests 585, pass 585, fail 0; analyst tests 234, pass 234, fail 0;
+  "OK all terminal suites passed".
+
+## 2026-11-10 privateAI-design-32 step 2b: settlement in the release notice (ARCH-616)
+
+- services/paywall/src/app.ts: onAfterSettle sends notifyReleased(jobId, {transaction, network, payer, invoiceId}) as a
+  JSON body (ids only). Invoice ids are 32 uppercase hex (invoices.ts, read), within parseSettlement's check.
+- test-console/console/jobs.ts: internalHandler reads the release notice (RELEASE_NOTICE_MAX_BYTES 4096; empty, oversized
+  or non-JSON -> undefined), calls onReleased(jobId, heldJob, notice) after the drop; a hook failure is logged with the
+  job id and reason only and the 200 is still sent. +1 test (real HTTP).
+- desk.ps1 Invoke-Suites also runs npm --prefix services\paywall test (third exit code; -Test, -All, -Ship fail on it);
+  desk.test.ts guard extended.
+- Owner PC, .\test-console\desk.ps1 -Test: root tests 586, pass 586, fail 0; analyst 234/234; paywall 294/294;
+  "OK all terminal suites passed". Not yet wired: server.ts receipt build on release, GET /jobs/:id/receipt.
