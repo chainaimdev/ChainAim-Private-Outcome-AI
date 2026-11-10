@@ -223,6 +223,55 @@ test("-All -AllSmbSample: the smb-fin-1 key is regenerated (this script's own -S
   assert.match(code, /if \(-not \$All -and \(\$AllSkipTests -or \$AllSkipSmoke -or \$AllSmbSample\)\)/, "-AllSmbSample needs -All");
 });
 
+test("ARCH-614 ARCH-615 -ReceiptKey runs scripts\\receipt-key.ts on <secretsDir>\\chainaim.env and stops; receipts auto/on/off reach up.ps1, which passes the key by name; compose and image keep /receipts", () => {
+  // desk.ps1: the switches, checked before anything runs; the block only passes a path (no secret read here) and stops.
+  assert.match(code, /\[switch\]\$Receipts,/); assert.match(code, /\[switch\]\$ReceiptKey,/); assert.match(code, /\[switch\]\$ReceiptKeyRotate,/);
+  assert.match(code, /\[string\]\$ReceiptKeyName = "RECEIPT_SIGNING_KEY",/);
+  assert.ok(code.indexOf("-ReceiptKey runs on its own") < code.indexOf("if ($Logs.Count)"), "options checked before anything runs");
+  const k = code.slice(code.indexOf("if ($ReceiptKey) {"), code.indexOf("function AdminRoot"));
+  assert.ok(k.length > 0 && code.indexOf("if ($ReceiptKey) {") < code.indexOf("# 1. pre-flight"), "no start");
+  assert.match(k, /\$keyArgs = @\("scripts\\receipt-key\.ts", "--secrets-file", \(Join-Path \$secrets "chainaim\.env"\), "--var", \$ReceiptKeyName\)/);
+  assert.ok(!/"--env-file"/.test(k), "never --env-file: Node takes it as its own option even after the script name (owner run 2026-11-10)");
+  assert.match(k, /if \(\$ReceiptKeyRotate\) \{ \$keyArgs \+= "--rotate" \}/);
+  assert.match(k, /& node @keyArgs/); assert.match(k, /exit 0/);
+  assert.ok(!/docker|Stop-Process|Get-Content|Select-String/.test(k), "touches no service and reads no file itself");
+  // auto / on / off from -Receipts or receipts.enabled, handed to up.ps1 before it runs; the READY row asks the console API.
+  assert.match(code, /if \(\$receiptsMode -ne "auto"\) \{ \$privArgs\.Receipts = \$receiptsMode \}/);
+  assert.match(code, /\$privArgs\.ReceiptKeyName = \$ReceiptKeyName/);
+  assert.ok(code.indexOf("$privArgs.Receipts") < code.indexOf("& $privUp @privArgs"));
+  const r = code.slice(code.indexOf("function Report"), code.indexOf("# ================================================================= -Stop"));
+  assert.match(r, /HttpJson "http:\/\/127\.0\.0\.1:8735\/jobs\/config"/);
+  assert.equal(ex.receipts.enabled, "auto");
+  // up.ps1: read by name from -SecretsFile, set by name for compose only when on, flags without the value, value dropped after.
+  const up = readFileSync(new URL("../../test-console/up.ps1", import.meta.url), "utf8");
+  assert.match(up, /\[ValidateSet\("on", "off"\)\]\[string\]\$Receipts = "on",/);
+  assert.match(up, /\[string\]\$ReceiptKeyName = "RECEIPT_SIGNING_KEY",/);
+  assert.match(up, /Read-EnvFile \$SecretsFile \('\^' \+ \$ReceiptKeyName \+ '\$'\)/);
+  const on = up.slice(up.indexOf("# Signed receipts (ARCH-614/615)"), up.indexOf("$port = \"127.0.0.1:"));
+  assert.ok(on.length > 0);
+  assert.match(on, /Set-Secret "RECEIPT_SIGNING_KEY" \$receiptKey/);
+  assert.match(on, /\$consoleCmd \+= @\("--receipts=on", "--receipt-key-env=RECEIPT_SIGNING_KEY", "--receipt-dir=\/receipts"\)/);
+  assert.match(on, /\$receiptKey = \$null/);
+  assert.ok(on.indexOf("Set-Secret") < on.indexOf("$receiptKey = $null"));
+  for (const line of up.split(/\r?\n/)) {
+    const said = /\b(Say|Write-Host|Stop-Here)\b(.*)$/.exec(line); // what is printed, not the condition before it
+    if (said) assert.ok(!/\$receiptKey\b/.test(said[2]), `the key value is never printed: ${line.trim()}`);
+    if (/\$consoleCmd \+=/.test(line)) assert.ok(!/\$receiptKey\b/.test(line), "the key value never goes into commands.yml");
+  }
+  // the PowerShell "$name:" trap (a variable followed by a colon in a string is a parse error) in the new lines
+  const traps = [...on.matchAll(/"[^"\r\n]*"/g)].flatMap((m) => [...m[0].matchAll(/\$([A-Za-z_][A-Za-z0-9_]*):(?!:)/g)].map((v) => v[1])).filter((v) => !["env", "script", "global"].includes(v));
+  assert.deepEqual(traps, []);
+  // compose: the key by name, a named volume at /receipts; the image makes /receipts for the node user.
+  const compose = readFileSync(new URL("../../docker-compose.yml", import.meta.url), "utf8");
+  const api = compose.slice(compose.indexOf("  console-api:"), compose.indexOf("  agent:"));
+  assert.match(api, /^\s+- RECEIPT_SIGNING_KEY$/m);
+  assert.match(api, /- chainaim-console-receipts:\/receipts/);
+  assert.match(compose, /^  chainaim-console-receipts:$/m);
+  const df = readFileSync(new URL("../../test-console/console.Dockerfile", import.meta.url), "utf8");
+  assert.match(df, /RUN mkdir -p \/runs \/receipts && chown node:node \/runs \/receipts/);
+  assert.ok(df.indexOf("/receipts") < df.indexOf("USER node"));
+});
+
 test("READY needs local, Bedrock and NEAR AI in the tab 02 / 03 model lists (owner 2026-11-07); -RequireModels changes the families", () => {
   assert.match(code, /\[string\[\]\]\$RequireModels = @\("local", "bedrock", "nearai"\),/);
   const r = code.slice(code.indexOf("function Report"), code.indexOf("# ================================================================= -Stop"));

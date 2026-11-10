@@ -1117,3 +1117,31 @@ Built in the AI's workspace on a snapshot of the owner's repo (main = e8626e8, v
   equal to the key, 0 different (WARN: dental-prms "MODEL: which process controls would h...", 8 figures did not match
   the facts, bedrock/nemotron-nano-3-30b wording; the page shows the computed facts); `ALL OK terminal suites, both
   stacks, log windows, both UIs and the UI smoke check all passed`. Report: test-console\runs\ui-smoke-2026-11-10T16-19-14-096Z.json.
+
+## 2026-11-10 step 3c: receipt signing key and receipts on in Docker (ARCH-614, ARCH-615; chat near-ai-impl-4)
+
+- New scripts/receipt-key-core.ts + scripts/receipt-key.ts (--secrets-file, --var, --rotate, --public-out): makes, keeps or
+  rotates the Ed25519 PKCS#8 key as one line in chainaim.env; prints key id + PUBLIC key only. desk.ps1 -ReceiptKey
+  [-ReceiptKeyRotate] [-ReceiptKeyName] runs it on <secretsDir>\chainaim.env (desk.ps1 still reads no secret);
+  -Receipts / desk.json receipts.enabled auto|on|off -> up.ps1 -Receipts / -ReceiptKeyName; READY row "receipts" from
+  GET 127.0.0.1:8735/jobs/config. up.ps1 reads the key by name, passes it to ca-console-api as RECEIPT_SIGNING_KEY (compose,
+  by name) with --receipts=on --receipt-key-env=RECEIPT_SIGNING_KEY --receipt-dir=/receipts; volume chainaim-console-receipts;
+  console.Dockerfile makes /receipts for node. Tests: scripts/test/receipt-key.test.ts (5), desk.test.ts +1.
+- Owner run 17:01Z `desk.ps1 -All`: root 600/601, analyst 234/234, paywall 294/294; FAIL "ARCH-614 the CLI prints ...":
+  `node.exe: ...\chainaim.env: not found`, exit 9. Cause: the CLI flag was --env-file, which Node takes as its own option
+  even after the script name. Renamed to --secrets-file; desk.test now refuses "--env-file" in the -ReceiptKey block.
+- Owner run 18:17Z `desk.ps1 -All` (no key yet): "OK all terminal suites passed" (analyst 234/234, paywall 294/294; root
+  count not in the pasted part), `INFO receipts off: no RECEIPT_SIGNING_KEY in C:\PRIV-AI-SECRETS\chainaim.env (run
+  .\test-console\desk.ps1 -ReceiptKey once) ...`, READY all OK plus `receipts off no signing key yet ...`, smoke PASS 59
+  WARN 2 SKIP 5 FAIL 0, `ALL OK`.
+- Owner `desk.ps1 -ReceiptKey` 18:24Z: `OK receipt signing key RECEIPT_SIGNING_KEY created in C:\PRIV-AI-SECRETS\chainaim.env
+  (private key not shown)`, KEY ID d27d1e9f17a0104e34c46cf3e5233f23, public key
+  MCowBQYDK2VwAyEAu52WygjV0Ee9cVxv8bjpN8PxfQMkI7yiJKxZ7iQSKYA= (SPKI, Ed25519).
+- Owner run 18:25Z `desk.ps1 -All`: "OK all terminal suites passed" (analyst 234/234, paywall 294/294), `OK receipts on: the
+  console signs one after each paid job; key from C:\PRIV-AI-SECRETS\chainaim.env (not printed), kept on volume
+  chainaim-console-receipts`, console image step `RUN mkdir -p /runs /receipts && chown node:node /runs /receipts`,
+  `OK console-api answers`, READY all OK incl. `receipts OK signed after each paid job (GET /jobs/<id>/receipt)`, smoke
+  PASS 59 WARN 2 (dental-prms MODEL "process controls" 8 figures, "branch / ATM deposits" 1 figure: Bedrock wording) SKIP 5
+  FAIL 0, `ALL OK`. Report test-console\runs\ui-smoke-2026-11-10T18-26-25-428Z.json.
+- Not yet shown live: a paid job's receipt fetched from GET /jobs/<id>/receipt on the running stack (needs a paid tab 03
+  run; step 3d adds the Download receipt button).

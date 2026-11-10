@@ -397,7 +397,7 @@ Still open: the Crossmark web page payment; Open Question 4 (Bazaar); `RUN-ON-AN
   3d (tab 03 Download receipt; page must send datasetId/templateLabel), 3e firm pricing.
 - Open: near-watch (adminUI repo) must accept job_receipt before --job-feed-receipts on.
 
-## RESUME POINT — 2026-11-10 ~16:25Z (chat near-ai-impl-4): FIX console image after 2c — VERIFIED (desk.ps1 -All ALL OK, BUILD_LOG "fix: console image after step 2c"); ship as v1.5.0
+## RESUME POINT — 2026-11-10 ~16:25Z (chat near-ai-impl-4): FIX console image after 2c — VERIFIED (desk.ps1 -All ALL OK, BUILD_LOG "fix: console image after step 2c"); SHIPPED ed753b1, tag v1.5.0 (pushed e8f5eb2..ed753b1; -Ship suites root 595/595, analyst 234/234, paywall 294/294)
 - Found by the owner's `desk.ps1 -All` (15:50Z): suites 593/234/294 passed, stacks built, then `console-api did not answer at
   http://127.0.0.1:8735/data/config within 180 s`. Cause (read from the files, container log not seen): since 2c server.ts ->
   receipt.ts imports packages/receipt/src/index.ts at run time, but test-console/console.Dockerfile and its .dockerignore copied
@@ -408,6 +408,30 @@ Still open: the Crossmark web page payment; Open Question 4 (Bazaar); `RUN-ON-AN
   server.ts's runtime imports (import type skipped), requires each to be COPYed and kept by the .dockerignore, bare imports
   node: only; the second test proves the walk catches packages/receipt without its COPY line. Expected root suites 595.
 - Verified 16:19Z: `desk.ps1 -All` ALL OK (console-api answers, READY all OK, smoke PASS 60 WARN 1 SKIP 5 FAIL 0).
-- Next (owner): `desk.ps1 -Ship ... -ShipTag v1.5.0` (latest tag here was v1.4.9). Then (agent): step 3c, 3d, 3e.
+- Next (agent, new chat): step 3c (desk.ps1 -ReceiptKey; up.ps1 passes --receipts on --receipt-key-env RECEIPT_SIGNING_KEY
+  --receipt-dir on a named volume when the key is in chainaim.env; compose console-api environment RECEIPT_SIGNING_KEY), then 3d, 3e.
+  Facts read this chat for 3c: secrets dir from desk.json secretsDir (default C:\PRIV-AI-SECRETS); up.ps1 -SecretsFile default
+  C:\PRIV-AI-SECRETS\chainaim.env read with Read-EnvFile allowlists and Set-Secret (env names cleared at the end); console-api
+  passes env by NAME in docker-compose.yml (today PAID_JOBS_KEY, NEAR_WATCH_INGEST_KEY); console-api volumes: config ro,
+  sample-data ro, priv-ai-data ro, chainaim-test-ledger ro, chainaim-console-runs:/runs; image runs USER node, /runs chowned.
 - Known for step c (not a bug today, receipts off by default): in the container --receipt-dir defaults to
   /app/runtime/receipts, not writable by USER node and not persisted; step c must mount a volume and pass --receipt-dir.
+
+## RESUME POINT — 2026-11-10 ~18:30Z (chat near-ai-impl-4): design-32 step 3c receipt signing key — VERIFIED (BUILD_LOG "step 3c": key d27d1e9f17a0104e34c46cf3e5233f23 created; desk.ps1 -All ALL OK with READY "receipts OK"); ship as v1.5.1, then step 3d
+- New: scripts/receipt-key-core.ts (readEnvValue, upsertEnvLine, newKeyValue, ensureReceiptKey: created / kept / rotated,
+  invalid refused without rotate; temp file + rename + read-back; never returns the private key) and scripts/receipt-key.ts
+  (--secrets-file, --var RECEIPT_SIGNING_KEY, --rotate, --public-out; prints key id + PUBLIC key only; exit 0/1/2).
+  Owner run 17:01Z: root 600/601, the CLI test failed: the flag was --env-file, which Node takes as its OWN option even
+  after the script name ("node.exe: ...chainaim.env: not found", exit 9). Renamed to --secrets-file; desk.test guards it.
+- desk.ps1: -ReceiptKey [-ReceiptKeyRotate] [-ReceiptKeyName] runs on its own (node scripts\receipt-key.ts --secrets-file
+  <secretsDir>\chainaim.env), desk.ps1 still reads no secret; -Receipts + desk.json receipts.enabled auto|on|off ->
+  up.ps1 -Receipts / -ReceiptKeyName; READY row "receipts" from GET 127.0.0.1:8735/jobs/config .receipts.
+- up.ps1: -Receipts on|off (auto when not passed: off with INFO without paid jobs or key), -ReceiptKeyName; key read by
+  name from -SecretsFile else the running ca-console-api; Set-Secret RECEIPT_SIGNING_KEY only when on; console flags
+  --receipts=on --receipt-key-env=RECEIPT_SIGNING_KEY --receipt-dir=/receipts; $receiptKey cleared after.
+- docker-compose.yml console-api: env RECEIPT_SIGNING_KEY (by name), volume chainaim-console-receipts:/receipts (declared).
+  console.Dockerfile: mkdir /runs /receipts, chown node. desk.example.json: receipts.enabled "auto". MANUAL_SETUP.md updated.
+- Tests: scripts/test/receipt-key.test.ts (5, ARCH-614), scripts/test/desk.test.ts +1 (ARCH-614 ARCH-615). Expected root 601.
+- Unverified from this chat: the /jobs/config path and its receipts field were taken from the 2c handoff, not re-read.
+- Next (owner, one at a time): desk.ps1 -All (expect 601, READY "receipts off ... run -ReceiptKey"); desk.ps1 -ReceiptKey;
+  desk.ps1 -All (expect "receipts on" in up.ps1 and READY "receipts OK"); then BUILD_LOG + ship. Then 3d.

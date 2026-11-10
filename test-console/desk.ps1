@@ -21,6 +21,14 @@ one READY table across both. Neither launcher is changed or renamed; each team k
                 "auto" (default) lets up.ps1 switch it on when NEARAI_API_KEY is in chainaim.env (or the running ca-gateway)
                 and the current model mode has a model marked "attest": "nearai"; "on" requires it, "off" skips it.
                 attest.gpuCheck "on" (default) / "off" goes to up.ps1 -AttestGpuCheck.
+  -Receipts     require signed Job Evidence Receipts (privateAI-design-32 ARCH-614/615; up.ps1 -Receipts on). Without it,
+                receipts.enabled decides: "auto" (default) lets up.ps1 switch them on when <secretsDir>\chainaim.env holds
+                the signing key (-ReceiptKeyName, default RECEIPT_SIGNING_KEY), "on" requires it, "off" skips it.
+  -ReceiptKey [-ReceiptKeyRotate] [-ReceiptKeyName RECEIPT_SIGNING_KEY]
+                create the console's Ed25519 receipt signing key in <secretsDir>\chainaim.env (scripts\receipt-key.ts) and
+                stop. Prints the key id and the PUBLIC key only. A valid key already there is kept (safe to run twice);
+                -ReceiptKeyRotate replaces it (receipts signed before verify only with the old public key). This script
+                still never reads a secret: the Node script does the file work. Runs on its own.
   -RejudgeReceiver ACCOUNT  -RejudgeReason "TEXT"
                 after the start, clear FALSE reconcile mismatches in the NEAR admin UI (near-watch src/rejudge.ts
                 --all-mismatches; chainaim-adminUI-NEAR src/reconcile.ts rejudge). ACCOUNT is the pay-to you checked the
@@ -104,6 +112,10 @@ param(
   [switch]$WithStub,
   [switch]$Agent,
   [switch]$Attest,
+  [switch]$Receipts,
+  [switch]$ReceiptKey,
+  [switch]$ReceiptKeyRotate,
+  [string]$ReceiptKeyName = "RECEIPT_SIGNING_KEY",
   [switch]$NoBrowser,
   [string[]]$Logs = @(),
   [int]$LogLines = 40,
@@ -175,8 +187,13 @@ if ($RejudgeReceiver -or $RejudgeReason) {
   if ($Check -or $Stop -or $Test) { Stop-Here "-RejudgeReceiver runs after a start; leave out -Check, -Stop and -Test" }
 }
 
+# -ReceiptKey options are checked before anything else runs.
+if ($ReceiptKeyName -notmatch '^[A-Z_][A-Z0-9_]*$') { Stop-Here "-ReceiptKeyName must be an environment variable name such as RECEIPT_SIGNING_KEY" }
+if ($ReceiptKeyRotate -and -not $ReceiptKey) { Stop-Here "-ReceiptKeyRotate needs -ReceiptKey" }
+if ($ReceiptKey -and ($Check -or $Stop -or $Test -or $Build -or $WithStub -or $Agent -or $Attest -or $Receipts -or $All -or $Ship -or $Logs.Count -or $Memory -or $Smoke -or $SmbSample -or $ChiroSample -or $RejudgeReceiver)) { Stop-Here "-ReceiptKey runs on its own: leave out the other mode switches" }
+
 # -Ship options are checked before anything else runs.
-if ($Ship -and ($Check -or $Stop -or $Test -or $Build -or $WithStub -or $Agent -or $Attest -or $Logs.Count -or $Memory -or $Smoke -or $SmbSample -or $ChiroSample -or $RejudgeReceiver)) { Stop-Here "-Ship runs on its own: leave out the other mode switches" }
+if ($Ship -and ($Check -or $Stop -or $Test -or $Build -or $WithStub -or $Agent -or $Attest -or $Receipts -or $Logs.Count -or $Memory -or $Smoke -or $SmbSample -or $ChiroSample -or $RejudgeReceiver)) { Stop-Here "-Ship runs on its own: leave out the other mode switches" }
 # -All and -Windows options are checked before anything else runs.
 if ($All -and ($Check -or $Stop -or $Test -or $Ship -or $Logs.Count -or $Memory -or $Smoke -or $SmbSample -or $ChiroSample)) { Stop-Here "-All runs the tests, the start and the smoke check itself: leave out -Check, -Stop, -Test, -Ship, -Logs, -Memory, -Smoke, -SmbSample and -ChiroSample" }
 if (-not $All -and ($AllSkipTests -or $AllSkipSmoke -or $AllSmbSample)) { Stop-Here "-AllSkipTests, -AllSkipSmoke and -AllSmbSample need -All" }
@@ -450,6 +467,24 @@ function AttestStarted {
   try { return [bool]((Get-Content -Raw $f | ConvertFrom-Json).services.attest) } catch { return $false }
 }
 if ($P.paidJobs -and $P.paidJobs.feePerModelCallUsd) { Say "NOTE" "$Settings has paidJobs fees: they are no longer used (prices come from up.ps1's price files)" }
+# Job Evidence Receipts (privateAI-design-32 ARCH-614/615): the same auto / on / off shape; up.ps1 makes the auto decision
+# (on when chainaim.env holds the signing key). Nothing here reads the key.
+$receiptsMode = if ($Receipts) { "on" } elseif ($P.receipts -and $P.receipts.enabled -is [bool]) { $(if ($P.receipts.enabled) { "on" } else { "off" }) } elseif ($P.receipts -and $P.receipts.enabled) { [string]$P.receipts.enabled } else { "auto" }
+if (@("auto", "on", "off") -notcontains $receiptsMode) { Stop-Here "$Settings receipts.enabled must be auto, on or off" }
+if ($receiptsMode -eq "on" -and -not $paid) { Stop-Here "receipts need paid jobs on (paidJobs.enabled in $Settings): a receipt is for a paid job" }
+
+# ---------------------------------------------------------------- -ReceiptKey: the receipt signing key, then stop
+# The Node script reads and writes chainaim.env; this script only passes the path, so it still never reads a secret value.
+if ($ReceiptKey) {
+  if (-not (Test-Path $secrets)) { Stop-Here "the secrets folder $secrets does not exist (secretsDir in $Settings)" }
+  $keyArgs = @("scripts\receipt-key.ts", "--secrets-file", (Join-Path $secrets "chainaim.env"), "--var", $ReceiptKeyName)
+  if ($ReceiptKeyRotate) { $keyArgs += "--rotate" }
+  Say "RUN" "receipt signing key $ReceiptKeyName in $secrets\chainaim.env$(if ($ReceiptKeyRotate) { ' (rotate)' }); only the key id and PUBLIC key are printed"
+  & node @keyArgs
+  if ($LASTEXITCODE) { Stop-Here "scripts\receipt-key.ts stopped (exit $LASTEXITCODE): its message is above; nothing else changed" }
+  Say "NEXT" "start (or restart) the desk so the console signs receipts: .\test-console\desk.ps1 -All"
+  exit 0
+}
 
 function AdminRoot {
   $nw = $null
@@ -544,6 +579,14 @@ function Report {
     }
     if ($gm.defaultAnswerModel) { Write-Host ("  {0,-20} {1,-5} {2}" -f "Explained default", "OK", [string]$gm.defaultAnswerModel) }
   }
+  # Signed receipts (ARCH-615): what the running console API says in /jobs/config, never the key.
+  if ($paid -and $receiptsMode -ne "off") {
+    $jc = HttpJson "http://127.0.0.1:8735/jobs/config"
+    $rcpt = if ($jc -and $null -ne $jc.receipts) { [bool]$jc.receipts } else { $null }
+    if ($rcpt -eq $true) { Write-Host ("  {0,-20} {1,-5} {2}" -f "receipts", "OK", "signed after each paid job (GET /jobs/<id>/receipt)") }
+    elseif ($receiptsMode -eq "on") { Write-Host ("  {0,-20} {1,-5} {2}" -f "receipts", "DOWN", "required (-Receipts / receipts.enabled on) but the console API reports them off"); $bad++ }
+    else { Write-Host ("  {0,-20} {1,-5} {2}" -f "receipts", "off", "no signing key yet: run .\test-console\desk.ps1 -ReceiptKey once, then start again") }
+  } else { Write-Host ("  {0,-20} off in {1}" -f "receipts", $Settings) }
   foreach ($n in $notes) { Write-Host "  $n" }
   return $bad
 }
@@ -615,6 +658,8 @@ if ($WithStub) { $privArgs.Test = $true }
 if ($agentMode -ne "auto") { $privArgs.Agent = $agentMode }
 if ($agentMode -ne "off" -and $P.agent -and $P.agent.tenants) { $privArgs.AgentTenants = [string]$P.agent.tenants }
 if ($attestMode -ne "auto") { $privArgs.Attest = $attestMode }
+if ($receiptsMode -ne "auto") { $privArgs.Receipts = $receiptsMode }
+$privArgs.ReceiptKeyName = $ReceiptKeyName
 $privArgs.AttestGpuCheck = $attestGpu
 # Tab 03 defaults (owner 2026-11-07): the AI agent pays, NEAR AI words Explained answers; desk.json console.* changes them.
 $defAnswer = if ($P.console -and $null -ne $P.console.defaultAnswerModel) { [string]$P.console.defaultAnswerModel } else { "nearai/deepseek-v4.1-flash" }
@@ -622,7 +667,7 @@ $defPayer = if ($P.console -and $P.console.defaultPayer) { [string]$P.console.de
 if (@("me", "agent") -notcontains $defPayer) { Stop-Here "$Settings console.defaultPayer must be me or agent" }
 if ($defAnswer) { $privArgs.DefaultAnswerModel = $defAnswer }
 $privArgs.DefaultPayer = $defPayer
-Say "RUN" "test-console\up.ps1 -ReplaceRunning -PaidJobs $($privArgs.PaidJobs)$(if ($Build) { ' -Build' })$(if ($WithStub) { ' -Test' })$(if ($agentMode -ne 'auto') { ' -Agent ' + $agentMode })$(if ($attestMode -ne 'auto') { ' -Attest ' + $attestMode }) -AttestGpuCheck $attestGpu -DefaultPayer $defPayer$(if ($defAnswer) { ' -DefaultAnswerModel ' + $defAnswer })"
+Say "RUN" "test-console\up.ps1 -ReplaceRunning -PaidJobs $($privArgs.PaidJobs)$(if ($Build) { ' -Build' })$(if ($WithStub) { ' -Test' })$(if ($agentMode -ne 'auto') { ' -Agent ' + $agentMode })$(if ($attestMode -ne 'auto') { ' -Attest ' + $attestMode }) -AttestGpuCheck $attestGpu$(if ($receiptsMode -ne 'auto') { ' -Receipts ' + $receiptsMode }) -DefaultPayer $defPayer$(if ($defAnswer) { ' -DefaultAnswerModel ' + $defAnswer })"
 & $privUp @privArgs
 if ($LASTEXITCODE) { Stop-Here "test-console\up.ps1 stopped (exit $LASTEXITCODE): its STOP line above names the fix" }
 

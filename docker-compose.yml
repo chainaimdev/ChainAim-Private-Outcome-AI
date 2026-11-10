@@ -24,6 +24,8 @@ volumes:
     external: true
   chainaim-analyst-work:
   chainaim-console-runs:
+  # Signed Job Evidence Receipts (privateAI-design-32 ARCH-615): kept across restarts so a buyer can fetch one later.
+  chainaim-console-receipts:
 
 secrets:
   gateway-key:
@@ -180,6 +182,8 @@ services:
     environment:
       - PAID_JOBS_KEY
       - NEAR_WATCH_INGEST_KEY
+      # The receipt signing key (ARCH-614), set by up.ps1 only with receipts on; unset = not passed, receipts off.
+      - RECEIPT_SIGNING_KEY
     secrets: [gateway-key]
     volumes:
       - ./config:/app/config:ro
@@ -187,6 +191,7 @@ services:
       - ${PRIV_AI_DATA_DIR:-C:/PRIV-AI-DATA}:/data/priv-ai-data:ro
       - chainaim-test-ledger:/gateway-data:ro
       - chainaim-console-runs:/runs
+      - chainaim-console-receipts:/receipts
     ports: ["127.0.0.1:8735:8735"]
     networks: [chainaim-test]
     depends_on: [gateway, analyst, chain-query]

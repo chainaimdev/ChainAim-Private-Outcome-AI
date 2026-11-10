@@ -17,7 +17,9 @@ COPY packages/receipt/src packages/receipt/src
 COPY services/web/src/balance.ts services/web/src/near-wallets.ts services/web/src/
 COPY config config
 COPY test-console/console test-console/console
-RUN mkdir -p /runs && chown node:node /runs
+# /receipts: the signed receipts (--receipt-dir=/receipts, volume chainaim-console-receipts); owned by node, which runs the
+# server, so an empty named volume takes this owner on first use.
+RUN mkdir -p /runs /receipts && chown node:node /runs /receipts
 USER node
 EXPOSE 8735 8731
 ENTRYPOINT ["node", "test-console/console/server.ts"]

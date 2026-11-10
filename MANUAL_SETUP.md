@@ -394,6 +394,19 @@ Rollback: do not start the `attest` profile; nothing else depends on it until AR
 
 `packages/receipt` (`signerFromEnv`) reads the console's Ed25519 receipt signing key from the environment variable named
 by `--receipt-key-env` (default `RECEIPT_SIGNING_KEY`): a PKCS#8 PEM private key, newlines written as `\n` on one line.
-Not needed yet: nothing reads it until the console's receipt step (ARCH-615) is wired; the console will refuse to start
-with `--pricing firm` without it. Where it goes and how it is generated will be one `desk.ps1` switch (it writes the key
-into `<secretsDir>\chainaim.env` and prints only the public key); never paste the private key into a chat.
+
+Updated 2026-11-10 (step 3c): the key is made and wired by the desk. One time, from the repository root:
+
+1. `.\test-console\desk.ps1 -ReceiptKey` — runs `scripts\receipt-key.ts`, which writes `RECEIPT_SIGNING_KEY` into
+   `<secretsDir>\chainaim.env` (secretsDir from `config\local\desk.json`, default `C:\PRIV-AI-SECRETS`; every other line
+   of the file is kept). It prints `OK ... created`, a `KEY ID` (32 hex characters) and the PUBLIC key, never the private
+   key. The public key is safe to share (verifiers need it). Running it again keeps the key (`already present and valid`).
+   `-ReceiptKeyRotate` replaces it: receipts signed before then verify only with the old public key.
+2. `.\test-console\desk.ps1 -All` — up.ps1 finds the key (by name, value never printed), passes it to ca-console-api as
+   `RECEIPT_SIGNING_KEY` (compose, by name), and starts the console with `--receipts=on --receipt-dir=/receipts`; receipts
+   are kept on the Docker volume `chainaim-console-receipts`. The READY table shows `receipts OK`.
+
+Switches: `desk.ps1 -Receipts` (or `receipts.enabled` "on" in desk.json) requires receipts and stops when the key is
+missing; "off" turns them off; "auto" (default) turns them on only when the key exists. `-ReceiptKeyName` changes the
+name in chainaim.env (inside the container it is always `RECEIPT_SIGNING_KEY`).
+Never open chainaim.env in a shared screen or paste it: it holds this key and the model keys.

@@ -26,6 +26,14 @@ this PC (server.ts --mode ui, which forwards every call to the console API in Do
                                                 is found, or the running catalog (config\generated\catalog.local.json) has no
                                                 "attest": "nearai" model; -Attest on stops instead, -Attest off turns it off.
                                                 -AttestGpuCheck on|off (default on): require NVIDIA's GPU verdict.
+  .\test-console\up.ps1 -Receipts on            signed Job Evidence Receipts (privateAI-design-32 ARCH-614/615): the console API
+                                                runs with --receipts on, the signing key passed to it by name as
+                                                RECEIPT_SIGNING_KEY, receipts kept on the volume chainaim-console-receipts
+                                                (/receipts). Default on: without -Receipts it is switched off, with an INFO
+                                                line, when -PaidJobs is off or no key is found (desk.ps1 -ReceiptKey makes
+                                                one); -Receipts on stops instead, -Receipts off turns it off.
+                                                -ReceiptKeyName NAME: the key's name in -SecretsFile (default
+                                                RECEIPT_SIGNING_KEY); inside the container it is always RECEIPT_SIGNING_KEY.
   .\test-console\down.ps1                       stop the UI and the compose stack (volumes kept)
 
 What it takes, from files outside the repository (NAME=value; values are never printed or written anywhere):
@@ -97,6 +105,8 @@ param(
   [ValidateSet("me", "agent")][string]$DefaultPayer = "me",
   [ValidateSet("on", "off")][string]$Attest = "on",
   [ValidateSet("on", "off")][string]$AttestGpuCheck = "on",
+  [ValidateSet("on", "off")][string]$Receipts = "on",
+  [string]$ReceiptKeyName = "RECEIPT_SIGNING_KEY",
   [int]$AttestPort = 8770,
   [string]$AttestCatalog = "config\generated\catalog.local.json",
   [string]$StateFile = "runtime\compose\last-start.json"
@@ -191,6 +201,12 @@ try {
   $nearaiFile = if (Test-Path $SecretsFile) { (Read-EnvFile $SecretsFile '^NEARAI_API_KEY$').Values[$k] } else { $null }
   if ($nearaiFile) { Set-Secret $k $nearaiFile; Say "OK" "$k from $SecretsFile" }
   elseif ($gwEnv[$k]) { Set-Secret $k $gwEnv[$k]; Say "OK" "$k kept from the running ca-gateway (not printed)" }
+  # Receipt signing key (ARCH-614): read by name from -SecretsFile, else kept from the running ca-console-api; held in this
+  # process only and set (by name, for compose) further down, only when receipts are on. Never printed or written.
+  if ($ReceiptKeyName -notmatch '^[A-Z_][A-Z0-9_]*$') { Stop-Here "-ReceiptKeyName must be an environment variable name such as RECEIPT_SIGNING_KEY" }
+  $receiptKey = if (Test-Path $SecretsFile) { (Read-EnvFile $SecretsFile ('^' + $ReceiptKeyName + '$')).Values[$ReceiptKeyName] } else { $null }
+  $receiptKeyFrom = $SecretsFile
+  if (-not $receiptKey) { $receiptKey = (Get-ContainerEnv "ca-console-api")["RECEIPT_SIGNING_KEY"]; $receiptKeyFrom = "the running ca-console-api" }
   $keyFile = Join-Path $PSScriptRoot "local-gateway-key.txt"
   if (-not (Test-Path $keyFile)) { Stop-Here "Missing $keyFile (the gateway key the console, gateway and paywall share)." }
   Set-Secret "CHAINAIM_GATEWAY_KEY" ((Get-Content -Raw $keyFile).Trim())
@@ -309,6 +325,20 @@ try {
       "--catalog=/config/generated/catalog.local.json", "--gpu-check=$AttestGpuCheck")
     Say "OK" "model attestation on: ca-attest on port $AttestPort, GPU check $AttestGpuCheck; NEAR AI key passed by name"
   }
+  # Signed receipts (ARCH-614/615): only with paid jobs; the key goes to compose by name (RECEIPT_SIGNING_KEY), never into
+  # commands.yml. Default on: without -Receipts, a PC with no key yet runs without receipts (desk.ps1 -ReceiptKey makes one).
+  if ($Receipts -eq "on" -and -not $PSBoundParameters.ContainsKey("Receipts")) {
+    $why = if ($PaidJobs -ne "on") { "-PaidJobs off" } elseif (-not $receiptKey) { "no $ReceiptKeyName in $SecretsFile (run .\test-console\desk.ps1 -ReceiptKey once)" } else { $null }
+    if ($why) { Say "INFO" "receipts off: $why (pass -Receipts on to require them, -Receipts off to skip this check)"; $Receipts = "off" }
+  }
+  if ($Receipts -eq "on") {
+    if ($PaidJobs -ne "on") { Stop-Here "-Receipts on needs -PaidJobs on: a receipt is for a paid job" }
+    if (-not $receiptKey) { Stop-Here "-Receipts on needs $ReceiptKeyName in ${SecretsFile}: run .\test-console\desk.ps1 -ReceiptKey once" }
+    Set-Secret "RECEIPT_SIGNING_KEY" $receiptKey
+    $consoleCmd += @("--receipts=on", "--receipt-key-env=RECEIPT_SIGNING_KEY", "--receipt-dir=/receipts")
+    Say "OK" "receipts on: the console signs one after each paid job; key from $receiptKeyFrom (not printed), kept on volume chainaim-console-receipts"
+  }
+  $receiptKey = $null
   $port = "127.0.0.1:${ApiPort}:${ApiPort}"
   $override = [ordered]@{ services = [ordered]@{ gateway = [ordered]@{ command = @($gwCmd) }; "console-api" = [ordered]@{ command = $consoleCmd; ports = @($port) } } }
   if ($agentCmd) { $override.services["agent"] = [ordered]@{ command = $agentCmd; ports = @("127.0.0.1:${AgentPort}:${AgentPort}") } }
