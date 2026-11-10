@@ -1,0 +1,10 @@
+{
+  "name": "@chainaim/receipt",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Job Evidence Receipt (privateAI-design-32 ARCH-613, 614, 616): canonical JSON, SHA-256 commitments and Ed25519 signatures over a paid job's ids, hashes and price; never text. The console signs, the buyer's agent verifies with the same code. No runtime dependencies (node:crypto only).",
+  "type": "module",
+  "engines": { "node": ">=22.22" },
+  "exports": { ".": "./src/index.ts" },
+  "scripts": { "test": "node --test \"test/*.test.ts\"" }
+}

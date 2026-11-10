@@ -1034,3 +1034,16 @@ Built in the AI's workspace on a snapshot of the owner's repo (main = e8626e8, v
   (runs src/rejudge.ts --all-mismatches inside ca-near-watch after the start); desk.test.ts guard. npm test 466/466.
 - Owner PC: desk.ps1 -RejudgeReceiver chainaim-payto-seller.testnet -RejudgeReason "..." -> admin UI Jobs tab shows all 3 jobs
   reconcile matched (near-watch started 15:41:04 UTC).
+
+## 2026-11-10 privateAI-design-32 step 1: packages/receipt + packages/agent-policy (chat near-ai-impl-2)
+
+- Probes: V-P1 PASS (@x402/hono cancels settlement for handler status >= 400 or a throw); V-P2 PASS with condition (the
+  delegate window follows the offer's maxTimeoutSeconds, XRPL_MAX_TIMEOUT_SECONDS default 600; the run step needs its own
+  timeout below it; release() today allows the console 10 s).
+- New packages/receipt (ARCH-613, 614, 616): canonical JSON, filesRoot, Ed25519 sign/verify, settlement as a second
+  signature; 7 tests. New packages/agent-policy (ARCH-610, 620, 621, 624): parsePolicy, decide (pay/approve/counter/refuse,
+  BigInt micro-USD), SpendLedger; 10 tests. MANUAL_SETUP.md: RECEIPT_SIGNING_KEY entry.
+- rig/tenants/t01..t03/tenant.json: "policy" block (owner values 2026-11-10); loadTenants ignores unknown keys (read).
+- desk.ps1 Invoke-Suites runs both package suites; desk.test.ts guard (ARCH-613 ARCH-620 ...).
+- Owner PC, .\test-console\desk.ps1 -Test: root suites tests 579, pass 579, fail 0, skipped 0 (17175 ms); analyst tests 234,
+  pass 234, fail 0 (22166 ms); "OK all terminal suites passed". check-deps.ts not run (it runs under -All / -Ship only).

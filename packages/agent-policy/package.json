@@ -1,0 +1,10 @@
+{
+  "name": "@chainaim/agent-policy",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Buyer-side spending policy (privateAI-design-32 ARCH-620, 621, 624): deterministic accept / counter / ask-a-human / refuse on firm quotes, a per-tenant daily spend ledger of ids and amounts. The agent's model never decides to pay. No runtime dependencies.",
+  "type": "module",
+  "engines": { "node": ">=22.22" },
+  "exports": { ".": "./src/index.ts" },
+  "scripts": { "test": "node --test \"test/*.test.ts\"" }
+}

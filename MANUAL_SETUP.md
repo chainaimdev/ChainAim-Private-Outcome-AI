@@ -389,3 +389,11 @@ One time, in order:
 4. **Tests.** `npm --prefix services/attest test` (on the PC) and, in the image (needs no key),
    `docker compose --profile attest run --rm --entrypoint npm attest run test:official`.
 Rollback: do not start the `attest` profile; nothing else depends on it until ARCH-411 (`--attest-url`, off by default).
+
+## Receipt signing key (privateAI-design-32 ARCH-614, added 2026-11-10)
+
+`packages/receipt` (`signerFromEnv`) reads the console's Ed25519 receipt signing key from the environment variable named
+by `--receipt-key-env` (default `RECEIPT_SIGNING_KEY`): a PKCS#8 PEM private key, newlines written as `\n` on one line.
+Not needed yet: nothing reads it until the console's receipt step (ARCH-615) is wired; the console will refuse to start
+with `--pricing firm` without it. Where it goes and how it is generated will be one `desk.ps1` switch (it writes the key
+into `<secretsDir>\chainaim.env` and prints only the public key); never paste the private key into a chat.

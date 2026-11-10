@@ -4,5 +4,13 @@
   "seedPrefix": "XRPL_SEED_T02",
   "address": "rD59tmENJNnHovdi4hKq79DVP4gnDNFGWk",
   "devnetAddress": "r9tT1HGQxCzeLngjSz17ePMn3RBdpTu2q5",
-  "near": { "accountId": "chainaim-t02-seller.testnet", "keyEnv": "NEAR_T02_KEY" }
+  "near": { "accountId": "chainaim-t02-seller.testnet", "keyEnv": "NEAR_T02_KEY" },
+  "policy": {
+    "autoApproveMaxUsd": "0.05",
+    "maxPerJobUsd": "0.50",
+    "dailyCapUsd": "2.00",
+    "requireAttestedRoute": true,
+    "requoteAutoAcceptPct": 10,
+    "counter": { "enabled": true, "maxRounds": 2, "acceptReduced": ["answerMaxRows", "phrase"] }
+  }
 }

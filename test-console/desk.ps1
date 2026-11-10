@@ -310,7 +310,8 @@ if ($Smoke) {
 # The terminal suites, shared by -Test and -Ship. Output goes to the screen; the exit codes are returned.
 function Invoke-Suites {
   Say "TEST" "terminal suites (each starts its own servers; near-watch path from config\local\repos.json)"
-  & node --test "packages/crossask/test/*.test.ts" "scripts/test/*.test.ts" "services/gateway/test/*.test.ts" "test-console/test/*.test.ts" | Out-Host
+  # packages/receipt and packages/agent-policy: privateAI-design-32 ARCH-613..616 and ARCH-620..624 (pure, no servers).
+  & node --test "packages/crossask/test/*.test.ts" "packages/receipt/test/*.test.ts" "packages/agent-policy/test/*.test.ts" "scripts/test/*.test.ts" "services/gateway/test/*.test.ts" "test-console/test/*.test.ts" | Out-Host
   $a = $LASTEXITCODE
   & npm --prefix services\analyst test | Out-Host
   $b = $LASTEXITCODE

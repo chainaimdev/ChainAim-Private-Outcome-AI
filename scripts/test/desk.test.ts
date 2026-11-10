@@ -31,6 +31,13 @@ test("a conductor: runs nearadminup.ps1 then test-console\\up.ps1, and their dow
   assert.ok(!/&\s*\(?[^\n]*stack\.ps1/.test(code), "never calls stack.ps1 (compose owns the containers)");
 });
 
+test("ARCH-613 ARCH-620 -Test, -All and -Ship run the receipt and agent-policy package suites", () => {
+  const suites = code.slice(code.indexOf("function Invoke-Suites"), code.indexOf("if ($Test) {"));
+  assert.match(suites, /"packages\/receipt\/test\/\*\.test\.ts"/);
+  assert.match(suites, /"packages\/agent-policy\/test\/\*\.test\.ts"/);
+  assert.match(suites, /"packages\/crossask\/test\/\*\.test\.ts"/);
+});
+
 test("leftovers: only node processes on the old ports are stopped, never Docker's port owners", () => {
   assert.match(code, /if \(\$p -and \$p\.ProcessName -eq "node"\) \{ Stop-Process/);
   assert.equal((code.match(/Stop-Process/g) ?? []).length, 1);
