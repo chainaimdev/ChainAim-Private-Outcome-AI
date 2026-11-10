@@ -91,11 +91,14 @@ let sent = 0;
 /** The test releases the next frame with next(); the source never sends a frame before it is released. */
 let release: (() => void) | null = null;
 const next = () => { const r = release; release = null; r?.(); };
+/** What the staged agent's GET /policy answers (ARCH-620); null = 404, as an agent built before the policy. */
+let policyAnswer: unknown = null;
 const agentSource: Server = createServer((req: IncomingMessage, res: ServerResponse) => {
   let raw = "";
   req.on("data", (d) => (raw += d));
   req.on("end", async () => {
     if (req.method === "GET" && req.url === "/tenants") { res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify({ network: "near:testnet", tenants: TENANTS })); return; }
+    if (req.method === "GET" && req.url === "/policy" && policyAnswer !== null) { res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify(policyAnswer)); return; }
     if (req.method === "POST" && req.url === "/run") {
       runs.push({ body: JSON.parse(raw), headers: req.headers });
       res.writeHead(200, { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-store" });
@@ -259,9 +262,29 @@ describe("ARCH-301 off by default", () => {
   });
 });
 
+describe("ARCH-620 the agent's spending policy, relayed read-only", () => {
+  const T01 = { id: "t01", autoApproveMaxUsd: "0.05", maxPerJobUsd: "0.05", dailyCapUsd: "1", requireAttestedRoute: true, counter: true, spentTodayUsd: "0.01" };
+  test("ARCH-620: GET /agent/policy passes the limits and today's spend field by field; anything else is dropped or named unreadable", async () => {
+    policyAnswer = { on: true, tenants: [{ ...T01, extra: "not passed" }, { id: "t02", autoApproveMaxUsd: "lots", maxPerJobUsd: "1", dailyCapUsd: "1", requireAttestedRoute: true, counter: false, spentTodayUsd: "0" }, { id: "t03", error: "x".repeat(300) }, { id: "../bad" }] };
+    try {
+      const r = await call(apiPort, "GET", "/agent/policy");
+      assert.equal(r.status, 200);
+      assert.deepEqual(JSON.parse(r.text), { on: true, tenants: [T01, { id: "t02", error: "the agent's policy answer could not be read" }, { id: "t03", error: "x".repeat(200) }] });
+      assert.deepEqual(JSON.parse((await call(uiPort, "GET", "/agent/policy")).text), JSON.parse(r.text), "the ui process forwards it unchanged");
+      assert.equal((await call(apiPort, "GET", "/agent/policy", {}, undefined, "evil.example:80")).status, 403);
+      policyAnswer = { on: false };
+      assert.deepEqual(JSON.parse((await call(apiPort, "GET", "/agent/policy")).text), { on: false, tenants: [] });
+      policyAnswer = null;
+      const old = await call(apiPort, "GET", "/agent/policy");
+      assert.equal(old.status, 503, "an agent without GET /policy");
+      assert.match(JSON.parse(old.text).error, /the agent service is not answering/);
+    } finally { policyAnswer = null; }
+  });
+});
+
 // ---- the page fragment's script in a stand-in DOM -----------------------------------------------------------------
 type Node0 = { id?: string; tagName?: string; children: unknown[]; hidden: boolean; disabled: boolean; checked: boolean; value: string; textContent: string; className: string; [k: string]: any };
-function runFragment(agentConfigStatus: number, initiallyTicked = false) {
+function runFragment(agentConfigStatus: number, initiallyTicked = false, policy?: { answer: unknown; frame: string }) {
   const all: Node0[] = [];
   const el = (tag: string): Node0 => {
     const n: Node0 = {
@@ -287,10 +310,12 @@ function runFragment(agentConfigStatus: number, initiallyTicked = false) {
     const jsonRes = (status: number, j: unknown) => ({ ok: status < 300, status, headers: { get: () => "application/json" }, json: async () => j });
     if (url === "/agent/config") return agentConfigStatus === 200 ? jsonRes(200, { network: "near:testnet", tenants: TENANTS }) : jsonRes(agentConfigStatus, { error: "not found" });
     if (url === "/jobs/config") return jsonRes(200, { wallet: "intear-wallet", walletName: "Intear Wallet", ttlMin: 15 });
+    if (url === "/agent/policy") return policy ? jsonRes(200, policy.answer) : jsonRes(404, { error: "not found" });
     if (url === "/agent/crossask") {
       const sentBody = JSON.parse(init!.body!);
       posted.push(`tenant=${sentBody.tenant}`);
-      const text = FRAMES.join("").replace("event: released", settledFrame + "event: released");
+      const withPolicy = policy ? settledFrame.replace("event: signed", policy.frame + "event: signed") : settledFrame;
+      const text = FRAMES.join("").replace("event: released", withPolicy + "event: released");
       return { ok: true, status: 200, headers: { get: () => "text/event-stream; charset=utf-8" }, body: body(text) };
     }
     return jsonRes(404, { error: "no route" });
@@ -372,5 +397,48 @@ describe("ARCH-309 tab 03 controls", () => {
     const page = (await call(uiPort, "GET", "/")).text;
     assert.ok(page.includes(readFileSync(FRAGMENT, "utf8")));
     assert.equal(JSON.parse((await call(uiPort, "GET", "/agent/config")).text).tenants.length, 2);
+  });
+});
+
+describe("ARCH-620 tab 03: the policy line under Who pays? and the agent's policy step", () => {
+  const POLICIES = { on: true, tenants: [
+    { id: "t01", autoApproveMaxUsd: "0.05", maxPerJobUsd: "0.05", dailyCapUsd: "1", requireAttestedRoute: true, counter: true, spentTodayUsd: "0.01" },
+    { id: "t02", autoApproveMaxUsd: "0.05", maxPerJobUsd: "0.5", dailyCapUsd: "2", requireAttestedRoute: false, counter: true, spentTodayUsd: "0" },
+  ] };
+  const POLICY_FRAME = `event: policy\ndata: ${JSON.stringify({ tenant: "t02", decision: "pay", reason: "within the auto-approve limit and the daily cap", spentTodayUsd: "0", checks: [
+    { check: "not_expired", limit: "2026-11-10T00:15:00.000Z", value: "2026-11-10T00:00:00.000Z", ok: true },
+    { check: "max_per_job", limit: "0.5", value: "0.003", ok: true }, { check: "daily_cap", limit: "2", value: "0.003", ok: true }, { check: "auto_approve", limit: "0.05", value: "0.003", ok: true },
+  ] })}\n\n`;
+
+  test("ARCH-620: picking the AI agent shows the tenant's limits and today's spend read-only; Me hides the line", async () => {
+    const dom = runFragment(200, false, { answer: POLICIES, frame: POLICY_FRAME });
+    await dom.settle();
+    dom.byId("xpayNear").checked = true;
+    await dom.byId("xpayNear").onchange();
+    assert.equal(dom.byId("xpayPolicy").hidden, true, "Me pays: no policy line");
+    dom.byId("xpayWhoAgent").checked = true;
+    dom.byId("xpayWhoMe").checked = false;
+    dom.byId("xpayTenant").value = "t01";
+    dom.byId("xpayWhoAgent").onchange();
+    assert.equal(dom.byId("xpayPolicy").hidden, false);
+    assert.equal(dom.byId("xpayPolicy").textContent, "Spending policy for t01 (its tenant.json, enforced by the agent): pays by itself up to 0.05 USDC a job · never above 0.05 USDC a job · 1 USDC a day (0.01 USDC spent today, UTC) · attested NEAR AI route only");
+  });
+
+  test("ARCH-620: the run shows the policy step with each check between Quoted and Payment signed; every step names who did it", async () => {
+    const dom = runFragment(200, false, { answer: POLICIES, frame: POLICY_FRAME });
+    await dom.settle();
+    dom.byId("xpayNear").checked = true;
+    await dom.byId("xpayNear").onchange();
+    dom.byId("xpayWhoAgent").checked = true;
+    dom.byId("xpayWhoAgent").onchange();
+    dom.byId("xpayTenant").value = "t02";
+    await dom.postData("/crossask", { folder: data, question: "q" });
+    const steps = dom.byId("xagentSteps").children.map((li: any) => li.children.map((c: any) => c.textContent).join(""));
+    assert.equal(steps.length, 9);
+    const i = steps.findIndex((x: string) => x.includes("Spending policy"));
+    assert.equal(steps[i], "[Agent t02] Spending policy: pay ✓ · quote still valid ✓ · at most 0.5 a job (quote 0.003) ✓ · 2 a day (with this job 0.003) ✓ · pays by itself up to 0.05 ✓");
+    assert.match(steps[i - 1], /^\[ChainAim\] Quoted 0\.003 USDC/);
+    assert.match(steps[i + 1], /^\[Agent t02\] Payment signed by chainaim-t02-seller\.testnet/);
+    assert.match(steps.join("|"), /^\[Agent t02\] Question .*\|\[Agent t02\] The agent asked ChainAim.*\|\[ChainAim\] Job run and held.*\|\[NEAR\] Settled on NEAR · .*\|\[ChainAim\] Result released: 1 row\(s\)\|Done$/);
   });
 });

@@ -6,8 +6,10 @@
  *
  *   GET  /healthz    {ok, tenants, presidio}: 200 once listening
  *   GET  /tenants    [{id, name, accountId}]: no key, no variable value
+ *   GET  /policy     {on, tenants: [{id, autoApproveMaxUsd, maxPerJobUsd, dailyCapUsd, requireAttestedRoute, counter,
+ *                    spentTodayUsd}]} (ARCH-620): the limits from tenant.json and today's spend; {on: false} when off
  *   POST /run        {tenant, folder, question, model?, answerModel?, phrase?, sql?} -> text/event-stream:
- *                    masked, tool_called, job_ran, quoted, signed, settled, released, done (or refused / error)
+ *                    masked, tool_called, job_ran, quoted, policy, signed, settled, released, done (or refused / error)
  *
  * --host H                 listen address (default 127.0.0.1; 0.0.0.0 in the container)
  * --port N                 (default 8760)
@@ -28,6 +30,13 @@
  * --max-turns N            most model calls per run, 1 to 20 (default 6)
  * --agent-max-tokens N     longest reply from the agent's model, 1 to 8192 (default 1024)
  * --agent-max-amount D     the most USDC one payment may be; unset (default) = no limit
+ * --agent-policy on|off    each tenant's spending policy, the "policy" block of its tenant.json (privateAI-design-32
+ *                          ARCH-620; packages/agent-policy): checked between "quoted" and "signed"; anything but "pay"
+ *                          ends the run with nothing signed or paid (default on). On: start-up refuses a listed tenant
+ *                          without a valid policy block, naming the tenant and the field
+ * --spend-dir DIR          the daily spend ledger, <DIR>/<tenant>/spend-YYYY-MM-DD.jsonl (UTC; job ids, amounts and
+ *                          transactions only), checked writable at start-up (default runtime/agent-spend at the
+ *                          repository root; /data/spend on the volume chainaim-agent-spend in compose)
  * --run-timeout-sec N      a run is cancelled if not signed by then (default 300)
  * --body-max-bytes N       largest POST /run body (default 65536)
  *
@@ -41,7 +50,8 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { BedrockModel } from "@strands-agents/sdk";
-import { AccountQueue, loadAgentTenants, parseRunRequest, payingNetwork, publicTenants, runAgentJob, SetupError, sseFrame, type AgentTenant } from "./agent-jobs-core.ts";
+import { SpendLedger } from "../../../packages/agent-policy/src/index.ts";
+import { AccountQueue, loadAgentTenants, loadPolicies, parseRunRequest, payingNetwork, policyViews, publicTenants, runAgentJob, SetupError, sseFrame, type AgentPolicy, type AgentTenant } from "./agent-jobs-core.ts";
 import { presidioClient, PROMPT_SCANNERS, PromptScan, type PromptScanner } from "./prompt-scan.ts";
 
 const REPO = fileURLToPath(new URL("../../../", import.meta.url));
@@ -71,6 +81,8 @@ const { values } = parseArgs({
     "max-turns": { type: "string", default: "6" },
     "agent-max-tokens": { type: "string", default: "1024" },
     "agent-max-amount": { type: "string" },
+    "agent-policy": { type: "string", default: "on" },
+    "spend-dir": { type: "string", default: join(REPO, "runtime", "agent-spend") },
     "run-timeout-sec": { type: "string", default: "300" },
     "body-max-bytes": { type: "string", default: "65536" },
   },
@@ -124,16 +136,24 @@ if (maxAmount !== undefined && !/^(0|[1-9]\d*)(\.\d+)?$/.test(maxAmount)) fail(`
 const runTimeoutMs = whole("run-timeout-sec", values["run-timeout-sec"], 1, 3600) * 1000;
 const bodyMax = whole("body-max-bytes", values["body-max-bytes"], 1024, 10_000_000);
 const tenantIds = values["agent-tenants"].split(",").map((s) => s.trim()).filter(Boolean);
+const policyOn = onOff("agent-policy", values["agent-policy"]);
+const spendDir = values["spend-dir"].trim();
+if (policyOn && spendDir === "") fail("--spend-dir must not be empty with --agent-policy on");
 
 let tenants: AgentTenant[];
 let network: string;
 let scan: PromptScan | undefined;
+let policy: AgentPolicy | undefined;
 try {
   tenants = loadAgentTenants(values.tenants, tenantIds, process.env);
   network = payingNetwork(process.env);
+  if (policyOn) policy = { policies: loadPolicies(values.tenants, tenants.map((t) => t.id)), ledger: new SpendLedger(spendDir) };
 } catch (e) {
   if (e instanceof SetupError) fail(e.message);
   throw e;
+}
+if (policy) {
+  try { policy.ledger.ensureWritable(); } catch (e) { fail(`--spend-dir: ${(e as Error).message}`); }
 }
 if (promptMask) {
   try {
@@ -184,6 +204,7 @@ createServer(async (req, res) => {
     if (!hostOk(req)) return json(res, 403, { error: "this Host is not in --allowed-hosts" });
     if (req.method === "GET" && path === "/healthz") return json(res, 200, { ok: true, tenants: tenants.length, network, presidio: presidioState });
     if (req.method === "GET" && path === "/tenants") return json(res, 200, { network, tenants: publicTenants(tenants) });
+    if (req.method === "GET" && path === "/policy") return json(res, 200, policy ? { on: true, tenants: policyViews(tenants, policy) } : { on: false });
     if (req.method === "POST" && path === "/run") {
       if (!/^application\/json\b/i.test(req.headers["content-type"] ?? "")) return json(res, 415, { error: "send application/json" });
       const raw = await readBody(req, bodyMax);
@@ -200,7 +221,7 @@ createServer(async (req, res) => {
       res.on("close", () => { if (!finished) stop.abort(); });
       const timer = setTimeout(() => stop.abort(), runTimeoutMs);
       try {
-        await runAgentJob(run, { tenants: byId, console: consoleUrl, paywall: paywallUrl, scan, promptMask, makeModel, maxTurns, ...(maxAmount ? { maxAmount } : {}), queue, tenantLabel, log },
+        await runAgentJob(run, { tenants: byId, console: consoleUrl, paywall: paywallUrl, scan, promptMask, makeModel, maxTurns, ...(maxAmount ? { maxAmount } : {}), ...(policy ? { policy } : {}), queue, tenantLabel, log },
           (e) => { if (!res.writableEnded && !res.destroyed) res.write(sseFrame(e)); }, stop.signal);
       } catch (e) {
         if (!res.writableEnded && !res.destroyed) res.write(sseFrame({ type: "error", reason: `the agent service failed: ${e instanceof Error ? e.message : String(e)}` }));
@@ -222,4 +243,7 @@ createServer(async (req, res) => {
   console.log(`[agent] tenants ${tenants.map((t) => `${t.id}=${t.accountId}`).join(", ")} on ${network}; keys from ${tenants.map((t) => t.keyVariable).join(", ")} (values not shown)`);
   console.log(`[agent] Bedrock ${values["model-id"]} in ${values.region}; auth ${awsAuth === "bearer" ? "bearer token from AWS_BEARER_TOKEN_BEDROCK" : "AWS credential chain"}; prompt masking ${promptMask ? `${scan!.describe()}${residual ? ", residual check" : ""}` : "off"}`);
   console.log(`[agent] console ${consoleUrl}; paywall ${paywallUrl}; per-payment limit ${maxAmount ? `${maxAmount} USDC` : "none (--agent-max-amount unset)"}; run timeout ${runTimeoutMs / 1000} s`);
+  console.log(policy
+    ? `[agent] spending policy on (tenant.json "policy"): ${policyViews(tenants, policy).map((v) => ("error" in v ? `${v.id} ${v.error}` : `${v.id} auto-pay <= ${v.autoApproveMaxUsd}, max ${v.maxPerJobUsd}/job, ${v.dailyCapUsd}/day (spent ${v.spentTodayUsd})${v.requireAttestedRoute ? ", attested route only" : ""}`)).join("; ")}; ledger ${spendDir}`
+    : "[agent] spending policy off (--agent-policy off): every quote within --agent-max-amount is paid");
 });

@@ -1161,3 +1161,42 @@ Built in the AI's workspace on a snapshot of the owner's repo (main = e8626e8, v
 - Owner-verified live (14:40 local): tab 03, AI agent t01, smb-fin-1 "Cash flow vs installment", paid 0.01 USDC,
   tx BrmwcdSP...E2HExu, AI proof 1/1 verified, Signed receipt shown with dataset + label + key id
   d27d1e9f17a0104e34c46cf3e5233f23; Download receipt file saved to Downloads.
+
+## 2026-11-10 design-32 step A: agent spending policy (ARCH-620) — written and tested in the workspace, NOT run on the PC
+
+- Owner decisions (chat near-ai-impl-5): t01 0.05 USDC a job (auto-pay and max) + 1.00 a day; t03 0.005 a job (a 0.01 job
+  is refused); commit the receipt public key (step B). t03 counter-offers set off (ARCH-623 is not built; with them on, a
+  0.01 job would be a "counter" decision instead of a plain refusal). t02 unchanged.
+- packages/agent-policy (existing decide / SpendLedger): + checksFor (each check with limit, value, ok), policyView,
+  SpendLedger.ensureWritable. decide() stays the only decision; a test keeps checksFor in step with it.
+- services/paywall/scripts/agent-jobs-core.ts: RunDeps.policy; loadPolicies (tenant.json "policy", SetupError naming the
+  tenant and field); policyViews; event `policy` {tenant, decision, reason, checks, spentTodayUsd} between `quoted` and
+  `signed`; anything but "pay" -> `refused`, nothing signed (approve -> says ARCH-621 not built; counter -> ARCH-623 not
+  built). Policy check + payment + ledger entry run in the tenant's AccountQueue slot (two parallel runs cannot both pass
+  the cap). On "pay" the signer is capped at the quoted price (min with --agent-max-amount). Ledger: only settled
+  payments; unreadable ledger -> refused (fail closed); failed write after settle -> log line spend_record_failed.
+- agent-jobs.ts: --agent-policy on|off (default on), --spend-dir (default runtime/agent-spend; /data/spend in compose),
+  checked writable at start; GET /policy; start-up line lists each tenant's limits.
+- Console server.ts: /jobs/crossask answer + route, attested (every model call carries the gateway's attestation
+  evidence); GET /agent/policy relay (field by field). Tab 03 paid-jobs.html: read-only policy line under "Who pays?",
+  "Spending policy" step with each check, actor tags [Agent tNN] / [ChainAim] / [NEAR] on every agent step, policy line
+  re-read after each run.
+- Docker: agent image built from the repository root (packages/agent-policy copied), ignore file rewritten, volume
+  chainaim-agent-spend:/data/spend, image CMD and up.ps1 pass --spend-dir=/data/spend (up.ps1 also --agent-policy=on).
+- Tests (new): services/paywall/test/agent-policy.test.ts (11, real paywall + NEAR double + real tenant files),
+  scripts/test/agent-docker.test.ts (4), packages/agent-policy +3, console-agent.test.ts +3 (relay, policy line, steps).
+  Updated (lesson 6): console-paid-jobs.test.ts quote keys + route/attested.
+- Workspace runs (Linux copy of 32e3dad + these files): paywall `npm test` 311/311; root suites (desk.ps1's list)
+  612 pass, 1 skipped, 0 fail (603 before the change on the same copy, so +10 -> expected 619 on the PC); check-deps OK.
+- Owner `desk.ps1 -All` 22:12Z: root 619/619, analyst 234/234, paywall 311/311, "OK all terminal suites passed". The stack
+  start first stopped at up.ps1 "is not digitally signed" (the file came from a downloaded zip: Windows' downloaded-file
+  mark); `Unblock-File .\test-console\up.ps1`, then -All again.
+- Owner live (17:19 local), tab 03, smb-fin-1 "Cash flow vs installment", answer nearai/deepseek-v4.1-flash:
+  t01 -> `Spending policy: pay ✓ · quote still valid ✓ · attested route ✓ · at most 0.05 a job (quote 0.010000) ✓ ·
+  1 a day (with this job 0.01) ✓ · pays by itself up to 0.05 ✓`, signed, settled tx 2praLFme…JUwyvD, AI proof 1/1
+  verified, signed receipt shown; policy line then "0.01 USDC spent today" (ledger recorded). attested=true shown live.
+  t03 (17:22) -> `Spending policy: refused ✗ ... at most 0.005 a job (quote 0.010000) ✗ ... pays by itself up to 0.005 ✗`,
+  "Not paid: refused by t03's spending policy: the cheapest quote 0.010000 USD is above maxPerJobUsd 0.005; nothing was
+  signed or paid"; no signed / settled step, no receipt.
+- Cosmetic, open: the quote shows as 0.010000 in the policy step and refusal (raw totalUsd); after a refusal the status
+  line still reads "...is running and paying the job…" above the red "Not paid" line.

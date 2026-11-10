@@ -6,7 +6,7 @@
  * decided here, so a prompt-injected model cannot raise a spend. Money is whole micro-USD (6 decimals, BigInt), never a
  * float. The policy is the "policy" block of <tenants>/<id>/tenant.json; every value is the owner's.
  */
-import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { accessSync, appendFileSync, constants, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 export const MICRO = 6;
@@ -121,6 +121,38 @@ export function decide(policy: Policy, quotes: readonly Quote[], ctx: DecideCont
   return { action: "approve", quote: best.q, reason: "above the auto-approve limit; waiting for a human" };
 }
 
+/**
+ * One rule of the policy as applied to one quote, for display and logs (ARCH-620 "policy" event): the rule's name, the
+ * policy's limit, the quote's value and whether it passed. Amounts are decimal USD strings. This explains a decision;
+ * decide() is still the only thing that makes one (a test keeps the two in step).
+ */
+export type PolicyCheck = { check: "not_expired" | "attested_route" | "max_per_job" | "daily_cap" | "auto_approve"; limit: string; value: string; ok: boolean };
+
+/** The checks decide() applies to one quote (no counter round, no requote), in the order it applies them. */
+export function checksFor(policy: Policy, quote: Quote, ctx: Pick<DecideContext, "spentTodayMicro" | "now">): PolicyCheck[] {
+  const price = usdToMicro(quote.priceUsd, `quote ${quote.quoteId} priceUsd`);
+  const out: PolicyCheck[] = [{ check: "not_expired", limit: new Date(quote.expiresAt).toISOString(), value: new Date(ctx.now).toISOString(), ok: quote.expiresAt > ctx.now }];
+  if (policy.requireAttestedRoute) out.push({ check: "attested_route", limit: "required", value: quote.attested ? "attested" : "not attested", ok: quote.attested });
+  out.push({ check: "max_per_job", limit: microToUsd(policy.maxPerJobMicro), value: quote.priceUsd, ok: price <= policy.maxPerJobMicro });
+  out.push({ check: "daily_cap", limit: microToUsd(policy.dailyCapMicro), value: microToUsd(ctx.spentTodayMicro + price), ok: ctx.spentTodayMicro + price <= policy.dailyCapMicro });
+  out.push({ check: "auto_approve", limit: microToUsd(policy.autoApproveMicro), value: quote.priceUsd, ok: price <= policy.autoApproveMicro });
+  return out;
+}
+
+/** What a page or a log may show of a tenant's policy: the owner's limits and today's spend, decimal USD. */
+export type PolicyView = { autoApproveMaxUsd: string; maxPerJobUsd: string; dailyCapUsd: string; requireAttestedRoute: boolean; counter: boolean; spentTodayUsd: string };
+
+export function policyView(policy: Policy, spentTodayMicro: bigint): PolicyView {
+  return {
+    autoApproveMaxUsd: microToUsd(policy.autoApproveMicro),
+    maxPerJobUsd: microToUsd(policy.maxPerJobMicro),
+    dailyCapUsd: microToUsd(policy.dailyCapMicro),
+    requireAttestedRoute: policy.requireAttestedRoute,
+    counter: policy.counter.enabled,
+    spentTodayUsd: microToUsd(spentTodayMicro),
+  };
+}
+
 function counterOr(policy: Policy, ctx: DecideContext, q: Quote, refuseReason: string): Decision {
   const round = ctx.counterRound ?? 0;
   if (policy.counter.enabled && round < policy.counter.maxRounds && policy.autoApproveMicro > 0n) {
@@ -145,6 +177,16 @@ export class SpendLedger {
   private file(tenant: string, at: number): string {
     if (!/^[A-Za-z0-9_-]{1,64}$/.test(tenant)) throw new Error("tenant id must be 1-64 letters, digits, _ or -");
     return join(this.dir, tenant, `spend-${new Date(at).toISOString().slice(0, 10)}.jsonl`);
+  }
+
+  /** Start-up check (fail early, not after a payment): the ledger folder exists or can be made, and can be written. */
+  ensureWritable(): void {
+    try {
+      mkdirSync(this.dir, { recursive: true });
+      accessSync(this.dir, constants.W_OK);
+    } catch (e) {
+      throw new Error(`the spend ledger folder ${this.dir} cannot be written (${(e as NodeJS.ErrnoException).code ?? "error"})`);
+    }
   }
 
   record(tenant: string, jobId: string, amountUsd: string, transaction: string): void {

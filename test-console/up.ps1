@@ -298,7 +298,7 @@ try {
     $agentCmd = @("--host=0.0.0.0", "--port=$AgentPort", "--allowed-hosts=agent:$AgentPort,127.0.0.1:$AgentPort,localhost:$AgentPort",
       "--tenants=/app/rig/tenants", "--agent-tenants=$AgentTenants", "--console=http://console-api:$ApiPort", "--paywall=http://paywall:8080",
       "--region=$AgentRegion", "--model-id=$AgentModelId", "--aws-auth=bearer", "--presidio-url=http://presidio.railway.internal:3000",
-      "--run-timeout-sec=$AgentTimeoutSec")
+      "--run-timeout-sec=$AgentTimeoutSec", "--agent-policy=on", "--spend-dir=/data/spend")
     Say "OK" "agent mode on: tenants $AgentTenants, Bedrock $AgentModelId in $AgentRegion; keys from $AgentEnvFile (mounted, not read here); Bedrock key passed by name"
   }
   # NEAR AI model attestation (ARCH-411): ca-attest reads the models to attest from the catalog the gateway runs with.

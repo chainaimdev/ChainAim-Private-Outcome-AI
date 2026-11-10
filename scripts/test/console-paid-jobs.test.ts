@@ -153,7 +153,9 @@ describe("ARCH-104 the console creates a paid job and returns only its cost", ()
     const r = await ask({ folder: data, question: QUESTION, model: MODEL, answerModel: MODEL, phrase: "llm" });
     assert.equal(r.status, 200, r.text);
     const j = JSON.parse(r.text);
-    assert.deepEqual(Object.keys(j).sort(), ["amount", "asset", "expiresAt", "jobId", "network", "payTo", "totalUsd"]);
+    assert.deepEqual(Object.keys(j).sort(), ["amount", "asset", "attested", "expiresAt", "jobId", "network", "payTo", "route", "totalUsd"]);
+    // ARCH-620: what the buyer's policy checks. This stand-in model sends no gateway attestation headers, so not attested.
+    assert.deepEqual([j.route, j.attested], [MODEL, false]);
     for (const leak of ["result", "answer", "sql", "rows", MARKER, "There are 3", "count(*)"]) assert.equal(r.text.includes(leak), false, leak);
     assert.match(j.jobId, /^[0-9a-f]{32}$/);
     assert.equal(modelCalls, 2, "the query and the worded answer");
@@ -397,7 +399,7 @@ describe("ARCH-205 (chainaim-adminUI-NEAR architecture-adminui-jobs.md) the job 
       const r = await ask({ folder: data, question: QUESTION, model: MODEL, answerModel: MODEL, phrase: "llm" }, port);
       assert.equal(r.status, 200, r.text);
       const j = JSON.parse(r.text);
-      assert.deepEqual(Object.keys(j).sort(), ["amount", "asset", "expiresAt", "jobId", "network", "payTo", "totalUsd"], "the response is as without the feed");
+      assert.deepEqual(Object.keys(j).sort(), ["amount", "asset", "attested", "expiresAt", "jobId", "network", "payTo", "route", "totalUsd"], "the response is as without the feed");
       for (let i = 0; i < 100 && !nw.store.getJob(j.jobId); i++) await new Promise((ok) => setTimeout(ok, 20));
       const job = nw.store.getJob(j.jobId)!;
       assert.ok(job, "near-watch has the job");

@@ -123,7 +123,8 @@
  *
  *   Tab 03 agent mode (architecture-tab03-agent-mode.md ARCH-307/308; off unless --agent-service, which needs --paid-jobs on):
  *   a tenant's AI agent (services/paywall/scripts/agent-jobs.ts) runs the paid job and pays it from the tenant's NEAR
- *   account. GET /agent/config lists the agent's tenants; POST /agent/crossask {folder, question, model?, answerModel?,
+ *   account. GET /agent/config lists the agent's tenants; GET /agent/policy their spending policies and today's spend
+ *   (privateAI-design-32 ARCH-620; {on: false} when the agent runs without one); POST /agent/crossask {folder, question, model?, answerModel?,
  *   phrase?, sql?, tenant} is relayed to the agent's POST /run and its event stream passed back byte for byte as it
  *   arrives. This server adds no key and logs only {route:"agent", tenant, jobId, status, ms}.
  *   --agent-service URL        the agent service, e.g. http://agent:8760 (default unset = no /agent routes)
@@ -821,7 +822,11 @@ createServer(async (req, res) => {
       ATTEST?.start(jobId, out.served);
       // Ids and amounts only.
       console.log(JSON.stringify({ ts: new Date().toISOString(), route: "paid-job", event: "job_quoted", jobId, amount: quote.amount, calls: quote.breakdown.calls.length }));
-      return dataJson(res, 200, { jobId, totalUsd: quote.totalUsd, amount: quote.amount, network: offer.network, asset: offer.asset, payTo: offer.payTo, expiresAt });
+      // route / attested (privateAI-design-32 ARCH-620): what the buyer's spending policy checks. attested = every model
+      // call of the job came back with the gateway's attestation evidence (the calls ca-attest is asked about); a job with
+      // no model call, or with one call on a route without evidence, is not attested. Model ids and a boolean only.
+      const attested = out.served.length > 0 && out.served.every((s) => s.attest !== undefined);
+      return dataJson(res, 200, { jobId, totalUsd: quote.totalUsd, amount: quote.amount, network: offer.network, asset: offer.asset, payTo: offer.payTo, expiresAt, route: routeOf(model, answerModel), attested });
     }
     // The NEAR payment for one job, relayed to the paywall (never the gateway, and without the gateway key).
     if (PAID_JOBS && api === "paid" && name === "jobs" && req.method === "POST") {
@@ -864,6 +869,13 @@ createServer(async (req, res) => {
       return dataJson(res, 200, { network: t.network, tenants: t.tenants });
     }
     if (AGENT_SERVICE && api === "agent" && name === "crossask" && req.method === "POST") return relayAgent(req, res);
+    // ARCH-620: the agent's spending policy per tenant (limits and today's spend), for the read-only line under "Who pays?".
+    if (AGENT_SERVICE && api === "agent" && name === "policy" && req.method === "GET") {
+      if (!hostOk(req)) return dataJson(res, 403, { error: `open the console as http://127.0.0.1:${PORT}` });
+      const p = await agentPolicy();
+      if ("error" in p) return dataJson(res, 503, { error: p.error });
+      return dataJson(res, 200, p);
+    }
     // ---- Paid chat ---------------------------------------------------------------------------------------------
     // The browser bundle that pays from the visitor's Crossmark wallet (services/web/public/wallet.js).
     if (api === "wallet.js" && req.method === "GET") {
@@ -1048,6 +1060,28 @@ async function agentTenants(): Promise<{ network: string; tenants: { id: string;
     return { network: j.network, tenants };
   } catch {
     return { error: `the agent service is not answering at ${AGENT_SERVICE}: start it (up.ps1 -Agent on); nothing was run or paid` };
+  }
+}
+
+const POLICY_USD = /^(0|[1-9]\d*)(\.\d{1,6})?$/;
+/**
+ * The agent service's GET /policy (ARCH-620), re-read field by field: only decimal amounts, booleans and the tenant id
+ * pass; a tenant whose ledger could not be read keeps a short error. {on: false} when the agent runs without a policy.
+ */
+async function agentPolicy(): Promise<{ on: boolean; tenants: Record<string, unknown>[] } | { error: string }> {
+  try {
+    const r = await fetch(`${AGENT_SERVICE}/policy`, { signal: AbortSignal.timeout(8000) });
+    const j = (await r.json()) as { on?: unknown; tenants?: unknown };
+    if (!r.ok || typeof j.on !== "boolean") throw new Error(`HTTP ${r.status}`);
+    if (!j.on || !Array.isArray(j.tenants)) return { on: false, tenants: [] };
+    const tenants = (j.tenants as Record<string, unknown>[]).filter((t) => typeof t?.id === "string" && /^[A-Za-z0-9_-]{1,64}$/.test(t.id as string)).map((t) =>
+      typeof t.error === "string" ? { id: t.id, error: (t.error as string).slice(0, 200) }
+        : ["autoApproveMaxUsd", "maxPerJobUsd", "dailyCapUsd", "spentTodayUsd"].every((k) => typeof t[k] === "string" && POLICY_USD.test(t[k] as string)) && typeof t.requireAttestedRoute === "boolean" && typeof t.counter === "boolean"
+          ? { id: t.id, autoApproveMaxUsd: t.autoApproveMaxUsd, maxPerJobUsd: t.maxPerJobUsd, dailyCapUsd: t.dailyCapUsd, requireAttestedRoute: t.requireAttestedRoute, counter: t.counter, spentTodayUsd: t.spentTodayUsd }
+          : { id: t.id, error: "the agent's policy answer could not be read" });
+    return { on: true, tenants };
+  } catch {
+    return { error: `the agent service is not answering at ${AGENT_SERVICE}` };
   }
 }
 

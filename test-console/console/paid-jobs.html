@@ -10,7 +10,11 @@
      Receipts (privateAI-design-32 ARCH-613/615): both paths send datasetId (the picked dataset's config id) and templateLabel
      (the picked template's label, only while the question is still that template's text) so the console's receipt names
      them; after a paid release, when GET /jobs/config says receipts are on, GET /jobs/<id>/receipt is shown with its key id
-     and settlement and can be downloaded as {receipt, publicKeyPem} for any verifier (packages/receipt verifyReceipt). -->
+     and settlement and can be downloaded as {receipt, publicKeyPem} for any verifier (packages/receipt verifyReceipt).
+     Spending policy (privateAI-design-32 ARCH-620): when GET /agent/policy answers {on: true}, a read-only line under
+     "Who pays?" shows the picked tenant's limits (its tenant.json "policy" block) and today's spend; the agent's "policy"
+     step shows each check with its limit and the decision. Each agent step is tagged with who did it: the agent (on this
+     PC, with the tenant's key), ChainAim (the console and the paywall) or NEAR (the chain). -->
 <script>
 (() => {
   const ask = document.getElementById("xaskGo");
@@ -43,6 +47,10 @@
   const tenantPick = document.createElement("select");
   tenantPick.id = "xpayTenant"; tenantPick.disabled = true;
   who.append("Who pays? ", me.l, "· ", bot.l, tenantPick);
+  // ARCH-620: the picked tenant's spending policy, read-only (set in its tenant.json, enforced by the agent service).
+  const policyLine = document.createElement("div");
+  policyLine.id = "xpayPolicy"; policyLine.className = "muted"; policyLine.hidden = true;
+  who.append(policyLine);
   // Model attestation of the paid job (owner 2026-11-07): filled after the result is released, only with --attest-url.
   const proof = document.createElement("div");
   proof.id = "xattest";
@@ -54,11 +62,28 @@
 
   let config = null;
   let agent = null;
+  let policies = null;
   const agentChosen = () => agent !== null && bot.r.checked;
   const say = (text, isErr = false) => { info.textContent = text; info.className = isErr ? "err" : "muted"; };
   const tenantOf = () => agent.tenants.find((t) => t.id === tenantPick.value);
+  const usd = (v) => `${Number(v)} USDC`;
+  /** The read-only policy line for the picked tenant; hidden when the agent runs without a policy or "Me" pays. */
+  const showPolicy = () => {
+    const p = agentChosen() && policies ? policies.find((x) => x.id === tenantPick.value) : undefined;
+    policyLine.hidden = !p;
+    if (!p) return;
+    policyLine.textContent = p.error
+      ? `Spending policy for ${p.id}: ${p.error}`
+      : `Spending policy for ${p.id} (its tenant.json, enforced by the agent): pays by itself up to ${usd(p.autoApproveMaxUsd)} a job · never above ${usd(p.maxPerJobUsd)} a job · ${usd(p.dailyCapUsd)} a day (${usd(p.spentTodayUsd)} spent today, UTC)${p.requireAttestedRoute ? " · attested NEAR AI route only" : ""}`;
+  };
+  const loadPolicy = () => fetch("/agent/policy").then(async (r) => {
+    const j = r.ok ? await r.json() : null;
+    policies = j && j.on === true && Array.isArray(j.tenants) ? j.tenants : null;
+    showPolicy();
+  }).catch(() => { policies = null; showPolicy(); });
   const explain = () => {
     if (!tick.checked || !config) return;
+    showPolicy();
     if (agentChosen()) { const t = tenantOf(); say(`On, AI agent: Ask runs the job, and the agent for ${t.name} pays its total from ${t.accountId} by itself (no pop-up); its steps show below, then the result.`); return; }
     say(`On: Ask runs the job and shows its total; nothing is shown or charged until you press Pay in ${config.walletName}. A quote stays payable ${config.ttlMin} minutes.`);
   };
@@ -83,6 +108,7 @@
     if (!Array.isArray(j.tenants) || j.tenants.length === 0) return;
     agent = j;
     tenantPick.replaceChildren(...j.tenants.map((t) => { const o = document.createElement("option"); o.value = t.id; o.textContent = `${t.id} · ${t.accountId}`; return o; }));
+    void loadPolicy();
     who.hidden = !tick.checked;
     // --default-payer agent (owner 2026-11-07): the box starts ticked with the AI agent paying; Me stays one click away.
     const c = await fetch("/jobs/config").then((x) => (x.ok ? x.json() : null)).catch(() => null);
@@ -163,13 +189,24 @@
     return link;
   };
 
-  /** Agent mode: the run's steps as they arrive, then the released result; rejects with one plain sentence. */
+  /** Agent mode: one run (agentRun), then the policy line is read again, since today's spend may have changed (ARCH-620). */
   async function agentStep(body) {
+    try { return await agentRun(body); }
+    finally { if (policies) void loadPolicy(); }
+  }
+
+  /** Agent mode: the run's steps as they arrive, then the released result; rejects with one plain sentence. */
+  async function agentRun(body) {
     const t = tenantOf();
     const steps = document.createElement("ol");
     steps.id = "xagentSteps";
     pay.replaceChildren(steps);
     const step = (...parts) => { const li = document.createElement("li"); li.append(...parts); steps.append(li); };
+    // Who did each step: the agent (this PC, the tenant's key), ChainAim (console + paywall) or NEAR (the chain).
+    const by = (actor) => { const s = document.createElement("span"); s.className = "actor"; s.textContent = `[${actor}] `; return s; };
+    const AGENT = `Agent ${t.id}`;
+    const CHECK = { not_expired: (c) => "quote still valid", attested_route: (c) => "attested route", max_per_job: (c) => `at most ${c.limit} a job (quote ${c.value})`,
+      daily_cap: (c) => `${c.limit} a day (with this job ${c.value})`, auto_approve: (c) => `pays by itself up to ${c.limit}` };
     say(`The AI agent for ${t.name} is running and paying the job…`);
     const r = await fetch("/agent/crossask", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ...body, tenant: t.id }) });
     if (!r.ok || !/^text\/event-stream/i.test(r.headers.get("content-type") ?? "")) {
@@ -191,13 +228,17 @@
         try { d = JSON.parse(/^data: (.*)$/m.exec(frame)?.[1] ?? "{}"); } catch { d = {}; }
         if (type === "masked") {
           const found = Object.entries(d.counts ?? {});
-          step(found.length ? `Question masked on this PC before the agent's model saw it: ${found.map(([k, n]) => `${k} ×${n}`).join(", ")}` : "Question checked on this PC before the agent's model saw it: nothing to mask");
-        } else if (type === "tool_called") step("The agent asked ChainAim to run the job");
-        else if (type === "job_ran" && (ranJob = /^[0-9a-f]{32}$/.test(String(d.jobId)) ? String(d.jobId) : null, true)) step(`Job run and held (id ${String(d.jobId).slice(0, 8)}…); the result stays hidden until paid`);
-        else if (type === "quoted") { quoted = d; step(`Quoted ${Number(d.totalUsd)} USDC on ${d.network} to ${d.payTo}`); }
-        else if (type === "signed") step(`Payment signed by ${d.account} (ChainAim's relayer pays the gas)`);
-        else if (type === "settled") { settled = d; step("Settled on NEAR · ", explorerLink(d.network, d.transaction)); }
-        else if (type === "released") { result = d.result; step(`Result released: ${d.rows} row(s)`); }
+          step(by(AGENT), found.length ? `Question masked on this PC before the agent's model saw it: ${found.map(([k, n]) => `${k} ×${n}`).join(", ")}` : "Question checked on this PC before the agent's model saw it: nothing to mask");
+        } else if (type === "tool_called") step(by(AGENT), "The agent asked ChainAim to run the job");
+        else if (type === "job_ran" && (ranJob = /^[0-9a-f]{32}$/.test(String(d.jobId)) ? String(d.jobId) : null, true)) step(by("ChainAim"), `Job run and held (id ${String(d.jobId).slice(0, 8)}…); the result stays hidden until paid`);
+        else if (type === "quoted") { quoted = d; step(by("ChainAim"), `Quoted ${Number(d.totalUsd)} USDC on ${d.network} to ${d.payTo}`); }
+        else if (type === "policy") {
+          const checks = Array.isArray(d.checks) ? d.checks.filter((c) => CHECK[c.check]).map((c) => `${CHECK[c.check](c)} ${c.ok ? "✓" : "✗"}`) : [];
+          step(by(AGENT), `Spending policy: ${d.decision === "pay" ? "pay ✓" : d.decision === "refuse" ? "refused ✗" : `${d.decision} ✗`} · ${checks.join(" · ")}`);
+        }
+        else if (type === "signed") step(by(AGENT), `Payment signed by ${d.account} (ChainAim's relayer pays the gas)`);
+        else if (type === "settled") { settled = d; step(by("NEAR"), "Settled on NEAR · ", explorerLink(d.network, d.transaction)); }
+        else if (type === "released") { result = d.result; step(by("ChainAim"), `Result released: ${d.rows} row(s)`); }
         else if (type === "done") step("Done");
         else if (type === "refused") throw new Error(`Not paid: ${d.reason}`);
         else if (type === "error") throw new Error(`${d.reason}${d.transaction ? ` (transaction ${d.transaction})` : ""}`);

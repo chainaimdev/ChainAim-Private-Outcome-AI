@@ -26,6 +26,9 @@ volumes:
   chainaim-console-runs:
   # Signed Job Evidence Receipts (privateAI-design-32 ARCH-615): kept across restarts so a buyer can fetch one later.
   chainaim-console-receipts:
+  # The agent's daily spend ledger (privateAI-design-32 ARCH-620): job ids, amounts and transactions per tenant per UTC
+  # day, kept across restarts so a restart cannot reset a tenant's daily cap.
+  chainaim-agent-spend:
 
 secrets:
   gateway-key:
@@ -201,7 +204,9 @@ services:
   # configuration); the Bedrock key arrives by name (AWS_BEARER_TOKEN_BEDROCK, up.ps1 ARCH-311). up.ps1 writes the command.
   agent:
     profiles: [agent]
-    build: { context: services, dockerfile: paywall/agent.Dockerfile, labels: *source }
+    # Context: the repository root, so the image can hold packages/agent-policy (ARCH-620); its ignore file keeps only
+    # what agent.Dockerfile copies (guard: scripts/test/agent-docker.test.ts).
+    build: { context: ., dockerfile: services/paywall/agent.Dockerfile, labels: *source }
     image: chainaim-agent:local
     container_name: ca-agent
     labels: *source
@@ -209,6 +214,7 @@ services:
       - AWS_BEARER_TOKEN_BEDROCK
     volumes:
       - ./rig/tenants:/app/rig/tenants:ro
+      - chainaim-agent-spend:/data/spend
       - type: bind
         source: ${AGENT_ENV_FILE:-C:/PRIV-AI-SECRETS/agent-tenants.env}
         target: /run/secrets/agent-tenants.env

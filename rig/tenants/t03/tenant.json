@@ -6,11 +6,11 @@
   "devnetAddress": "rBiTxD7MPhkzWkbfuHDn47WVgwyJ6dP8xY",
   "near": { "accountId": "chainaim-t03-seller.testnet", "keyEnv": "NEAR_T03_KEY" },
   "policy": {
-    "autoApproveMaxUsd": "0.05",
-    "maxPerJobUsd": "0.50",
+    "autoApproveMaxUsd": "0.005",
+    "maxPerJobUsd": "0.005",
     "dailyCapUsd": "2.00",
     "requireAttestedRoute": false,
     "requoteAutoAcceptPct": 10,
-    "counter": { "enabled": true, "maxRounds": 2, "acceptReduced": ["answerMaxRows", "phrase"] }
+    "counter": { "enabled": false, "maxRounds": 0, "acceptReduced": ["answerMaxRows", "phrase"] }
   }
 }

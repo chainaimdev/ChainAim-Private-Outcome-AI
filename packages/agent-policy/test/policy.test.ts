@@ -1,9 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { decide, parsePolicy, SpendLedger, usdToMicro, type Quote } from "../src/index.ts";
+import { checksFor, decide, parsePolicy, policyView, SpendLedger, usdToMicro, type Quote } from "../src/index.ts";
 
 const RAW = {
   autoApproveMaxUsd: "0.10",
@@ -92,6 +92,47 @@ test("ARCH-620 the spend ledger sums today's settled payments per tenant and sta
     t = Date.parse("2026-11-11T00:30:00Z");
     assert.equal(l.spentToday("t02"), 0n);
     assert.throws(() => l.record("../x", "j", "0.01", "tx"), /tenant id/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("ARCH-620 checksFor explains a single quote the way decide() decides it: pay exactly when every check passes", () => {
+  // The owner's demo values (2026-11-10): t01 pays a 0.01 job, t03 refuses it.
+  const t01 = parsePolicy({ ...RAW, autoApproveMaxUsd: "0.05", maxPerJobUsd: "0.05", dailyCapUsd: "1.00", counter: { enabled: false, maxRounds: 0, acceptReduced: [] } }, "t01");
+  const t03 = parsePolicy({ ...RAW, autoApproveMaxUsd: "0.005", maxPerJobUsd: "0.005", dailyCapUsd: "2.00", requireAttestedRoute: false, counter: { enabled: false, maxRounds: 0, acceptReduced: [] } }, "t03");
+  const cases: [string, ReturnType<typeof parsePolicy>, Quote, bigint][] = [
+    ["t01 pays", t01, q("0.01"), 0n],
+    ["t01 daily cap", t01, q("0.01"), usdToMicro("0.995")],
+    ["t01 not attested", t01, q("0.01", { attested: false }), 0n],
+    ["t01 expired", t01, q("0.01", { expiresAt: NOW }), 0n],
+    ["t01 above max", t01, q("0.06"), 0n],
+    ["t03 refuses", t03, q("0.01", { attested: false }), 0n],
+    ["t03 pays a small job", t03, q("0.004", { attested: false }), 0n],
+  ];
+  for (const [name, p, quote, spent] of cases) {
+    const d = decide(p, [quote], { spentTodayMicro: spent, now: NOW });
+    const checks = checksFor(p, quote, { spentTodayMicro: spent, now: NOW });
+    assert.equal(d.action === "pay", checks.every((c) => c.ok), name);
+  }
+  const refused = checksFor(t03, q("0.01", { attested: false }), { spentTodayMicro: 0n, now: NOW });
+  assert.deepEqual(refused.map((c) => [c.check, c.limit, c.value, c.ok]).slice(1), [["max_per_job", "0.005", "0.01", false], ["daily_cap", "2", "0.01", true], ["auto_approve", "0.005", "0.01", false]]);
+  assert.equal(refused.some((c) => c.check === "attested_route"), false, "no attested-route row when the policy does not require it");
+  assert.deepEqual(checksFor(t01, q("0.01"), { spentTodayMicro: 0n, now: NOW }).map((c) => c.check), ["not_expired", "attested_route", "max_per_job", "daily_cap", "auto_approve"]);
+});
+
+test("ARCH-620 policyView shows the owner's limits and today's spend as decimal USD, nothing else", () => {
+  assert.deepEqual(policyView(parsePolicy(RAW, "t01"), usdToMicro("0.02")), {
+    autoApproveMaxUsd: "0.1", maxPerJobUsd: "1", dailyCapUsd: "5", requireAttestedRoute: true, counter: true, spentTodayUsd: "0.02",
+  });
+});
+
+test("ARCH-620 the spend ledger refuses at start-up when its folder cannot be written", () => {
+  const dir = mkdtempSync(join(tmpdir(), "spend-"));
+  try {
+    new SpendLedger(join(dir, "new", "deeper")).ensureWritable();
+    writeFileSync(join(dir, "a-file"), "x");
+    assert.throws(() => new SpendLedger(join(dir, "a-file", "x")).ensureWritable(), /the spend ledger folder .* cannot be written/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

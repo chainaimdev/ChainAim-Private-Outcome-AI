@@ -7,8 +7,8 @@
   "near": { "accountId": "chainaim-buyer-seller.testnet", "keyEnv": "NEAR_BUYER_KEY" },
   "policy": {
     "autoApproveMaxUsd": "0.05",
-    "maxPerJobUsd": "0.50",
-    "dailyCapUsd": "2.00",
+    "maxPerJobUsd": "0.05",
+    "dailyCapUsd": "1.00",
     "requireAttestedRoute": true,
     "requoteAutoAcceptPct": 10,
     "counter": { "enabled": true, "maxRounds": 2, "acceptReduced": ["answerMaxRows", "phrase"] }

@@ -469,3 +469,13 @@ Still open: the Crossmark web page payment; Open Question 4 (Bazaar); `RUN-ON-AN
   line under "Who pays?", "verified by the agent" in the receipt panel; C desk.ps1 -AgentAsk (headless run);
   D desk.ps1 -VerifyReceipt <file> (offline check). Then firm pricing 3e. Demo: t01 pays + verifies, t03 refuses, terminal
   -AgentAsk, -VerifyReceipt on the downloaded file.
+
+## RESUME POINT — 2026-11-10 ~20:30Z (chat near-ai-impl-5): design-32 step A agent spending policy (ARCH-620) — owner-verified live (t01 paid, t03 refused), NOT shipped yet
+- BUILD_LOG "design-32 step A". Owner values: t01 0.05/job + 1.00/day (pays 0.01), t03 0.005/job, counter off (refuses
+  0.01). Public key commit for step B: approved.
+- Next (owner, one at a time): desk.ps1 -All (expect root 619, paywall 311; agent image rebuilt from the repo root); then
+  tab 03 AI agent t01 on smb-fin-1 -> "Spending policy: pay ✓" then paid; then t03 -> "Spending policy: refused ✗",
+  "Not paid: refused by t03's spending policy ...". If t01 shows "attested route ✗", the job had a call without NEAR AI
+  attestation evidence (mixed route) -> report it before changing anything. Then BUILD_LOG + ship.
+- Then B (receipt verified by the agent against config/receipt-public-key.pem), C (-AgentAsk), D (-VerifyReceipt).
+

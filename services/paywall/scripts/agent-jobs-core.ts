@@ -11,6 +11,10 @@
  *   3. the tool posts the job to the console (POST <console>/jobs/crossask: run, meter, quote, hold, register) with
  *      the user's question as typed, exactly as the manual Intear flow does; the console's job pipeline masks what
  *      its models see, as it does for every job
+ *   3b. with a spending policy (privateAI-design-32 ARCH-620; --agent-policy on), the quote goes through the tenant's
+ *      policy (packages/agent-policy decide(), the "policy" block of tenant.json) and today's spend from the ledger;
+ *      the `policy` step carries each check and the decision. Anything but "pay" ends the run: nothing is signed or paid.
+ *      The decision is deterministic code: the agent's model only triggers the tool and never decides to pay
  *   4. it pays <paywall>/v1/jobs/<jobId>/release with payAndFetchNear (scripts/near.ts) and the tenant's payer:
  *      a NEP-366 delegate signed with the tenant's key and submitted by ChainAim's relayer, so the tenant account
  *      needs USDC only
@@ -19,11 +23,15 @@
  *      writes no summary and its final text is not used
  *
  * Payments run one at a time per tenant account (AccountQueue): one NEAR key signs one delegate at a time (its
- * nonce). A hang-up or timeout before the delegate is signed cancels the run with nothing paid; once signed, the run
+ * nonce). The policy check, the payment and the ledger entry run inside the same queue slot, so two runs of one tenant
+ * can never both pass the daily cap on the same spend. A hang-up or timeout before the delegate is signed cancels the run with nothing paid; once signed, the run
  * completes and is logged. Logs carry the tenant, job id, status and milliseconds: never a question, a result or a key.
  */
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { Agent, tool, type Model } from "@strands-agents/sdk";
 import { z } from "zod";
+import { checksFor, decide, parsePolicy, policyView, type Policy, type PolicyCheck, type PolicyView, type Quote, type SpendLedger } from "../../../packages/agent-policy/src/index.ts";
 import { NEAR_NETWORKS } from "../src/config.ts";
 import { nearBuyer, nearNetworkName, payAndFetchNear, SetupError, type NearBuyer } from "./near.ts";
 import { AskRefused } from "./private-ask-core.ts";
@@ -81,6 +89,44 @@ export function publicTenants(tenants: readonly AgentTenant[]): PublicTenant[] {
   return tenants.map(({ id, name, accountId }) => ({ id, name, accountId }));
 }
 
+/** The buyer-side spending policy (ARCH-620): one parsed policy per tenant and the shared spend ledger. */
+export type AgentPolicy = { policies: ReadonlyMap<string, Policy>; ledger: SpendLedger; now?: () => number };
+
+/**
+ * The "policy" block of <dir>/<id>/tenant.json for each tenant in `ids` (packages/agent-policy parsePolicy). A missing or
+ * malformed block stops start-up, naming the tenant and the field: with the policy on, no tenant is paid for without one.
+ */
+export function loadPolicies(dir: string, ids: readonly string[]): Map<string, Policy> {
+  const out = new Map<string, Policy>();
+  for (const id of ids) {
+    let raw: { policy?: unknown };
+    try {
+      raw = JSON.parse(readFileSync(join(dir, id, "tenant.json"), "utf8")) as { policy?: unknown };
+    } catch (e) {
+      throw new SetupError(`tenant ${id}: ${id}/tenant.json could not be read (${(e as NodeJS.ErrnoException).code ?? "not JSON"})`);
+    }
+    try {
+      out.set(id, parsePolicy(raw.policy, id));
+    } catch (e) {
+      throw new SetupError((e as Error).message);
+    }
+  }
+  return out;
+}
+
+/** What GET /policy shows: each tenant's limits and today's spend; `error` when the ledger cannot be read. */
+export function policyViews(tenants: readonly AgentTenant[], policy: AgentPolicy): ({ id: string } & (PolicyView | { error: string }))[] {
+  return tenants.map((t) => {
+    const p = policy.policies.get(t.id);
+    if (!p) return { id: t.id, error: "no policy" };
+    try {
+      return { id: t.id, ...policyView(p, policy.ledger.spentToday(t.id)) };
+    } catch (e) {
+      return { id: t.id, error: (e as Error).message };
+    }
+  });
+}
+
 /** One payment at a time per account, in the order asked; accounts run side by side. */
 export class AccountQueue {
   private readonly tails = new Map<string, Promise<unknown>>();
@@ -103,6 +149,8 @@ export type AgentEvent =
   | { type: "tool_called"; tool: string }
   | { type: "job_ran"; jobId: string; expiresAt: number }
   | { type: "quoted"; jobId: string; amount: string; totalUsd: string; network: string; asset: string; payTo: string }
+  /** ARCH-620: the tenant's policy applied to the quote; every check with its limit and value, the decision and why. */
+  | { type: "policy"; tenant: string; decision: "pay" | "approve" | "counter" | "refuse"; reason: string; checks: PolicyCheck[]; spentTodayUsd: string }
   | { type: "signed"; account: string }
   | { type: "settled"; transaction: string; network: string }
   | { type: "released"; jobId: string; rows: number; calls: number; result: unknown }
@@ -168,6 +216,8 @@ export type RunDeps = {
   maxTurns: number;
   /** A USDC ceiling per payment; unset = no limit (owner decision 1). */
   maxAmount?: string;
+  /** The tenants' spending policy (ARCH-620); unset = no policy step (--agent-policy off). */
+  policy?: AgentPolicy;
   queue: AccountQueue;
   /** How the agent's instructions name the tenant; the tenant's real name is never sent unless given here. */
   tenantLabel: string;
@@ -268,7 +318,7 @@ async function runAndPay(
   if (signal.aborted) return refuse("the request was cancelled before anything was run or paid");
 
   // Run, meter, quote, hold, register: the console answers the cost and the job id only.
-  let job: { jobId: string; totalUsd: string; amount: string; network: string; asset: string; payTo: string; expiresAt: number };
+  let job: { jobId: string; totalUsd: string; amount: string; network: string; asset: string; payTo: string; expiresAt: number; route?: string; attested: boolean };
   try {
     const r = await fetch(`${deps.console}/jobs/crossask`, {
       method: "POST",
@@ -282,7 +332,9 @@ async function runAndPay(
       typeof j?.jobId !== "string" || !/^[0-9a-f]{32}$/.test(j.jobId) || typeof j.totalUsd !== "string" || typeof j.amount !== "string" ||
       typeof j.network !== "string" || typeof j.asset !== "string" || typeof j.payTo !== "string" || typeof j.expiresAt !== "number"
     ) return refuse("the console's quote could not be read, so nothing was paid");
-    job = { jobId: j.jobId, totalUsd: j.totalUsd, amount: j.amount, network: j.network, asset: j.asset, payTo: j.payTo, expiresAt: j.expiresAt };
+    // route / attested (ARCH-620): what the console says the job ran on; a console that does not say counts as not attested.
+    job = { jobId: j.jobId, totalUsd: j.totalUsd, amount: j.amount, network: j.network, asset: j.asset, payTo: j.payTo, expiresAt: j.expiresAt,
+      ...(typeof j.route === "string" ? { route: j.route } : {}), attested: j.attested === true };
   } catch (e) {
     return refuse(signal.aborted ? "the request was cancelled before anything was paid" : `the console could not be reached at ${deps.console}, so nothing was run or paid (${(e as Error).name})`);
   }
@@ -314,9 +366,16 @@ async function runAndPay(
       : refuse(reason);
 
   return deps.queue.run(tenant.accountId, async () => {
+    // ARCH-620: the policy decides before anything is signed; in this queue slot, so today's spend cannot change under it.
+    let maxAmount = deps.maxAmount;
+    if (deps.policy) {
+      const verdict = applyPolicy(deps.policy, tenant.id, job, emit);
+      if ("refused" in verdict) return refuse(verdict.refused);
+      maxAmount = verdict.maxAmount(maxAmount);
+    }
     let paid;
     try {
-      paid = await payAndFetchNear(`${deps.paywall}/v1/jobs/${job.jobId}/release`, { method: "POST", headers: {}, body: "" }, payer, deps.maxAmount ? { maxAmount: deps.maxAmount } : {});
+      paid = await payAndFetchNear(`${deps.paywall}/v1/jobs/${job.jobId}/release`, { method: "POST", headers: {}, body: "" }, payer, maxAmount ? { maxAmount } : {});
     } catch (e) {
       const reason = e instanceof Error ? e.message : String(e);
       return fail(signed ? `${reason}; the payment was signed, check ${tenant.accountId}'s recent transactions` : reason);
@@ -338,6 +397,14 @@ async function runAndPay(
       return fail(`the job was not released (HTTP ${paid.response.status}${errorMessage(text) ? `: ${errorMessage(text)}` : ""})`, transaction);
     }
     emit({ type: "settled", transaction, network: paid.receipt?.network ?? job.network });
+    if (deps.policy) {
+      // Only a settled payment counts toward the daily cap. A failed write is logged (ids only); the payment stands.
+      try {
+        deps.policy.ledger.record(tenant.id, job.jobId, job.totalUsd, transaction);
+      } catch (e) {
+        deps.log?.(JSON.stringify({ ts: new Date().toISOString(), route: "agent-run", event: "spend_record_failed", tenant: tenant.id, jobId: job.jobId, reason: String((e as Error).message).slice(0, 200) }));
+      }
+    }
     let result: unknown;
     try {
       result = JSON.parse(text);
@@ -350,6 +417,53 @@ async function runAndPay(
     emit({ type: "released", jobId: job.jobId, rows, calls, result });
     return { reply: { status: "paid" as const, amountUsdc: job.totalUsd, transaction, rows } };
   });
+}
+
+/**
+ * The tenant's policy on one quote (ARCH-620). Emits the `policy` step. "pay" returns how to cap the signer: the
+ * smaller of --agent-max-amount and the quoted price, so the payer cannot sign more than the policy approved even if
+ * the paywall asked for more. Anything else returns the refusal: nothing is signed or paid. ARCH-621 (a person approves
+ * in tab 03) and ARCH-623 (counter-offers) are not built yet, so "approve" and "counter" stop the run and say so.
+ */
+function applyPolicy(
+  policy: AgentPolicy,
+  tenantId: string,
+  job: { jobId: string; totalUsd: string; expiresAt: number; route?: string; attested: boolean },
+  emit: (e: AgentEvent) => void,
+): { refused: string } | { maxAmount: (cap: string | undefined) => string } {
+  const p = policy.policies.get(tenantId);
+  if (!p) return { refused: `tenant ${tenantId} has no spending policy, so nothing was signed or paid` };
+  let spent: bigint;
+  try {
+    spent = policy.ledger.spentToday(tenantId);
+  } catch (e) {
+    return { refused: `the spend ledger could not be read (${(e as Error).message}), so nothing was signed or paid` };
+  }
+  const quote: Quote = { quoteId: job.jobId, route: job.route ?? "unknown", priceUsd: job.totalUsd, attested: job.attested, expiresAt: job.expiresAt };
+  const now = (policy.now ?? Date.now)();
+  let checks: PolicyCheck[];
+  let d: ReturnType<typeof decide>;
+  try {
+    checks = checksFor(p, quote, { spentTodayMicro: spent, now });
+    d = decide(p, [quote], { spentTodayMicro: spent, now });
+  } catch (e) {
+    return { refused: `the quote could not be checked against the policy (${(e as Error).message}), so nothing was signed or paid` };
+  }
+  emit({ type: "policy", tenant: tenantId, decision: d.action, reason: d.reason, checks, spentTodayUsd: policyView(p, spent).spentTodayUsd });
+  if (d.action === "pay") {
+    return { maxAmount: (cap) => (cap !== undefined && decimalLess(cap, job.totalUsd) ? cap : job.totalUsd) };
+  }
+  const by = `${tenantId}'s spending policy`;
+  if (d.action === "approve") return { refused: `${by} needs a person to approve this ${job.totalUsd} USDC job (${d.reason}); approval in tab 03 is not built yet (ARCH-621), so nothing was signed or paid` };
+  if (d.action === "counter") return { refused: `${by} would ask for a smaller job at ${d.ceilingUsd} USD (${d.reason}); counter-offers are not built yet (ARCH-623), so nothing was signed or paid` };
+  return { refused: `refused by ${by}: ${d.reason}; nothing was signed or paid` };
+}
+
+/** a < b for two non-negative decimal strings of any length (no float). */
+function decimalLess(a: string, b: string): boolean {
+  const [ai, af = ""] = a.split("."), [bi, bf = ""] = b.split(".");
+  const n = Math.max(af.length, bf.length);
+  return BigInt(ai + af.padEnd(n, "0")) < BigInt(bi + bf.padEnd(n, "0"));
 }
 
 /** error.message or error from a JSON error body, cut to one plain line. */
