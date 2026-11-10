@@ -9,6 +9,9 @@
  *   job_attested  when ca-attest has judged the job's model calls (attest.ts onDone; PLAN-private-ai-nearai-attestation.md
  *                 ARCH-411, adminUI ARCH-501): summary and, per call, ids, an address, a report time, check results and a
  *                 short reason, in exactly the shape near-watch's parseJobEvent accepts (it refuses unknown fields)
+ *   job_receipt   when the job's signed receipt is stored (privateAI-design-32 ARCH-615): receipt id, signing key id, the
+ *                 result and files hashes, whether settled and the settlement transaction. Only with --job-feed-receipts on
+ *                 (default off): near-watch refuses event names it does not know, so turn it on once near-watch accepts it.
  * Never awaited by a request: a feed that is slow, down or refusing never blocks or fails a job. A failed post is
  * logged once as job_feed_failed with the job id and a reason (an HTTP status, "timeout", "unreachable", "too many in
  * flight") only.
@@ -19,19 +22,26 @@
 import type { CrossAskResult } from "../../packages/crossask/src/index.ts";
 import type { JobQuote } from "../../packages/crossask/src/cost.ts";
 import type { JobAttestation, JobSummary } from "./attest.ts";
+import type { SignedReceipt } from "../../packages/receipt/src/index.ts";
 
 export type JobFeedFlags = {
   "job-feed-url"?: string; "job-feed-key-env"?: string; "job-feed-timeout-ms"?: string; "job-feed-max-inflight"?: string; "job-expiry-check-sec"?: string;
-  "job-feed-attest-keep"?: string;
+  "job-feed-attest-keep"?: string; "job-feed-receipts"?: string;
 };
 /** attestKeep: quoted jobs whose call list is kept for their job_attested (oldest dropped first; a re-check needs it too); default 500. */
-export type JobFeedConfig = { url: string; key: string; keyEnv: string; timeoutMs: number; maxInflight: number; expiryCheckSec: number; attestKeep?: number };
+/** receipts: send job_receipt (--job-feed-receipts on); absent/false: not sent. */
+export type JobFeedConfig = { url: string; key: string; keyEnv: string; timeoutMs: number; maxInflight: number; expiryCheckSec: number; attestKeep?: number; receipts?: boolean };
 export const DEFAULT_ATTEST_KEEP = 500;
 
 /** undefined without --job-feed-url; otherwise the checked configuration, or an Error naming what to set. The key is never in a message. */
 export function jobFeedConfig(flags: JobFeedFlags, env: Record<string, string | undefined>, paidJobsOn: boolean): JobFeedConfig | undefined {
   const url = flags["job-feed-url"];
-  if (url === undefined || url === "") return undefined;
+  const receiptsMode = flags["job-feed-receipts"] ?? "off";
+  if (receiptsMode !== "on" && receiptsMode !== "off") throw new Error(`--job-feed-receipts must be on or off, got ${receiptsMode}`);
+  if (url === undefined || url === "") {
+    if (receiptsMode === "on") throw new Error("--job-feed-receipts on needs --job-feed-url");
+    return undefined;
+  }
   if (!paidJobsOn) throw new Error("--job-feed-url needs --paid-jobs on: the feed reports paid jobs only");
   let u: URL;
   try { u = new URL(url); } catch { throw new Error(`--job-feed-url must be a URL (e.g. http://127.0.0.1:8790/ingest/job), got ${url}`); }
@@ -52,6 +62,7 @@ export function jobFeedConfig(flags: JobFeedFlags, env: Record<string, string | 
     maxInflight: int("job-feed-max-inflight", "20", 1, 1000),
     expiryCheckSec: int("job-expiry-check-sec", "30", 1, 3600),
     attestKeep: int("job-feed-attest-keep", String(DEFAULT_ATTEST_KEEP), 1, 100_000),
+    receipts: receiptsMode === "on",
   };
 }
 
@@ -80,7 +91,17 @@ export type AttestMeta = { network: string; calls: { step: "query" | "answer"; m
 export type JobEvent =
   | { v: 1; event: "job_quoted"; ts: string; jobId: string; network: string; amount: string; totalUsd: string; expiresAt: string; steps: JobStep[]; breakdown: JobQuote["breakdown"] }
   | { v: 1; event: "job_released" | "job_expired"; ts: string; jobId: string; network: string }
-  | { v: 1; event: "job_attested"; ts: string; jobId: string; network: string; summary: WatchSummary; calls: WatchAttestedCall[] };
+  | { v: 1; event: "job_attested"; ts: string; jobId: string; network: string; summary: WatchSummary; calls: WatchAttestedCall[] }
+  | { v: 1; event: "job_receipt"; ts: string; jobId: string; network: string; receiptId: string; keyId: string; resultSha256: string; filesRoot: string; settled: boolean; transaction: string | null };
+
+/** job_receipt (ARCH-615): ids and hashes of a stored receipt only. */
+export function receiptEvent(r: SignedReceipt, network: string, now = Date.now()): JobEvent {
+  return {
+    v: 1, event: "job_receipt", ts: new Date(now).toISOString(), jobId: r.body.jobId, network: r.settlement?.network ?? network,
+    receiptId: r.body.receiptId, keyId: r.sig.keyId, resultSha256: r.body.resultSha256, filesRoot: r.body.filesRoot,
+    settled: r.settlement !== undefined, transaction: r.settlement?.transaction ?? null,
+  };
+}
 
 const iso = (ms: number): string => new Date(ms).toISOString();
 
@@ -208,6 +229,11 @@ export class JobFeed {
     try { event = attestedEvent(a, meta, this.now()); }
     catch (e) { return this.failed(a.jobId, (e as Error).message); }
     if (event) this.post(event);
+  }
+  /** A stored receipt (ARCH-615); sent only with --job-feed-receipts on. */
+  receipt(r: SignedReceipt, network: string): void {
+    if (!this.cfg.receipts) return;
+    this.post(receiptEvent(r, network, this.now()));
   }
   released(jobId: string): void { this.closed(jobId, "job_released"); }
   expired(jobId: string): void { this.closed(jobId, "job_expired"); }

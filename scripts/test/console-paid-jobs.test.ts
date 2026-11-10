@@ -10,7 +10,7 @@
 import { test, after, before, describe } from "node:test";
 import assert from "node:assert/strict";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { randomBytes } from "node:crypto";
+import { generateKeyPairSync, randomBytes } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { createServer, request, type IncomingHttpHeaders, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -22,6 +22,7 @@ import { validateCatalog } from "../../services/gateway/src/catalog.ts";
 import { startTestGateway, type TestGateway } from "../../services/gateway/test/helpers.ts";
 import { pricesFromCatalog, quoteJob, type Fees } from "../../packages/crossask/src/cost.ts";
 import { INGEST_KEY, nearWatchSkip, startNearWatch } from "./near-watch-server.ts";
+import { verifyReceipt, type SignedReceipt } from "../../packages/receipt/src/index.ts";
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const SERVER = join(ROOT, "test-console/console/server.ts");
@@ -257,6 +258,51 @@ describe("ARCH-114 fees are configured, never defaulted", () => {
   });
 });
 
+describe("ARCH-615 ARCH-616 Job Evidence Receipts on the real console", () => {
+  test("ARCH-615 ARCH-616: --receipts on: after release the receipt is served, verifies against the released result and carries the settlement", async () => {
+    const port = await freePort(), iport = await freePort();
+    const signing = generateKeyPairSync("ed25519").privateKey.export({ type: "pkcs8", format: "pem" }).toString();
+    // Ready only once the receipts line is out too: it is logged after the internal-listener line and may arrive in a later chunk.
+    const c = await start(consoleArgs(port, iport, { receipts: "on", "receipt-dir": join(dir, "receipts") }), (o) => consoleReady(port)(o) && o.includes("receipts on: signing key id"), { PAID_JOBS_KEY: JOBS_KEY, RECEIPT_SIGNING_KEY: signing }, "the console");
+    try {
+      assert.equal(c.out().includes("PRIVATE KEY"), false, "the key is never printed");
+      assert.equal(JSON.parse((await call(port, "GET", "/jobs/config")).text).receipts, true);
+      const r = await ask({ folder: data, question: QUESTION, model: MODEL, phrase: "none", datasetId: "orders-demo", templateLabel: "Count orders" }, port);
+      assert.equal(r.status, 200, r.text);
+      const { jobId } = JSON.parse(r.text);
+      assert.equal((await call(port, "GET", `/jobs/${jobId}/receipt`)).status, 404, "no receipt before the job is released");
+      const held = JSON.parse((await call(iport, "GET", `/internal/jobs/${jobId}`, { "x-jobs-key": JOBS_KEY })).text);
+      const notice = { transaction: "4ZqX9vYbT8cTq2b7hS3dK1mN6pR5sU8wXyZaBcDeFgH", network: "near:testnet", payer: "t02.testnet", invoiceId: "ABCDEF0123456789ABCDEF0123456789" };
+      const rel = await call(iport, "POST", `/internal/jobs/${jobId}/released`, { "x-jobs-key": JOBS_KEY, "content-type": "application/json" }, JSON.stringify(notice));
+      assert.equal(rel.status, 200);
+      // The receipt is made after the release answer (never awaited by it): wait for it.
+      let got: { status: number; text: string } = { status: 0, text: "" };
+      for (let i = 0; i < 50 && got.status !== 200; i++) { got = await call(port, "GET", `/jobs/${jobId}/receipt`); if (got.status !== 200) await new Promise((ok) => setTimeout(ok, 100)); }
+      assert.equal(got.status, 200, got.text + c.out());
+      const { receipt, publicKeyPem } = JSON.parse(got.text) as { receipt: SignedReceipt; publicKeyPem: string };
+      // held.result is exactly what the paywall sends the buyer (app.ts release: c.json(held.result)).
+      assert.deepEqual(verifyReceipt(receipt, publicKeyPem, held.result), { ok: true, settled: true });
+      assert.equal(receipt.settlement?.transaction, notice.transaction);
+      assert.equal(receipt.body.jobId, jobId);
+      assert.equal(receipt.body.datasetId, "orders-demo");
+      assert.equal(receipt.body.templateLabel, "Count orders");
+      assert.ok(receipt.body.files.some((f) => f.name === "orders.csv"));
+      assert.equal(receipt.body.price.amountUnits, JSON.parse(r.text).amount);
+      for (const leak of [MARKER, "count(*)", data, QUESTION]) assert.equal(got.text.includes(leak), false, leak);
+      assert.ok(/"event":"job_receipt"/.test(c.out()));
+      assert.equal(c.out().includes(MARKER), false, "no data in the console log");
+      assert.equal((await call(port, "GET", `/jobs/${"0".repeat(32)}/receipt`)).status, 404);
+    } finally { await stop(c); }
+  });
+
+  test("ARCH-614: --receipts on refuses to start without the signing key, naming the variable only", async () => {
+    // Valid ports and key: the only thing missing is the receipt key, so that is what start-up must name.
+    const r = spawnSync(process.execPath, consoleArgs(await freePort(), await freePort(), { receipts: "on" }), { encoding: "utf8", timeout: 20_000, env: { ...process.env, PAID_JOBS_KEY: JOBS_KEY, RECEIPT_SIGNING_KEY: "" } });
+    assert.notEqual(r.status, 0);
+    assert.match(r.stderr, /RECEIPT_SIGNING_KEY is not set/);
+  });
+});
+
 describe("ARCH-101 / ARCH-112 the page and the relay", () => {
   test("ARCH-101: console page without --paid-jobs has no pay box in tab 03", async () => {
     const port = await freePort();
@@ -285,7 +331,8 @@ describe("ARCH-101 / ARCH-112 the page and the relay", () => {
     assert.equal(script.match(/\/jobs\/crossask/g)?.length, 1);
     const cfg = await call(consolePort, "GET", "/jobs/config");
     // defaultPayer (owner 2026-11-07): "me" unless the console runs with --default-payer agent
-    assert.deepEqual(JSON.parse(cfg.text), { wallet: "intear-wallet", walletName: "Intear Wallet", ttlMin: 15, defaultPayer: "me", attest: null });
+    // receipts (privateAI-design-32 ARCH-615): false unless the console runs with --receipts on
+    assert.deepEqual(JSON.parse(cfg.text), { wallet: "intear-wallet", walletName: "Intear Wallet", ttlMin: 15, defaultPayer: "me", attest: null, receipts: false });
   });
 
   test("ARCH-112: the release relay adds no gateway key and logs neither the payment nor the result", async () => {

@@ -93,6 +93,16 @@
  *   --attest-url URL            ca-attest, e.g. http://attest:8770 (default unset = off)
  *   --attest-timeout-ms N       one POST /verify (default 20000)
  *   --attest-keep N             job attestations kept in memory (default 500; oldest dropped first)
+ *   Job Evidence Receipts (privateAI-design-32 ARCH-613..616; off unless --receipts on, which needs --paid-jobs on): when
+ *   a job is quoted, its dataset folder's files (inside allowedRoots; hidden folders such as _analyst left out) are hashed
+ *   and held with it; when the paywall reports it released, a receipt (ids, hashes, amounts only) is signed with Ed25519,
+ *   stored, and the settlement from the release notice appended. GET /jobs/<id>/receipt answers {receipt, publicKeyPem}.
+ *   Body fields datasetId and templateLabel (optional) of POST /jobs/crossask name the dataset in the receipt.
+ *   --receipts on|off           default off
+ *   --receipt-key-env NAME      environment variable holding the PKCS#8 PEM Ed25519 key (default RECEIPT_SIGNING_KEY)
+ *   --receipt-dir PATH          where receipts are kept as <jobId>.json (default ../../runtime/receipts)
+ *   --receipt-max-files N       a dataset with more files is not sold (no receipt can cover it; default 500)
+ *   --job-feed-receipts on|off  also send job_receipt to near-watch (default off: near-watch must accept the event first)
  *
  *   Docker split (DOCKERIZE-PLAN 4.1, C1-C7; every default is today's single process on 127.0.0.1):
  *   --mode all|ui|api          all (default): page and backend in one process, as before. api: the same backend, meant to
@@ -142,6 +152,8 @@ import { quoteJob } from "../../packages/crossask/src/cost.ts";
 import { JobStore, internalHandler, meterOf, paidJobsConfig, registerJob } from "./jobs.ts";
 import { JobFeed, jobFeedConfig } from "./job-feed.ts";
 import { AttestClient, attestConfig } from "./attest.ts";
+import { datasetFiles, datasetIdOf, receiptConfig, receiptOnRelease, ReceiptStore, routeOf, templateLabelOf } from "./receipt.ts";
+import type { HeldJob, ReceiptHold } from "./jobs.ts";
 
 const { values: flags } = parseArgs({
   args: process.argv.slice(2),
@@ -200,6 +212,11 @@ const { values: flags } = parseArgs({
     "attest-keep": { type: "string" },
     "attest-poll-ms": { type: "string", default: "3000" },
     "attest-poll-max": { type: "string", default: "40" },
+    receipts: { type: "string" },
+    "receipt-key-env": { type: "string" },
+    "receipt-dir": { type: "string", default: fileURLToPath(new URL("../../runtime/receipts", import.meta.url)) },
+    "receipt-max-files": { type: "string" },
+    "job-feed-receipts": { type: "string" },
     mode: { type: "string", default: "all" },
     bind: { type: "string", default: "127.0.0.1" },
     api: { type: "string" },
@@ -218,7 +235,7 @@ const MODE = flags.mode as "all" | "ui" | "api";
 if (!["all", "ui", "api"].includes(MODE)) throw new Error(`--mode must be all, ui or api, got ${flags.mode}`);
 if (MODE === "ui") {
   // The ui process runs nothing of the backend; a backend flag here would be silently unused, so it is refused.
-  for (const name of ["paid-jobs", "job-feed-url", "pricing-catalog", "dataset-root", "attest-url"] as const) {
+  for (const name of ["paid-jobs", "job-feed-url", "pricing-catalog", "dataset-root", "attest-url", "receipts"] as const) {
     if (flags[name] !== undefined) throw new Error(`--${name} belongs to the api process, not --mode ui (use --paid-jobs-page on for the tab 03 pay box)`);
   }
   if (!flags.api) throw new Error("--mode ui needs --api URL: the console API, e.g. http://127.0.0.1:8735");
@@ -272,6 +289,23 @@ const ATTEST_CONFIG = MODE === "ui" ? undefined : attestConfig(flags, PAID_JOBS 
 // The finished result goes to near-watch as job_attested when the job feed is on (adminUI ARCH-501).
 const ATTEST = ATTEST_CONFIG ? new AttestClient(ATTEST_CONFIG, undefined, JOB_FEED ? (a) => JOB_FEED.attested(a) : undefined) : undefined;
 const JOBS = PAID_JOBS ? new JobStore(PAID_JOBS.max, PAID_JOBS.ttlMs, Date.now, JOB_FEED ? (j) => JOB_FEED.expired(j.jobId) : undefined) : undefined;
+/** Job Evidence Receipts (ARCH-613..616): undefined unless --receipts on; start-up stops here when the key variable is missing or not Ed25519. */
+const RECEIPT_CONFIG = MODE === "ui" ? undefined : receiptConfig(flags, process.env, PAID_JOBS !== undefined);
+const RECEIPTS = RECEIPT_CONFIG ? new ReceiptStore(RECEIPT_CONFIG) : undefined;
+/** The paywall's release notice (jobs.ts internalHandler): the job feed's job_released, then the receipt, which is never awaited. */
+function onJobReleased(jobId: string, job: HeldJob, notice: unknown): void {
+  JOB_FEED?.released(jobId);
+  if (!RECEIPTS || !RECEIPT_CONFIG) return;
+  receiptOnRelease({ store: RECEIPTS, cfg: RECEIPT_CONFIG, ...(ATTEST ? { attestation: (id: string) => ATTEST.get(id) } : {}) }, jobId, job, notice).then(
+    (r) => {
+      if (!r) return;
+      // Ids only.
+      console.log(JSON.stringify({ ts: new Date().toISOString(), route: "paid-job", event: "job_receipt", jobId, receiptId: r.body.receiptId, settled: r.settlement !== undefined }));
+      JOB_FEED?.receipt(r, job.receipt!.network);
+    },
+    (e: unknown) => console.error(JSON.stringify({ ts: new Date().toISOString(), route: "paid-job", event: "job_receipt_failed", jobId, reason: String((e as Error).message ?? e).slice(0, 200) })),
+  );
+}
 /** The tab 03 pay box and its script, added to the page only with --paid-jobs on (the page is otherwise served as it is). */
 const PAID_JOBS_FRAGMENT = fileURLToPath(new URL("./paid-jobs.html", import.meta.url));
 /** C7: whether the page gets the pay box: --paid-jobs in all/api mode, --paid-jobs-page in ui mode. */
@@ -718,7 +752,15 @@ createServer(async (req, res) => {
     }
     if (PAID_JOBS && JOBS && api === "jobs" && name === "config" && req.method === "GET") {
       if (!hostOk(req)) return dataJson(res, 403, { error: `open the console as http://127.0.0.1:${PORT}` });
-      return dataJson(res, 200, { wallet: NEAR_WALLET, walletName: NEAR_WALLETS[NEAR_WALLET!].name, ttlMin: PAID_JOBS.ttlMs / 60_000, defaultPayer: DEFAULT_PAYER, attest: ATTEST ? { pollMs: ATTEST_POLL_MS, pollMax: ATTEST_POLL_MAX } : null });
+      return dataJson(res, 200, { wallet: NEAR_WALLET, walletName: NEAR_WALLETS[NEAR_WALLET!].name, ttlMin: PAID_JOBS.ttlMs / 60_000, defaultPayer: DEFAULT_PAYER, attest: ATTEST ? { pollMs: ATTEST_POLL_MS, pollMax: ATTEST_POLL_MAX } : null, receipts: RECEIPTS !== undefined });
+    }
+    // ARCH-615: one job's signed receipt and the key to check it with; 404 when receipts are off or the job has none (yet).
+    if (PAID_JOBS && api === "jobs" && req.method === "GET" && /^\/jobs\/[0-9a-f]{32}\/receipt$/.test(url.pathname)) {
+      if (!hostOk(req)) return dataJson(res, 403, { error: `open the console as http://127.0.0.1:${PORT}` });
+      if (!RECEIPTS) return dataJson(res, 404, { error: "receipts are off: start the console with --receipts on" });
+      const receipt = RECEIPTS.get(url.pathname.split("/")[2]);
+      if (!receipt) return dataJson(res, 404, { error: "no receipt for this job: it is made once the job is paid and released" });
+      return dataJson(res, 200, { receipt, publicKeyPem: RECEIPTS.publicKeyPem() });
     }
     // Run, meter, quote, hold, register: the page gets the cost and the job id, never the result.
     if (PAID_JOBS && JOBS && api === "jobs" && name === "crossask" && req.method === "POST") {
@@ -744,6 +786,21 @@ createServer(async (req, res) => {
       let quote;
       try { quote = quoteJob(meterOf(out.served), PAID_JOBS.prices, PAID_JOBS.fees); }
       catch (e) { return dataJson(res, 422, { error: `no price for this job, so nothing can be paid: ${(e as Error).message}` }); }
+      // ARCH-613: the files the job read, hashed now (before registering), so the receipt commits to the data as it was run.
+      // A job no receipt can cover is not sold while receipts are on.
+      let receiptFiles;
+      let resolvedFolder = "";
+      if (RECEIPT_CONFIG) {
+        const { config, error } = readDataConfig();
+        if (!config) return dataJson(res, 422, { error: `no receipt can be made, so nothing can be paid: ${error}` });
+        if (typeof out.sql !== "string" || !out.sql) return dataJson(res, 422, { error: "no receipt can be made (the job has no query), so nothing can be paid" });
+        try {
+          resolvedFolder = await insideRoots(b.folder, config);
+          receiptFiles = await datasetFiles(resolvedFolder, RECEIPT_CONFIG.maxFiles, (n) => config.hideFolders.some((re) => re.test(n)));
+        } catch (e) {
+          return dataJson(res, 422, { error: `no receipt can be made, so nothing can be paid: ${(e as Error).message}` });
+        }
+      }
       const jobId = JOBS.newJobId();
       const expiresAt = JOBS.expiryFromNow();
       let offer;
@@ -751,7 +808,14 @@ createServer(async (req, res) => {
       catch (e) { return dataJson(res, 502, { error: (e as Error).message }); }
       // The held (and later released) result is what it was before the job feed: the step timings are the feed's only.
       const { timings: _timings, ...result } = out;
-      JOBS.hold({ jobId, result, amount: quote.amount, breakdown: quote.breakdown, expiresAt });
+      // --pricing after: the quote is the job's own meter, so the quote id is the job id and the actual cost is the price.
+      const receiptHold: ReceiptHold | undefined = receiptFiles ? {
+        network: offer.network, quoteId: jobId, route: routeOf(model, answerModel), datasetId: datasetIdOf(b.datasetId, resolvedFolder),
+        ...(templateLabelOf(b.templateLabel) ? { templateLabel: templateLabelOf(b.templateLabel) } : {}), files: receiptFiles, sql: out.sql as string,
+        priceUsd: quote.totalUsd, actualUsd: quote.totalUsd,
+        quoteBasis: { pricing: "after", phrase, userSql: typeof b.sql === "string" && b.sql.trim() !== "", sqlRetries: CROSSASK_RETRIES, answerMaxRows: CROSSASK_ROWS, maxPromptChars: CROSSASK_MAX_PROMPT, calls: out.served.length },
+      } : undefined;
+      JOBS.hold({ jobId, result, amount: quote.amount, breakdown: quote.breakdown, expiresAt, ...(receiptHold ? { receipt: receiptHold } : {}) });
       JOB_FEED?.quoted({ jobId, network: offer.network, expiresAt, out, quote });
       // ARCH-411: in the background; the quote below is returned without waiting for it.
       ATTEST?.start(jobId, out.served);
@@ -914,8 +978,9 @@ createServer(async (req, res) => {
   console.log(`[test-console] http://127.0.0.1:${PORT}  default model: ${DEFAULT_MODEL}${NEAR_WALLET ? `  NEAR wallet: ${NEAR_WALLET}` : ""}`);
   // The internal listener for the paywall (ARCH-105), only with --paid-jobs on; the key is never shown.
   if (PAID_JOBS && JOBS) {
-    createServer(internalHandler(JOBS, PAID_JOBS.key, JOB_FEED ? (id) => JOB_FEED.released(id) : undefined)).listen(PAID_JOBS.internalPort, PAID_JOBS.internalHost, () => {
+    createServer(internalHandler(JOBS, PAID_JOBS.key, onJobReleased)).listen(PAID_JOBS.internalPort, PAID_JOBS.internalHost, () => {
       console.log(`[test-console] paid jobs on: internal listener http://${PAID_JOBS.internalHost}:${PAID_JOBS.internalPort}  key from ${PAID_JOBS.keyEnv}  ttl ${PAID_JOBS.ttlMs / 60_000} min  max ${PAID_JOBS.max}`);
+      if (RECEIPT_CONFIG) console.log(`[test-console] receipts on: signing key id ${RECEIPT_CONFIG.signer.keyId}  -> ${RECEIPT_CONFIG.dir}  (GET /jobs/<id>/receipt)${JOB_FEED_CONFIG?.receipts ? "  job_receipt sent to near-watch" : ""}`);
       if (JOB_FEED_CONFIG) {
         const u = new URL(JOB_FEED_CONFIG.url);
         console.log(`[test-console] job feed on: ${u.origin}${u.pathname}  key from ${JOB_FEED_CONFIG.keyEnv}  expiry check every ${JOB_FEED_CONFIG.expiryCheckSec} s`);

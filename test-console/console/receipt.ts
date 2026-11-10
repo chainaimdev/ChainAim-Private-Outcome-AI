@@ -11,6 +11,9 @@ import { createHash } from "node:crypto";
 import { createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 import type { ChatReply } from "../../packages/crossask/src/index.ts";
+import { USDC_DECIMALS } from "../../packages/crossask/src/cost.ts";
+import type { HeldJob } from "./jobs.ts";
+import type { JobAttestation } from "./attest.ts";
 import {
   addSettlement,
   filesRoot,
@@ -56,14 +59,15 @@ export function fileSha256(path: string): Promise<string> {
 /**
  * Every regular file under `folder` (names relative to it, "/" separators, sorted), with its size and SHA-256. Links are
  * not followed. More than maxFiles files is refused rather than truncated, so a receipt never silently covers part of
- * a dataset.
+ * a dataset. skipDir: sub-folders left out by name (the console passes the data config's hideFolders, e.g. "_*", so the
+ * analyst's work folder, which changes on every run, is not committed to).
  */
-export async function datasetFiles(folder: string, maxFiles: number): Promise<ReceiptFile[]> {
+export async function datasetFiles(folder: string, maxFiles: number, skipDir: (name: string) => boolean = () => false): Promise<ReceiptFile[]> {
   const paths: string[] = [];
   const walk = (dir: string): void => {
     for (const e of readdirSync(dir, { withFileTypes: true })) {
       const p = join(dir, e.name);
-      if (e.isDirectory()) walk(p);
+      if (e.isDirectory()) { if (!skipDir(e.name)) walk(p); }
       else if (e.isFile()) {
         paths.push(p);
         if (paths.length > maxFiles) throw new Error(`the dataset folder has more than ${maxFiles} files (--receipt-max-files); no receipt was made`);
@@ -96,7 +100,9 @@ export type ReceiptInput = {
   reduced?: string[];
   route: string;
   datasetId: string;
-  folder: string;
+  /** The dataset folder, hashed now; or `files`, hashed earlier (when the job ran). One of the two is required. */
+  folder?: string;
+  files?: ReceiptFile[];
   templateLabel?: string;
   sql: string;
   /** Exactly what the paywall releases to the buyer. */
@@ -113,7 +119,8 @@ export type ReceiptInput = {
 };
 
 export async function buildReceipt(input: ReceiptInput, cfg: ReceiptConfig): Promise<SignedReceipt> {
-  const files = await datasetFiles(input.folder, cfg.maxFiles);
+  if (input.files === undefined && input.folder === undefined) throw new Error("a receipt needs the dataset folder or its files");
+  const files = input.files ?? (await datasetFiles(input.folder!, cfg.maxFiles));
   return signReceipt(
     {
       v: 1,
@@ -206,4 +213,92 @@ export function parseSettlement(body: unknown, now: () => number = Date.now): Se
   const payer = b.payer === null || b.payer === undefined ? null : typeof b.payer === "string" && /^[a-z0-9._-]{2,64}$/.test(b.payer) ? b.payer : undefined;
   if (payer === undefined) return undefined;
   return { network: b.network, transaction: b.transaction, invoiceId: b.invoiceId, payer, settledAt: new Date(now()).toISOString() };
+}
+
+/**
+ * The result exactly as the buyer receives it: the paywall's release handler sends the held result with c.json
+ * (services/paywall/src/app.ts release), so keys holding undefined are dropped. The receipt hashes this, not the object
+ * in memory, so sha256(canonical JSON of the released body) == resultSha256 for the buyer.
+ */
+export function releasedResult(result: unknown): unknown {
+  return JSON.parse(JSON.stringify(result));
+}
+
+const DATASET_ID = /^[A-Za-z0-9_.-]{1,64}$/;
+/**
+ * The receipt's dataset id: the id the page or agent named (config/datasets.json id) when it is well formed; otherwise a
+ * hash of the folder's resolved path, so no folder or path name ever enters a receipt.
+ */
+export function datasetIdOf(named: unknown, resolvedFolder: string): string {
+  if (typeof named === "string" && DATASET_ID.test(named)) return named;
+  return `folder-${sha256Hex(resolvedFolder).slice(0, 16)}`;
+}
+
+const TEMPLATE_LABEL = /^[\x20-\x7E]{1,120}$/;
+/** A template label from the page (config/datasets.json templates[].label): printable ASCII, at most 120 characters; else none. */
+export function templateLabelOf(named: unknown): string | undefined {
+  return typeof named === "string" && TEMPLATE_LABEL.test(named.trim()) ? named.trim() : undefined;
+}
+
+/**
+ * The route a run-then-quote job took (--pricing after): the query model, and the answer model when it differs. Firm
+ * pricing (ARCH-605) will name its route itself.
+ */
+export function routeOf(model: string, answerModel: string | undefined): string {
+  return answerModel && answerModel !== model ? `${model}+${answerModel}` : model;
+}
+
+/**
+ * ca-attest's verdict per call index, in the receipt's terms: verified -> verified, unverified -> failed, anything not
+ * judged (still checking, ca-attest unreachable, attestation off) -> pending. Never "verified" without ca-attest saying so.
+ */
+export function attestStatusFrom(a: JobAttestation | undefined): (index: number) => "verified" | "failed" | "pending" {
+  return (i) => {
+    const s = a?.calls[i]?.status;
+    return s === "verified" ? "verified" : s === "unverified" ? "failed" : "pending";
+  };
+}
+
+export type ReleaseReceiptDeps = {
+  store: ReceiptStore;
+  cfg: ReceiptConfig;
+  /** ca-attest's result for the job when attestation is on (attest.ts AttestClient.get). */
+  attestation?: (jobId: string) => JobAttestation | undefined;
+  now?: () => number;
+};
+
+/**
+ * ARCH-615 / ARCH-616, called when the paywall tells the console a job was released: builds and signs the receipt from
+ * what was held, stores it, and appends the settlement from the release notice when the notice carries one. undefined
+ * for a job held without a receipt (receipts were off when it was quoted). Throws when the receipt cannot be made; the
+ * caller logs the job id and reason only.
+ */
+export async function receiptOnRelease(deps: ReleaseReceiptDeps, jobId: string, job: HeldJob, notice: unknown): Promise<SignedReceipt | undefined> {
+  const hold = job.receipt;
+  if (!hold) return undefined;
+  const now = deps.now ?? Date.now;
+  const receipt = await buildReceipt(
+    {
+      jobId,
+      quoteId: hold.quoteId,
+      route: hold.route,
+      datasetId: hold.datasetId,
+      files: hold.files,
+      ...(hold.templateLabel ? { templateLabel: hold.templateLabel } : {}),
+      sql: hold.sql,
+      result: releasedResult(job.result),
+      served: job.result.served,
+      attestStatusOf: attestStatusFrom(deps.attestation?.(jobId)),
+      amountUnits: job.amount,
+      usdcDecimals: USDC_DECIMALS,
+      priceUsd: hold.priceUsd,
+      quoteBasis: hold.quoteBasis,
+      ...(hold.actualUsd !== undefined ? { actualUsd: hold.actualUsd } : {}),
+      createdAt: new Date(now()).toISOString(),
+    },
+    deps.cfg,
+  );
+  deps.store.put(receipt);
+  const settlement = parseSettlement(notice, now);
+  return settlement ? deps.store.settle(jobId, settlement) : receipt;
 }

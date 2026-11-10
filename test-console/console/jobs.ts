@@ -12,6 +12,7 @@ import { readFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { ChatReply, CrossAskResult } from "../../packages/crossask/src/index.ts";
 import { parseDecimal, pricesFromCatalog, quoteJob, type Fees, type JobQuote, type MeterLine, type ModelPrice } from "../../packages/crossask/src/cost.ts";
+import type { ReceiptFile } from "../../packages/receipt/src/index.ts";
 
 export type PaidJobsFlags = {
   "paid-jobs"?: string; "jobs-internal-host"?: string; "jobs-internal-port"?: string; "paid-jobs-key-env"?: string;
@@ -68,7 +69,16 @@ export function meterOf(served: readonly ChatReply[]): MeterLine[] {
   return served.map((s) => ({ model: s.model ?? "", promptTokens: s.usage?.promptTokens, completionTokens: s.usage?.completionTokens }));
 }
 
-export type HeldJob = { jobId: string; result: CrossAskResult; amount: string; breakdown: JobQuote["breakdown"]; expiresAt: number };
+/**
+ * What a job's receipt needs that only the quote step knows (privateAI-design-32 ARCH-613, ARCH-615): the offer's network,
+ * the dataset's files as hashed when the job ran, and the price basis. Absent with --receipts off. Ids, hashes and amounts
+ * only, plus the SQL (hashed into the receipt, never logged or sent).
+ */
+export type ReceiptHold = {
+  network: string; quoteId: string; route: string; datasetId: string; templateLabel?: string; files: ReceiptFile[]; sql: string;
+  priceUsd: string; quoteBasis: Record<string, string | number | boolean>; actualUsd?: string;
+};
+export type HeldJob = { jobId: string; result: CrossAskResult; amount: string; breakdown: JobQuote["breakdown"]; expiresAt: number; receipt?: ReceiptHold };
 
 /** Held results, in memory only, removed on release or expiry. */
 export class JobStore {

@@ -1070,3 +1070,28 @@ Built in the AI's workspace on a snapshot of the owner's repo (main = e8626e8, v
   desk.test.ts guard extended.
 - Owner PC, .\test-console\desk.ps1 -Test: root tests 586, pass 586, fail 0; analyst 234/234; paywall 294/294;
   "OK all terminal suites passed". Not yet wired: server.ts receipt build on release, GET /jobs/:id/receipt.
+
+## 2026-11-10 privateAI-design-32 step 2c: receipts wired into the console (ARCH-613..616, chat near-ai-impl-3)
+
+- server.ts: --receipts on|off (default off; refused in --mode ui), --receipt-key-env, --receipt-dir (default runtime/receipts,
+  git-ignored), --receipt-max-files, --job-feed-receipts on|off (default off: near-watch refuses unknown events today).
+  POST /jobs/crossask with receipts on: the folder is checked against allowedRoots and hashed (hideFolders such as _analyst
+  skipped) BEFORE the job is registered; a job no receipt can cover is not sold (422). Body fields datasetId / templateLabel
+  (optional) name the dataset; otherwise datasetId = folder-<sha256(path)[:16]>, never a path.
+  On the paywall's release notice: job_released to the feed, then receiptOnRelease (build, sign, store, settle) in the
+  background; failures logged as job_receipt_failed with job id + reason only. GET /jobs/<id>/receipt -> {receipt,
+  publicKeyPem} (host-guarded). /jobs/config gains receipts:boolean.
+- jobs.ts: HeldJob.receipt?: ReceiptHold. receipt.ts: receiptOnRelease, releasedResult (JSON round-trip = what app.ts
+  release sends with c.json), datasetIdOf, templateLabelOf, routeOf, attestStatusFrom; buildReceipt takes pre-hashed files;
+  datasetFiles(skipDir). job-feed.ts: receiptEvent + JobFeed.receipt.
+- Decisions under --pricing after (firm pricing ARCH-601..611 replaces them): quoteId = jobId; route = model[+answerModel];
+  actualUsd = priceUsd.
+- Tests: +5 in test-console/test/receipt.test.ts; +2 end to end in scripts/test/console-paid-jobs.test.ts (real console,
+  paywall, analyst, gateway: receipt served after release, verifyReceipt against the released result ok + settled, no
+  marker/question/SQL in receipt or log; start-up refused without RECEIPT_SIGNING_KEY). ARCH-112 expectation extended with
+  receipts:false (new contract field).
+- First owner run: 590/591 (ARCH-112 shape); second: 591/593 (two test bugs in the new e2e tests: stdout chunk race on the
+  receipts start-up line; ports 0 tripped the port check before the key check). Both fixed in the tests.
+- Owner PC, .\test-console\desk.ps1 -Test: root tests 593, pass 593, fail 0; analyst tests 234, pass 234, fail 0; paywall
+  tests 294, pass 294, fail 0; "OK all terminal suites passed".
+- Not yet: desk.ps1 -ReceiptKey / up.ps1 passing --receipts on (3c); tab 03 Download receipt + page sending datasetId (3d).

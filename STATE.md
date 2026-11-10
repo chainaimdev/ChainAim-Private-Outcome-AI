@@ -383,3 +383,16 @@ Still open: the Crossmark web page payment; Open Question 4 (Bazaar); `RUN-ON-AN
 - 15:06 setup-devnet PASSED; 15:13 LIVE PASSED (BUILD_LOG SW3-PC): RLUSD x402 + TUSD direct streaming, console updates without refresh, two hashes confirmed on the public explorers.
 - Start it again: `powershell -ExecutionPolicy Bypass -File .\test-console\start-live.ps1 -TestnetWs wss://testnet.xrpl-labs.com/` (on Wi-Fi/hotspot for x402); stop: close the three windows.
 - Open: (a) change log shows TUSD as 40-hex (live-store rail text); (b) check that x402 traces reach ledger-watch (Testnet buyer cards read IDLE early in a session); (c) budgets end the stream after 1 RLUSD / 5 TUSD per tenant per run (--max-spend, --tusd-max-spend; top-ups capped by --max-topups/--max-mint).
+
+## RESUME POINT — 2026-11-10 ~14:30Z (chat near-ai-impl-3): design-32 step 2c receipts wired into the console; VERIFIED (593/234/294, BUILD_LOG step 2c); ship pending
+- Shipped before this: 59d5b59 (step 1), 2f21547 (2a/2b). This step (written, NOT run): server.ts --receipts on|off, --receipt-key-env,
+  --receipt-dir (default runtime/receipts, git-ignored), --receipt-max-files, --job-feed-receipts on|off (default off: near-watch
+  refuses unknown events); /jobs/crossask hashes the dataset folder (allowedRoots check, hideFolders skipped) before registering
+  and holds a ReceiptHold (jobs.ts); onJobReleased -> receiptOnRelease (receipt.ts) -> ReceiptStore.put + settle; GET
+  /jobs/<id>/receipt {receipt, publicKeyPem}; /jobs/config gains receipts:boolean; job-feed.ts receiptEvent + JobFeed.receipt.
+  +5 tests in test-console/test/receipt.test.ts (ARCH-613/615/616).
+- Decisions (AI, under --pricing after): quoteId = jobId; route = model or model+answerModel; actualUsd = priceUsd; datasetId from
+  body.datasetId else folder-<sha256(path)[:16]>; receipt hashes JSON round-trip of the held result (what app.ts c.json sends).
+- Next: owner ships 2c (desk.ps1 -Ship); then 3c (desk.ps1 -ReceiptKey, up.ps1 passes --receipts on),
+  3d (tab 03 Download receipt; page must send datasetId/templateLabel), 3e firm pricing.
+- Open: near-watch (adminUI repo) must accept job_receipt before --job-feed-receipts on.
