@@ -26,9 +26,9 @@
  *                       hideFolders (folder-name patterns never listed; default ["_*"], which hides the analyst's
  *                       work folder). Re-read on every call.
  *   --chain-query URL   chain-query for the "Blockchain queries" twisty (default http://127.0.0.1:8750; services/chain-query,
- *                       started by start-chain-query.cmd; read-only, no keys). GET /chain/<chains|vaults|loan-terms|export> only.
+ *                       started as ca-chain-query by up.ps1 / desk.ps1; read-only, no keys). GET /chain/<chains|vaults|loan-terms|export> only.
  *   --analyst URL       the analyst for "03 Private chat + analysis" (default http://127.0.0.1:8740; services/analyst,
- *                       started by start-analyst.cmd). Only its known routes are forwarded, as JSON.
+ *                       started as ca-analyst by up.ps1 / desk.ps1). Only its known routes are forwarded, as JSON.
  *   Ask across files ("Ask across files" box on the chat tab): POST /crossask {folder, question, model?, answerModel?, phrase?, sql?}
  *   runs packages/crossask here: the analyst finds how the folder's CSV/TSV files relate, the model
  *   (through the gateway, with the local key) writes one SELECT from the headers only, the analyst runs it, and with
@@ -630,7 +630,7 @@ createServer(async (req, res) => {
       try {
         r = await fetch(`${ANALYST}/${route}`, req.method === "POST" ? { method: "POST", headers: { "content-type": "application/json" }, body: await readBody(req) } : {});
       } catch {
-        return dataJson(res, 503, { error: `the analyst is not running at ${ANALYST}: start test-console\\start-analyst.cmd and keep its window open` });
+        return dataJson(res, 503, { error: `the analyst is not running at ${ANALYST}: start the desk (.\\test-console\\desk.ps1, which runs it as ca-analyst)` });
       }
       res.writeHead(r.status, { "content-type": "application/json", ...dataHeaders });
       res.end(await r.text());
@@ -643,7 +643,7 @@ createServer(async (req, res) => {
       if (req.method !== "GET" || !CHAIN_ROUTES.has(route)) return dataJson(res, 404, { error: "unknown chain route" });
       let r: Response;
       try { r = await fetch(`${CHAIN_QUERY}/${route}${url.search}`, { signal: AbortSignal.timeout(60_000) }); }
-      catch { return dataJson(res, 503, { error: `chain-query is not running at ${CHAIN_QUERY}: start test-console\\start-chain-query.cmd (start-ui.ps1 starts it) and keep its window open` }); }
+      catch { return dataJson(res, 503, { error: `chain-query is not running at ${CHAIN_QUERY}: start the desk (.\\test-console\\desk.ps1, which runs it as ca-chain-query)` }); }
       const disposition = r.headers.get("content-disposition");
       res.writeHead(r.status, { "content-type": r.headers.get("content-type") ?? "application/json", ...(disposition ? { "content-disposition": disposition } : {}), ...dataHeaders });
       res.end(Buffer.from(await r.arrayBuffer()));
@@ -699,7 +699,7 @@ createServer(async (req, res) => {
       const post = async (route: string, body: unknown) => {
         let r: Response;
         try { r = await fetch(`${ANALYST}/${route}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body), signal: AbortSignal.timeout(CROSSASK_TIMEOUT_MS) }); }
-        catch { throw new Error(`the analyst is not running at ${ANALYST}: start test-console\\start-analyst.cmd and keep its window open`); }
+        catch { throw new Error(`the analyst is not running at ${ANALYST}: start the desk (.\\test-console\\desk.ps1, which runs it as ca-analyst)`); }
         const j = await r.json() as Record<string, any>;
         if (!r.ok) throw new Error(j.error ?? `analyst HTTP ${r.status}`);
         return j;
@@ -1067,7 +1067,11 @@ async function relayAgent(req: IncomingMessage, res: ServerResponse): Promise<vo
   if ("error" in known) return dataJson(res, 503, { error: known.error });
   if (typeof b.tenant !== "string" || !known.tenants.some((t) => t.id === b.tenant)) return dataJson(res, 400, { error: `unknown tenant ${String(b.tenant)} (the agent pays for: ${known.tenants.map((t) => t.id).join(", ")})` });
   const tenant = b.tenant;
-  const run = { tenant, folder: b.folder, question: b.question, model, ...(answerModel ? { answerModel } : {}), phrase: b.phrase === "none" ? "none" : "llm", ...(typeof b.sql === "string" && b.sql.trim() ? { sql: b.sql } : {}) };
+  // datasetId / templateLabel (privateAI-design-32 ARCH-613) go on to the agent, which passes them to /jobs/crossask for
+  // the job's receipt; malformed ones are left out here (the console then names the dataset by a folder hash).
+  const runLabel = templateLabelOf(b.templateLabel);
+  const run = { tenant, folder: b.folder, question: b.question, model, ...(answerModel ? { answerModel } : {}), phrase: b.phrase === "none" ? "none" : "llm", ...(typeof b.sql === "string" && b.sql.trim() ? { sql: b.sql } : {}),
+    ...(typeof b.datasetId === "string" && /^[A-Za-z0-9_.-]{1,64}$/.test(b.datasetId) ? { datasetId: b.datasetId } : {}), ...(runLabel ? { templateLabel: runLabel } : {}) };
   // A hang-up here is passed on: the agent cancels a run that has not signed yet, and completes one that has.
   const hangUp = new AbortController();
   res.on("close", () => { if (!res.writableEnded) hangUp.abort(); });

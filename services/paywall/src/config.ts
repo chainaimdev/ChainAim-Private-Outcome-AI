@@ -160,6 +160,12 @@ export type PaidJobsConfig = {
   resultUrl: string;
   /** The longest a registered job may stay payable. */
   ttlSec: number;
+  /**
+   * Allowed difference between the console's clock and this one when checking a job's expiresAt (PAID_JOBS_CLOCK_SKEW_SEC,
+   * default 30). The console sets expiresAt = its now + --job-ttl-min, which by default equals PAID_JOBS_TTL_SEC, so with
+   * no allowance a console clock even 1 ms ahead refused every job (owner test runs 2026-11-10).
+   */
+  clockSkewSec: number;
   /** Most open jobs at once; registration beyond it is refused with 503. */
   max: number;
 };
@@ -358,9 +364,11 @@ export function loadConfig(env: Record<string, string | undefined>): PaywallConf
     if (resultRaw === undefined) throw new Error("PAID_JOBS_RESULT_URL is required with PAID_JOBS=on: the console's internal listener, e.g. http://host.docker.internal:8731");
     const ttlSec = integer("PAID_JOBS_TTL_SEC", 900);
     if (ttlSec < 60 || ttlSec > 86_400) throw new Error("PAID_JOBS_TTL_SEC must be from 60 to 86400");
+    const clockSkewSec = integer("PAID_JOBS_CLOCK_SKEW_SEC", 30);
+    if (clockSkewSec < 0 || clockSkewSec > 300) throw new Error("PAID_JOBS_CLOCK_SKEW_SEC must be from 0 to 300");
     const max = integer("PAID_JOBS_MAX", 1000);
     if (max < 1 || max > 100_000) throw new Error("PAID_JOBS_MAX must be from 1 to 100000");
-    paidJobs = { key: jobsKey, resultUrl: url("PAID_JOBS_RESULT_URL", resultRaw), ttlSec, max };
+    paidJobs = { key: jobsKey, resultUrl: url("PAID_JOBS_RESULT_URL", resultRaw), ttlSec, clockSkewSec, max };
   }
   if (near) {
     for (const [name, p] of Object.entries(prices)) {

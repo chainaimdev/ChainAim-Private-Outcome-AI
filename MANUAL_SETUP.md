@@ -410,3 +410,11 @@ Switches: `desk.ps1 -Receipts` (or `receipts.enabled` "on" in desk.json) require
 missing; "off" turns them off; "auto" (default) turns them on only when the key exists. `-ReceiptKeyName` changes the
 name in chainaim.env (inside the container it is always `RECEIPT_SIGNING_KEY`).
 Never open chainaim.env in a shared screen or paste it: it holds this key and the model keys.
+
+## PAID_JOBS_CLOCK_SKEW_SEC (paywall, optional, added 2026-11-10)
+
+Nothing to do: the default (30) is right. The console registers each paid job with expiresAt = its own clock +
+`--job-ttl-min` (15 min), and the paywall accepted at most its own clock + `PAID_JOBS_TTL_SEC` (900 s), with no margin,
+so a console clock slightly ahead of the paywall's refused every paid job (owner test runs 2026-11-10). The paywall now
+allows `PAID_JOBS_CLOCK_SKEW_SEC` seconds of difference (0 to 300; 0 = the old strict check). Set it in the paywall's
+environment only if the console and paywall run on machines whose clocks differ by more than that.

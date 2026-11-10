@@ -417,7 +417,7 @@ Still open: the Crossmark web page payment; Open Question 4 (Bazaar); `RUN-ON-AN
 - Known for step c (not a bug today, receipts off by default): in the container --receipt-dir defaults to
   /app/runtime/receipts, not writable by USER node and not persisted; step c must mount a volume and pass --receipt-dir.
 
-## RESUME POINT — 2026-11-10 ~18:30Z (chat near-ai-impl-4): design-32 step 3c receipt signing key — VERIFIED (BUILD_LOG "step 3c": key d27d1e9f17a0104e34c46cf3e5233f23 created; desk.ps1 -All ALL OK with READY "receipts OK"); ship as v1.5.1, then step 3d
+## RESUME POINT — 2026-11-10 ~18:30Z (chat near-ai-impl-4): design-32 step 3c receipt signing key — VERIFIED (BUILD_LOG "step 3c": key d27d1e9f17a0104e34c46cf3e5233f23 created; desk.ps1 -All ALL OK with READY "receipts OK"); SHIPPED 9b20b11, tag v1.5.1 (ed753b1..9b20b11; -Ship suites root 601/601, analyst 234/234, paywall 294/294; the 3 new files committed). Next: step 3d
 - New: scripts/receipt-key-core.ts (readEnvValue, upsertEnvLine, newKeyValue, ensureReceiptKey: created / kept / rotated,
   invalid refused without rotate; temp file + rename + read-back; never returns the private key) and scripts/receipt-key.ts
   (--secrets-file, --var RECEIPT_SIGNING_KEY, --rotate, --public-out; prints key id + PUBLIC key only; exit 0/1/2).
@@ -435,3 +435,37 @@ Still open: the Crossmark web page payment; Open Question 4 (Bazaar); `RUN-ON-AN
 - Unverified from this chat: the /jobs/config path and its receipts field were taken from the 2c handoff, not re-read.
 - Next (owner, one at a time): desk.ps1 -All (expect 601, READY "receipts off ... run -ReceiptKey"); desk.ps1 -ReceiptKey;
   desk.ps1 -All (expect "receipts on" in up.ps1 and READY "receipts OK"); then BUILD_LOG + ship. Then 3d.
+
+## RESUME POINT — 2026-11-10 ~18:50Z (chat near-ai-impl-4): design-32 step 3d tab 03 receipts — written, NOT run
+- paid-jobs.html: withReceiptFields adds datasetId (ds.cur.id, only when the asked folder is inside ds.cur.folder) and
+  templateLabel (the .on template chip's label, only while the question equals its title) to BOTH paths (Me ->
+  /jobs/crossask, AI agent -> /agent/crossask); receiptPanel(jobId) after both paid releases when /jobs/config .receipts:
+  polls GET /jobs/<id>/receipt (RECEIPT_POLL_MS 1000 x 15), shows key id, datasetId, label, settlement; "Download receipt"
+  saves chainaim-receipt-<jobId>.json = {receipt, publicKeyPem}. Cleared on every new paid Ask.
+- Two places dropped the fields and now pass them on: server.ts relayAgent (rebuilt run with fixed fields) and
+  services/paywall/scripts/agent-jobs-core.ts (parseRunRequest whitelist + runAndPay body), both with the console's shapes.
+- Stale start-analyst.cmd text removed: index.html (tab 03 note), server.ts header comment + two analyst-down messages
+  (prefix "the analyst is not running at <url>:" kept).
+- Tests: test-console/test/paid-jobs-receipt.test.ts (6), services/paywall/test/agent-receipt-fields.test.ts (3).
+  Expected root 607, paywall 297.
+- Unverified: that the 8730 UI forwards GET /jobs/<id>/receipt (forward() is generic by path; /jobs/config and
+  /jobs/<id>/attestation already work through it) -> shown by the live paid run.
+- Next (owner, one at a time): desk.ps1 -All; then one paid tab 03 job (Me or AI agent) on smb-fin-1 with its first
+  template: expect "Signed receipt ✓ · key id d27d1e9f17a0104e34c46cf3e5233f23 · smb-fin-1 · "<label>" · settled on near:testnet"
+  and a downloaded chainaim-receipt-<jobId>.json; then BUILD_LOG + ship v1.5.2.
+- 19:06Z owner desk.ps1 -All: ALL OK (analyst 234/234, paywall 297/297, root "all terminal suites passed"; ticks now print as
+  "✔" after desk.ps1 sets [Console]::OutputEncoding UTF-8); READY all OK incl. receipts OK; smoke PASS 60 WARN 1 FAIL 0.
+- 19:10Z owner live paid run, tab 03, smb-fin-1, template "Cash flow vs installment", AI agent t01: steps through
+  "Settled on NEAR · 8ZuzgYKy…Ffx1aK", "Paid 0.01 USDC by the AI agent from chainaim-buyer-seller.testnet on near:testnet ·
+  transaction 8ZuzgYKy…", AI proof 1/1 verified, and "Signed receipt ✓ · smb-fin-1 · "Cash flow vs installment" · settled on
+  near:testnet, transaction 8ZuzgYKy… · key id d27d1e9f17a0104e34c46cf3e5233f23" (job 6620e446…). Download click: pending.
+- Also fixed after that run (not yet run): retired launcher text start-chain-query.cmd (index.html chain box, server.ts header)
+  and start-ui.ps1 (index.html run-log line); paid-jobs-receipt.test.ts now refuses all three launcher names.
+- AGREED NEXT (new chat): A agent policy in the agent service between quoted and signed (packages/agent-policy decide +
+  SpendLedger on a volume, tenant.json policy; t01 generous e.g. 0.05/job 1.00/day, t03 tight 0.005/job, to confirm with
+  owner), event "policy" with each check; B agent verifies the receipt against a PINNED public key
+  (config/receipt-public-key.pem from desk.ps1 -ReceiptKey --public-out; owner to confirm committing it), event
+  "receipt_verified"; UI: actor tags on steps (Agent t01 / ChainAim / NEAR), policy step, verified step, a read-only policy
+  line under "Who pays?", "verified by the agent" in the receipt panel; C desk.ps1 -AgentAsk (headless run);
+  D desk.ps1 -VerifyReceipt <file> (offline check). Then firm pricing 3e. Demo: t01 pays + verifies, t03 refuses, terminal
+  -AgentAsk, -VerifyReceipt on the downloaded file.

@@ -393,12 +393,12 @@ footer.fine { margin-top: 30px; padding-top: 16px; border-top: 1px solid var(--r
             <button id="xaskGo" data-busy="Asking across files: the analyst reads the files, a model writes the query, the result is computed here" type="button">Ask</button>
             <button class="ghost" id="xaskRel" data-busy="Reading the files and how they relate" type="button">Show how the files relate</button>
           </div>
-          <span class="muted">Needs test-console\start-analyst.cmd running. A local model for the answer keeps the result rows on this PC.</span>
+          <span class="muted">Needs the analyst running (ca-analyst in Docker; .\test-console\desk.ps1 starts it). A local model for the answer keeps the result rows on this PC.</span>
         </div>
         <div id="xaskOut"></div>
         <details class="block" id="chainBox">
           <summary><span class="blabel">Blockchain queries</span> <span class="muted" id="chainSummary">(closed: nothing is read until you open it)</span></summary>
-          <p class="muted">Read-only public ledger data from services/chain-query (start-chain-query.cmd): no keys, no model, nothing signed. Chains, environments and contract sources come from config\chains\networks.json; a source still holding placeholders is listed with what is missing.</p>
+          <p class="muted">Read-only public ledger data from services/chain-query (ca-chain-query in Docker; .\test-console\desk.ps1 starts it): no keys, no model, nothing signed. Chains, environments and contract sources come from config\chains\networks.json; a source still holding placeholders is listed with what is missing.</p>
           <div class="chain-pick">
             <label class="blabel">Chain<select id="chainSel"></select></label>
             <label class="blabel">Environment<select id="chainEnv"></select></label>
@@ -481,7 +481,7 @@ function figureNote(r) {
   return out;
 }
 /** Where this run was saved (run log, privateAI-design-31 s3), so it can be read back later. */
-const runLogLine = (rl) => !rl ? el("p", { className: "muted", textContent: "Run log is off for this console (start-ui.ps1 -RunLog meta|full)." })
+const runLogLine = (rl) => !rl ? el("p", { className: "muted", textContent: "Run log is off for this console (set the console's run log to meta or full to keep runs)." })
   : rl.error ? note("honesty", `This run was not saved: ${rl.error}`)
   : el("p", { className: "muted", textContent: `Saved as run ${rl.id} (${rl.mode}) in test-console\\runs\\${rl.file}` });
 const cell = (term, value, cls = "", sub) => el("div", { className: "cell" },

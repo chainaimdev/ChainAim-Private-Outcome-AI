@@ -187,6 +187,11 @@ if ($RejudgeReceiver -or $RejudgeReason) {
   if ($Check -or $Stop -or $Test) { Stop-Here "-RejudgeReceiver runs after a start; leave out -Check, -Stop and -Test" }
 }
 
+# Node, npm and docker print UTF-8 (test marks, middle dots, ellipses). Windows PowerShell 5.1's console decodes them with
+# the old OEM code page and shows junk (owner run 2026-11-10: three odd characters for each test tick); UTF-8 output here
+# shows them as written.
+try { [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false) } catch { }
+
 # -ReceiptKey options are checked before anything else runs.
 if ($ReceiptKeyName -notmatch '^[A-Z_][A-Z0-9_]*$') { Stop-Here "-ReceiptKeyName must be an environment variable name such as RECEIPT_SIGNING_KEY" }
 if ($ReceiptKeyRotate -and -not $ReceiptKey) { Stop-Here "-ReceiptKeyRotate needs -ReceiptKey" }

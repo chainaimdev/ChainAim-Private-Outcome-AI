@@ -134,14 +134,17 @@ export class JobInvoices {
   }
 }
 
-/** A registration body checked field by field; the message names the field, never a value. */
-export function parseJob(body: unknown, now: number, ttlSec: number): Job | { error: string } {
+/**
+ * A registration body checked field by field; the message names the field, never a value. clockSkewSec allows the
+ * console's clock to run that far ahead of this one (PAID_JOBS_CLOCK_SKEW_SEC); 0 is the strict check.
+ */
+export function parseJob(body: unknown, now: number, ttlSec: number, clockSkewSec = 0): Job | { error: string } {
   const b = body as { jobId?: unknown; amount?: unknown; expiresAt?: unknown } | null;
   if (typeof b !== "object" || b === null) return { error: "body must be a JSON object {jobId, amount, expiresAt}" };
   if (typeof b.jobId !== "string" || !JOB_ID.test(b.jobId)) return { error: "jobId must be 32 lowercase hex characters" };
   if (typeof b.amount !== "string" || !/^[1-9]\d{0,30}$/.test(b.amount)) return { error: "amount must be a positive whole number of USDC base units, as a string" };
   if (typeof b.expiresAt !== "number" || !Number.isInteger(b.expiresAt)) return { error: "expiresAt must be a time in milliseconds since 1970" };
   if (b.expiresAt <= now) return { error: "expiresAt must be in the future" };
-  if (b.expiresAt > now + ttlSec * 1000) return { error: `expiresAt must be at most PAID_JOBS_TTL_SEC (${ttlSec} s) from now` };
+  if (b.expiresAt > now + (ttlSec + clockSkewSec) * 1000) return { error: `expiresAt must be at most PAID_JOBS_TTL_SEC (${ttlSec} s) from now, plus PAID_JOBS_CLOCK_SKEW_SEC (${clockSkewSec} s) for clock differences` };
   return { jobId: b.jobId, amount: b.amount, expiresAt: b.expiresAt };
 }

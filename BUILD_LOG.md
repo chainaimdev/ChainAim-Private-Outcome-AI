@@ -1145,3 +1145,19 @@ Built in the AI's workspace on a snapshot of the owner's repo (main = e8626e8, v
   FAIL 0, `ALL OK`. Report test-console\runs\ui-smoke-2026-11-10T18-26-25-428Z.json.
 - Not yet shown live: a paid job's receipt fetched from GET /jobs/<id>/receipt on the running stack (needs a paid tab 03
   run; step 3d adds the Download receipt button).
+
+## 2026-11-10 v1.5.2: design-32 step 3d (tab 03 receipt) + paid-jobs clock-skew fix
+
+- Tab 03: signed receipt panel after both paid paths (Me and AI agent), polls GET /jobs/<id>/receipt, Download receipt
+  saves chainaim-receipt-<jobId>.json ({receipt, publicKeyPem}). datasetId / templateLabel carried through page ->
+  console -> agent (/agent/crossask relay, parseRunRequest, runAndPay) -> /jobs/crossask. Payment line says "transaction".
+- Stale launcher text removed (start-analyst.cmd, start-chain-query.cmd, start-ui.ps1 -> Docker via desk.ps1).
+- desk.ps1 writes UTF-8 (no more junk characters in output).
+- Bug fixed: console expiresAt = its now + 15 min and paywall allowed at most its now + PAID_JOBS_TTL_SEC (900 s) with
+  zero margin, so a console clock 1 ms ahead refused every paid job (agent-jobs tests failed 3 then 7). New
+  PAID_JOBS_CLOCK_SKEW_SEC (paywall, default 30, 0..300; 0 = old strict check). MANUAL_SETUP.md: nothing to do.
+- Tests: paid-jobs-receipt.test.ts (8), agent-receipt-fields.test.ts (3), job-clock-skew.test.ts (3); paid-jobs.test.ts
+  updated for the allowance. Suites: root 609, analyst 234, paywall 300.
+- Owner-verified live (14:40 local): tab 03, AI agent t01, smb-fin-1 "Cash flow vs installment", paid 0.01 USDC,
+  tx BrmwcdSP...E2HExu, AI proof 1/1 verified, Signed receipt shown with dataset + label + key id
+  d27d1e9f17a0104e34c46cf3e5233f23; Download receipt file saved to Downloads.

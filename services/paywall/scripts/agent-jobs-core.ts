@@ -115,10 +115,17 @@ export type JobsToolReply =
   | { status: "paid"; amountUsdc: string; transaction: string; rows: number }
   | { status: "refused" | "failed"; reason: string };
 
-/** One run, as POST /run takes it. The page's own tab 03 fields plus the tenant. */
-export type RunRequest = { tenant: string; folder: string; question: string; model?: string; answerModel?: string; phrase: "llm" | "none"; sql?: string };
+/**
+ * One run, as POST /run takes it. The page's own tab 03 fields plus the tenant. datasetId / templateLabel (privateAI-design-32
+ * ARCH-613) are passed on to the console's /jobs/crossask for the job's receipt; the console checks them again
+ * (test-console/console/receipt.ts datasetIdOf, templateLabelOf).
+ */
+export type RunRequest = { tenant: string; folder: string; question: string; model?: string; answerModel?: string; phrase: "llm" | "none"; sql?: string; datasetId?: string; templateLabel?: string };
 
 const MODEL_ID = /^[\w.-]+\/[\w.:-]+$/;
+/** The same shapes the console accepts for a receipt (receipt.ts DATASET_ID, TEMPLATE_LABEL). */
+const DATASET_ID = /^[A-Za-z0-9_.-]{1,64}$/;
+const TEMPLATE_LABEL = /^[\x20-\x7E]{1,120}$/;
 
 /** RunRequest from a parsed body, or a plain reason it is refused (400). The same checks as the console's /jobs/crossask, plus the tenant. */
 export function parseRunRequest(body: unknown, tenants: ReadonlySet<string>): RunRequest | { error: string } {
@@ -132,6 +139,8 @@ export function parseRunRequest(body: unknown, tenants: ReadonlySet<string>): Ru
   }
   if (b.phrase !== undefined && b.phrase !== "llm" && b.phrase !== "none") return { error: "phrase must be llm or none" };
   if (b.sql !== undefined && typeof b.sql !== "string") return { error: "sql must be a string" };
+  if (b.datasetId !== undefined && (typeof b.datasetId !== "string" || !DATASET_ID.test(b.datasetId))) return { error: "datasetId must be 1-64 letters, digits, dot, dash or underscore" };
+  if (b.templateLabel !== undefined && (typeof b.templateLabel !== "string" || !TEMPLATE_LABEL.test(b.templateLabel.trim()))) return { error: "templateLabel must be 1-120 printable ASCII characters" };
   return {
     tenant: b.tenant,
     folder: b.folder,
@@ -140,6 +149,8 @@ export function parseRunRequest(body: unknown, tenants: ReadonlySet<string>): Ru
     ...(typeof b.answerModel === "string" && b.answerModel ? { answerModel: b.answerModel } : {}),
     phrase: b.phrase === "none" ? "none" : "llm",
     ...(typeof b.sql === "string" && b.sql.trim() ? { sql: b.sql } : {}),
+    ...(typeof b.datasetId === "string" ? { datasetId: b.datasetId } : {}),
+    ...(typeof b.templateLabel === "string" ? { templateLabel: b.templateLabel.trim() } : {}),
   };
 }
 
@@ -262,7 +273,7 @@ async function runAndPay(
     const r = await fetch(`${deps.console}/jobs/crossask`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ folder: req.folder, question: req.question, model: req.model, answerModel: req.answerModel, phrase: req.phrase, sql: req.sql }),
+      body: JSON.stringify({ folder: req.folder, question: req.question, model: req.model, answerModel: req.answerModel, phrase: req.phrase, sql: req.sql, datasetId: req.datasetId, templateLabel: req.templateLabel }),
       signal,
     });
     const j = (await r.json().catch(() => null)) as Record<string, unknown> | null;

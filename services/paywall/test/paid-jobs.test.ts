@@ -53,10 +53,14 @@ describe("ARCH-106 configuration", () => {
     assert.throws(() => loadConfig({ ...env, PAID_JOBS: "yes" }), /PAID_JOBS must be on or off/);
     assert.throws(() => loadConfig({ ...env, PAID_JOBS_TTL_SEC: "5" }), /PAID_JOBS_TTL_SEC/);
     assert.throws(() => loadConfig({ ...env, PAID_JOBS_MAX: "0" }), /PAID_JOBS_MAX/);
+    // integer() refuses a negative itself ("must be a whole number"); the range check catches the rest.
+    assert.throws(() => loadConfig({ ...env, PAID_JOBS_CLOCK_SKEW_SEC: "-1" }), /PAID_JOBS_CLOCK_SKEW_SEC/);
+    assert.throws(() => loadConfig({ ...env, PAID_JOBS_CLOCK_SKEW_SEC: "301" }), /PAID_JOBS_CLOCK_SKEW_SEC must be from 0 to 300/);
+    assert.equal(loadConfig({ ...env, PAID_JOBS_CLOCK_SKEW_SEC: "0" }).paidJobs?.clockSkewSec, 0);
     for (const bad of [{ PAID_JOBS_KEY: "short-key" }, { PAID_JOBS_RESULT_URL: "" }]) {
       try { loadConfig({ ...env, ...bad }); } catch (e) { assert.equal((e as Error).message.includes(JOBS_KEY), false); }
     }
-    assert.deepEqual(loadConfig(env).paidJobs, { key: JOBS_KEY, resultUrl: "http://host.docker.internal:8731", ttlSec: 900, max: 1000 });
+    assert.deepEqual(loadConfig(env).paidJobs, { key: JOBS_KEY, resultUrl: "http://host.docker.internal:8731", ttlSec: 900, clockSkewSec: 30, max: 1000 });
   });
 });
 
@@ -194,7 +198,8 @@ describe("paid jobs (PAID_JOBS=on, PAY_RAILS=xrpl,near)", () => {
       [{ ...ok, amount: "1.5" }, /amount/],
       [{ ...ok, expiresAt: "soon" }, /expiresAt/],
       [{ ...ok, expiresAt: now - 1 }, /in the future/],
-      [{ ...ok, expiresAt: now + 901_000 }, /PAID_JOBS_TTL_SEC/],
+      // Past PAID_JOBS_TTL_SEC (900) plus the default PAID_JOBS_CLOCK_SKEW_SEC (30); 901 s is now accepted (job-clock-skew.test.ts).
+      [{ ...ok, expiresAt: now + 931_000 }, /PAID_JOBS_TTL_SEC.*PAID_JOBS_CLOCK_SKEW_SEC/],
     ];
     for (const [body, re] of cases) {
       const r = await register(body);

@@ -352,7 +352,7 @@ export function createPaywall(config: PaywallConfig, deps: PaywallDeps = {}): Ho
       } catch {
         return errorBody(c, 400, "body must be JSON");
       }
-      const job = parseJob(body, (deps.now ?? Date.now)(), paidJobs.ttlSec);
+      const job = parseJob(body, (deps.now ?? Date.now)(), paidJobs.ttlSec, paidJobs.clockSkewSec ?? 0);
       if ("error" in job) return errorBody(c, 400, job.error);
       const stored = jobs.register(job);
       if (stored === "full") return errorBody(c, 503, `${paidJobs.max} jobs are open (PAID_JOBS_MAX); try again later`);

@@ -272,6 +272,12 @@ test("ARCH-614 ARCH-615 -ReceiptKey runs scripts\\receipt-key.ts on <secretsDir>
   assert.ok(df.indexOf("/receipts") < df.indexOf("USER node"));
 });
 
+test("the console shows Node's UTF-8 output as written (owner run 2026-11-10: test ticks printed as junk), set before anything runs", () => {
+  assert.match(code, /\[Console\]::OutputEncoding = New-Object System\.Text\.UTF8Encoding\(\$false\)/);
+  const at = code.indexOf("[Console]::OutputEncoding");
+  for (const runs of ["if ($Test) {", "if ($All) {", "if ($Ship) {"]) assert.ok(at < code.indexOf(runs), `set before ${runs} runs the suites`);
+});
+
 test("READY needs local, Bedrock and NEAR AI in the tab 02 / 03 model lists (owner 2026-11-07); -RequireModels changes the families", () => {
   assert.match(code, /\[string\[\]\]\$RequireModels = @\("local", "bedrock", "nearai"\),/);
   const r = code.slice(code.indexOf("function Report"), code.indexOf("# ================================================================= -Stop"));
