@@ -6,11 +6,11 @@
 import { test, after, before, describe } from "node:test";
 import assert from "node:assert/strict";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, request, type IncomingHttpHeaders, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
@@ -218,5 +218,95 @@ describe("C4/C5 and --dataset-root on the api", () => {
     assert.equal(r.rootAllowed, true);
     const bad = spawnSync(process.execPath, [SERVER, "--port", "1", "--dataset-root", "private"], { encoding: "utf8", timeout: 20_000 });
     assert.match(bad.stderr, /--dataset-root must be NAME=PATH/);
+  });
+});
+
+// ---------------------------------------------------------------- what the console image must hold
+// Every module server.ts loads at run time, followed through relative imports. `import type` is erased by Node's type
+// stripping and loads nothing, so it is skipped; any other import (including `import { type X }`, which still loads the
+// module) counts. Bare specifiers must be node: built-ins: the image installs no npm packages.
+// The clause holds no ";": an import list never does, and it stops `export function ...` from running on to a later "from".
+const STATIC_IMPORT = /^\s*(?:import|export)\s+([^;]*?)\s+from\s+["']([^"']+)["']/gm;
+const SIDE_EFFECT_IMPORT = /^\s*import\s+["']([^"']+)["']/gm;
+const DYNAMIC_IMPORT = /\bimport\(\s*["']([^"']+)["']\s*\)/g;
+function runtimeImports(entry: string): { files: string[]; bare: string[] } {
+  const seenFiles = new Set<string>();
+  const bare = new Set<string>();
+  const visit = (file: string): void => {
+    if (seenFiles.has(file)) return;
+    seenFiles.add(file);
+    const src = readFileSync(file, "utf8");
+    const specs: string[] = [];
+    for (const m of src.matchAll(STATIC_IMPORT)) if (!/^type\s/.test(m[1])) specs.push(m[2]);
+    for (const m of src.matchAll(SIDE_EFFECT_IMPORT)) specs.push(m[1]);
+    for (const m of src.matchAll(DYNAMIC_IMPORT)) specs.push(m[1]);
+    for (const s of specs) {
+      if (!s.startsWith(".")) { bare.add(s); continue; }
+      const target = resolve(dirname(file), s);
+      assert.ok(existsSync(target), `${relative(ROOT, file)} imports ${s}, which does not exist`);
+      visit(target);
+    }
+  };
+  visit(entry);
+  return { files: [...seenFiles].map((f) => relative(ROOT, f).split(sep).join("/")).sort(), bare: [...bare].sort() };
+}
+
+/** COPY sources of a Dockerfile (repository-relative, as written); --from stages are not the build context. */
+function copySources(dockerfile: string): string[] {
+  const out: string[] = [];
+  for (const line of readFileSync(dockerfile, "utf8").split(/\r?\n/)) {
+    const m = /^\s*COPY\s+(.*)$/i.exec(line);
+    if (!m) continue;
+    const parts = m[1].trim().split(/\s+/);
+    if (parts.some((p) => p.startsWith("--from"))) continue;
+    const args = parts.filter((p) => !p.startsWith("--"));
+    out.push(...args.slice(0, -1).map((p) => p.replace(/\/+$/, "")));
+  }
+  return out;
+}
+const under = (file: string, path: string) => file === path || file.startsWith(path + "/");
+
+/**
+ * Whether a .dockerignore keeps `file` in the build context: the last matching line wins, as in Docker. Only the pattern
+ * shapes this file uses are understood ("*", a plain path, **\/NAME, **\/*.EXT); any other is refused so the check can
+ * never pass by misreading a pattern.
+ */
+function keptByIgnore(ignoreFile: string, file: string): boolean {
+  let kept = true;
+  for (const raw of readFileSync(ignoreFile, "utf8").split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line || line.startsWith("#")) continue;
+    const neg = line.startsWith("!");
+    const p = neg ? line.slice(1) : line;
+    let hit: boolean;
+    if (p === "*") hit = true;
+    else if (/^\*\*\/\*\.[A-Za-z0-9]+$/.test(p)) hit = file.endsWith(p.slice(4));
+    else if (/^\*\*\/[A-Za-z0-9._-]+$/.test(p)) hit = file.split("/").includes(p.slice(3));
+    else if (/^[A-Za-z0-9._/-]+$/.test(p)) hit = under(file, p.replace(/\/+$/, ""));
+    else throw new Error(`${relative(ROOT, ignoreFile)}: pattern ${line} is not one this check understands; extend keptByIgnore`);
+    if (hit) kept = neg;
+  }
+  return kept;
+}
+
+describe("ARCH-615 the console image holds every file server.ts loads", () => {
+  test("ARCH-615: every module server.ts loads at run time is copied by console.Dockerfile and kept by its .dockerignore; no npm package is imported", () => {
+    const dockerfile = join(ROOT, "test-console/console.Dockerfile");
+    const ignore = join(ROOT, "test-console/console.Dockerfile.dockerignore");
+    const { files, bare } = runtimeImports(SERVER);
+    assert.ok(files.includes("packages/receipt/src/index.ts"), "the walk follows receipt.ts into packages/receipt");
+    const sources = copySources(dockerfile);
+    const notCopied = files.filter((f) => !sources.some((s) => under(f, s)));
+    assert.deepEqual(notCopied, [], `console.Dockerfile does not COPY: ${notCopied.join(", ")}`);
+    const ignored = files.filter((f) => !keptByIgnore(ignore, f));
+    assert.deepEqual(ignored, [], `console.Dockerfile.dockerignore leaves out: ${ignored.join(", ")}`);
+    const notBuiltin = bare.filter((b) => !b.startsWith("node:"));
+    assert.deepEqual(notBuiltin, [], `server.ts loads npm packages the image does not install: ${notBuiltin.join(", ")}`);
+  });
+
+  test("ARCH-615: the check itself catches a module the image would miss (packages/receipt without its COPY line)", () => {
+    const sources = copySources(join(ROOT, "test-console/console.Dockerfile")).filter((s) => !s.startsWith("packages/receipt"));
+    const missed = runtimeImports(SERVER).files.filter((f) => !sources.some((s) => under(f, s)));
+    assert.deepEqual(missed, ["packages/receipt/src/index.ts"]);
   });
 });

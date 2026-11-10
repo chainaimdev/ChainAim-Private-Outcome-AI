@@ -3,6 +3,8 @@
 *
 !packages/crossask/package.json
 !packages/crossask/src
+!packages/receipt/package.json
+!packages/receipt/src
 !services/web/src/balance.ts
 !services/web/src/near-wallets.ts
 !config

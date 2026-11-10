@@ -1095,3 +1095,25 @@ Built in the AI's workspace on a snapshot of the owner's repo (main = e8626e8, v
 - Owner PC, .\test-console\desk.ps1 -Test: root tests 593, pass 593, fail 0; analyst tests 234, pass 234, fail 0; paywall
   tests 294, pass 294, fail 0; "OK all terminal suites passed".
 - Not yet: desk.ps1 -ReceiptKey / up.ps1 passing --receipts on (3c); tab 03 Download receipt + page sending datasetId (3d).
+
+## 2026-11-10 fix: console image after step 2c (ARCH-615, chat near-ai-impl-4)
+
+- Found by the owner's `.\test-console\desk.ps1 -All` (15:50Z, before the fix): suites passed (analyst 234/234, paywall
+  294/294, "OK all terminal suites passed"), both stacks built, then `FAIL console-api did not answer at
+  http://127.0.0.1:8735/data/config within 180 s` / `STOP a service did not come up`.
+- Cause (from the files): since 2c server.ts -> receipt.ts imports packages/receipt/src/index.ts at run time, but
+  test-console/console.Dockerfile and console.Dockerfile.dockerignore copied only packages/crossask, so ca-console-api could
+  not load its modules. The terminal suites run on the full checkout and could not see it.
+- Fix: console.Dockerfile COPY packages/receipt/package.json + packages/receipt/src; the .dockerignore allows both.
+- Guard: scripts/test/console-docker.test.ts "ARCH-615 the console image holds every file server.ts loads" (2 tests): walks
+  server.ts's runtime imports (import type skipped) and requires each to be COPYed by console.Dockerfile and kept by its
+  .dockerignore, bare imports node: only; the second test shows the walk reports packages/receipt/src/index.ts when its
+  COPY lines are removed.
+- Owner PC, `.\test-console\desk.ps1 -All` after the fix (16:19Z): "OK all terminal suites passed" (analyst tests 234 pass
+  234; paywall tests 294 pass 294; the root suite's count was not in the pasted part of the output); console image built
+  with steps `COPY packages/receipt/package.json` and `COPY packages/receipt/src`; `OK console-api answers`; READY table all
+  OK (gateway, paywall, analyst, chain-query, console API, console page, near-watch, NEAR admin UI, agent, ca-attest,
+  paywall NEAR RPC, models local/bedrock/nearai); UI smoke check `PASS 60  WARN 1  SKIP 5  FAIL 0`, answers 14 checked and
+  equal to the key, 0 different (WARN: dental-prms "MODEL: which process controls would h...", 8 figures did not match
+  the facts, bedrock/nemotron-nano-3-30b wording; the page shows the computed facts); `ALL OK terminal suites, both
+  stacks, log windows, both UIs and the UI smoke check all passed`. Report: test-console\runs\ui-smoke-2026-11-10T16-19-14-096Z.json.

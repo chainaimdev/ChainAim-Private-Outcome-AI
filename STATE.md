@@ -384,8 +384,8 @@ Still open: the Crossmark web page payment; Open Question 4 (Bazaar); `RUN-ON-AN
 - Start it again: `powershell -ExecutionPolicy Bypass -File .\test-console\start-live.ps1 -TestnetWs wss://testnet.xrpl-labs.com/` (on Wi-Fi/hotspot for x402); stop: close the three windows.
 - Open: (a) change log shows TUSD as 40-hex (live-store rail text); (b) check that x402 traces reach ledger-watch (Testnet buyer cards read IDLE early in a session); (c) budgets end the stream after 1 RLUSD / 5 TUSD per tenant per run (--max-spend, --tusd-max-spend; top-ups capped by --max-topups/--max-mint).
 
-## RESUME POINT — 2026-11-10 ~14:30Z (chat near-ai-impl-3): design-32 step 2c receipts wired into the console; VERIFIED (593/234/294, BUILD_LOG step 2c); ship pending
-- Shipped before this: 59d5b59 (step 1), 2f21547 (2a/2b). This step (written, NOT run): server.ts --receipts on|off, --receipt-key-env,
+## RESUME POINT — 2026-11-10 ~14:30Z (chat near-ai-impl-3): design-32 step 2c receipts wired into the console; VERIFIED (593/234/294, BUILD_LOG step 2c); SHIPPED e8f5eb2 (pushed 2f21547..e8f5eb2)
+- Shipped before this: 59d5b59 (step 1), 2f21547 (2a/2b). This step (verified, shipped e8f5eb2): server.ts --receipts on|off, --receipt-key-env,
   --receipt-dir (default runtime/receipts, git-ignored), --receipt-max-files, --job-feed-receipts on|off (default off: near-watch
   refuses unknown events); /jobs/crossask hashes the dataset folder (allowedRoots check, hideFolders skipped) before registering
   and holds a ReceiptHold (jobs.ts); onJobReleased -> receiptOnRelease (receipt.ts) -> ReceiptStore.put + settle; GET
@@ -393,6 +393,21 @@ Still open: the Crossmark web page payment; Open Question 4 (Bazaar); `RUN-ON-AN
   +5 tests in test-console/test/receipt.test.ts (ARCH-613/615/616).
 - Decisions (AI, under --pricing after): quoteId = jobId; route = model or model+answerModel; actualUsd = priceUsd; datasetId from
   body.datasetId else folder-<sha256(path)[:16]>; receipt hashes JSON round-trip of the held result (what app.ts c.json sends).
-- Next: owner ships 2c (desk.ps1 -Ship); then 3c (desk.ps1 -ReceiptKey, up.ps1 passes --receipts on),
+- Next (agent, new chat near-ai-impl-4): 3c (desk.ps1 -ReceiptKey, up.ps1 passes --receipts on),
   3d (tab 03 Download receipt; page must send datasetId/templateLabel), 3e firm pricing.
 - Open: near-watch (adminUI repo) must accept job_receipt before --job-feed-receipts on.
+
+## RESUME POINT — 2026-11-10 ~16:25Z (chat near-ai-impl-4): FIX console image after 2c — VERIFIED (desk.ps1 -All ALL OK, BUILD_LOG "fix: console image after step 2c"); ship as v1.5.0
+- Found by the owner's `desk.ps1 -All` (15:50Z): suites 593/234/294 passed, stacks built, then `console-api did not answer at
+  http://127.0.0.1:8735/data/config within 180 s`. Cause (read from the files, container log not seen): since 2c server.ts ->
+  receipt.ts imports packages/receipt/src/index.ts at run time, but test-console/console.Dockerfile and its .dockerignore copied
+  only packages/crossask, so ca-console-api exits at start (module not found). The terminal suites run on the full checkout, so
+  they could not see it.
+- Fix: console.Dockerfile COPY packages/receipt/package.json + src; console.Dockerfile.dockerignore allows both.
+- Guard: scripts/test/console-docker.test.ts "ARCH-615 the console image holds every file server.ts loads" (2 tests): walks
+  server.ts's runtime imports (import type skipped), requires each to be COPYed and kept by the .dockerignore, bare imports
+  node: only; the second test proves the walk catches packages/receipt without its COPY line. Expected root suites 595.
+- Verified 16:19Z: `desk.ps1 -All` ALL OK (console-api answers, READY all OK, smoke PASS 60 WARN 1 SKIP 5 FAIL 0).
+- Next (owner): `desk.ps1 -Ship ... -ShipTag v1.5.0` (latest tag here was v1.4.9). Then (agent): step 3c, 3d, 3e.
+- Known for step c (not a bug today, receipts off by default): in the container --receipt-dir defaults to
+  /app/runtime/receipts, not writable by USER node and not persisted; step c must mount a volume and pass --receipt-dir.
