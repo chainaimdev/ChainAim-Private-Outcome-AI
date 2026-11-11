@@ -1,6 +1,7 @@
 # chainaim-agent: the tab 03 agent service (architecture-tab03-agent-mode.md ARCH-310). Build context: the repository
 # root (the agent imports services/web/src, services/gateway/src/privacy and, since privateAI-design-32 ARCH-620,
-# packages/agent-policy); ignore file: services/paywall/agent.Dockerfile.dockerignore. Every file the agent loads at run
+# packages/agent-policy, and since privateAI-design-32 step B packages/receipt and the pinned config/receipt-public-key.pem);
+# ignore file: services/paywall/agent.Dockerfile.dockerignore. Every file the agent loads at run
 # time must be copied here and kept by that ignore file: scripts/test/agent-docker.test.ts walks agent-jobs.ts's imports.
 #   docker build -f services/paywall/agent.Dockerfile -t chainaim-agent:local .
 # No key, env file or tenant file is in the image: compose mounts rig/tenants and the agent's env file read-only, and
@@ -18,6 +19,11 @@ COPY services/gateway/src/privacy/entities.ts services/gateway/src/privacy/presi
 # The buyer-side spending policy (ARCH-620): pure, Node built-ins only.
 COPY packages/agent-policy/package.json packages/agent-policy/package.json
 COPY packages/agent-policy/src packages/agent-policy/src
+# Step B: the agent verifies each paid job's receipt (packages/receipt, Node built-ins only) with the console's PINNED
+# public key (not secret; committed; exported by desk.ps1 -ReceiptKey). The default --receipt-public-key is this path.
+COPY packages/receipt/package.json packages/receipt/package.json
+COPY packages/receipt/src packages/receipt/src
+COPY config/receipt-public-key.pem config/receipt-public-key.pem
 # /data/spend: the spend ledger (--spend-dir, volume chainaim-agent-spend); owned by node, which runs the service, so an
 # empty named volume takes this owner on first use.
 RUN mkdir -p /data/spend && chown node:node /data/spend

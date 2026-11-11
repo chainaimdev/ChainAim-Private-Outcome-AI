@@ -11,6 +11,9 @@
      (the picked template's label, only while the question is still that template's text) so the console's receipt names
      them; after a paid release, when GET /jobs/config says receipts are on, GET /jobs/<id>/receipt is shown with its key id
      and settlement and can be downloaded as {receipt, publicKeyPem} for any verifier (packages/receipt verifyReceipt).
+     Agent receipt check (privateAI-design-32 step B): in agent mode the agent itself verifies the receipt with the console's
+     PINNED public key (config/receipt-public-key.pem) after the release; its step "receipt_verified" / "receipt_failed" is
+     shown, and the receipt panel says whether the agent verified it.
      Spending policy (privateAI-design-32 ARCH-620): when GET /agent/policy answers {on: true}, a read-only line under
      "Who pays?" shows the picked tenant's limits (its tenant.json "policy" block) and today's spend; the agent's "policy"
      step shows each check with its limit and the decision. Each agent step is tagged with who did it: the agent (on this
@@ -147,7 +150,7 @@
   };
 
   /** The signed receipt of a released job: key id, settlement, and a download of {receipt, publicKeyPem}. */
-  function receiptPanel(jobId) {
+  function receiptPanel(jobId, agentCheck) {
     rcpt.replaceChildren();
     if (!config || config.receipts !== true || !/^[0-9a-f]{32}$/.test(jobId)) return;
     const head = document.createElement("p"); head.className = "muted"; head.id = "xreceiptHead";
@@ -165,7 +168,9 @@
         return;
       }
       const settled = r.settlement ? `settled on ${r.settlement.network}, transaction ${String(r.settlement.transaction).slice(0, 8)}…` : "settlement not attached yet";
-      head.textContent = `Signed receipt ✓ · ${r.body.datasetId}${r.body.templateLabel ? ` · "${r.body.templateLabel}"` : ""} · ${settled} · key id ${r.sig.keyId}`;
+      // Step B: what the paying agent found with its pinned key (agent mode only; the Me path passes nothing).
+      const byAgent = !agentCheck ? "" : agentCheck.ok ? ` · verified by ${agentCheck.who} ✓` : ` · ${agentCheck.who}'s check failed ✗`;
+      head.textContent = `Signed receipt ✓ · ${r.body.datasetId}${r.body.templateLabel ? ` · "${r.body.templateLabel}"` : ""} · ${settled} · key id ${r.sig.keyId}${byAgent}`;
       head.title = "Signed by this console. It holds hashes of the files, query, result and model calls, never the question, rows or answer.";
       const dl = document.createElement("button");
       dl.type = "button"; dl.className = "ghost"; dl.id = "xreceiptGo"; dl.textContent = "Download receipt";
@@ -192,6 +197,8 @@
   /** Agent mode: one run (agentRun), then the policy line is read again, since today's spend may have changed (ARCH-620). */
   async function agentStep(body) {
     try { return await agentRun(body); }
+    // A run that stopped (refused, error): the status line goes back to what Ask does now, not "...is running and paying".
+    catch (e) { explain(); throw e; }
     finally { if (policies) void loadPolicy(); }
   }
 
@@ -215,7 +222,7 @@
     }
     const reader = r.body.getReader();
     const decoder = new TextDecoder();
-    let buffer = "", result, quoted = null, settled = null, ranJob = null;
+    let buffer = "", result, quoted = null, settled = null, ranJob = null, receiptCheck = null;
     for (;;) {
       const { value, done } = await reader.read();
       if (done) break;
@@ -239,13 +246,21 @@
         else if (type === "signed") step(by(AGENT), `Payment signed by ${d.account} (ChainAim's relayer pays the gas)`);
         else if (type === "settled") { settled = d; step(by("NEAR"), "Settled on NEAR · ", explorerLink(d.network, d.transaction)); }
         else if (type === "released") { result = d.result; step(by("ChainAim"), `Result released: ${d.rows} row(s)`); }
+        else if (type === "receipt_verified") {
+          receiptCheck = { ok: true, who: `Agent ${t.id}` };
+          step(by(AGENT), `Agent verified the receipt ✓ · signed by the pinned key ${String(d.keyId).slice(0, 8)}… · result, job and amount${d.settled ? " and transaction" : ""} match${d.settled ? "" : " (settlement not attached yet)"}`);
+        }
+        else if (type === "receipt_failed") {
+          receiptCheck = { ok: false, who: `Agent ${t.id}` };
+          step(by(AGENT), `Receipt check failed ✗: ${d.reason} (the payment stands)`);
+        }
         else if (type === "done") step("Done");
         else if (type === "refused") throw new Error(`Not paid: ${d.reason}`);
         else if (type === "error") throw new Error(`${d.reason}${d.transaction ? ` (transaction ${d.transaction})` : ""}`);
       }
     }
     if (result !== undefined && settled && ranJob) attestPanel(ranJob);
-    if (result !== undefined && settled && ranJob) receiptPanel(ranJob);
+    if (result !== undefined && settled && ranJob) receiptPanel(ranJob, receiptCheck);
     if (result === undefined || !settled) throw new Error(`The agent's steps ended before the result arrived${settled ? ` (transaction ${settled.transaction}: it was paid)` : ""}.`);
     info.replaceChildren(`Paid ${Number(quoted?.totalUsd)} USDC by the AI agent from ${t.accountId} on ${settled.network} · transaction `, explorerLink(settled.network, settled.transaction));
     info.className = "muted";

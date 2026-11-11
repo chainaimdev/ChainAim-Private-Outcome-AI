@@ -233,6 +233,8 @@ test("ARCH-614 ARCH-615 -ReceiptKey runs scripts\\receipt-key.ts on <secretsDir>
   assert.match(k, /\$keyArgs = @\("scripts\\receipt-key\.ts", "--secrets-file", \(Join-Path \$secrets "chainaim\.env"\), "--var", \$ReceiptKeyName\)/);
   assert.ok(!/"--env-file"/.test(k), "never --env-file: Node takes it as its own option even after the script name (owner run 2026-11-10)");
   assert.match(k, /if \(\$ReceiptKeyRotate\) \{ \$keyArgs \+= "--rotate" \}/);
+  // Step B: the PUBLIC key is also written to config\receipt-public-key.pem, the key the agent pins (committed).
+  assert.match(k, /\$keyArgs \+= @\("--public-out", "config\\receipt-public-key\.pem"\)/);
   assert.match(k, /& node @keyArgs/); assert.match(k, /exit 0/);
   assert.ok(!/docker|Stop-Process|Get-Content|Select-String/.test(k), "touches no service and reads no file itself");
   // auto / on / off from -Receipts or receipts.enabled, handed to up.ps1 before it runs; the READY row asks the console API.
@@ -285,4 +287,13 @@ test("READY needs local, Bedrock and NEAR AI in the tab 02 / 03 model lists (own
   assert.match(r, /foreach \(\$fam in \$RequireModels\)/);
   assert.match(r, /switch-models\.ps1 -To ollama-cpu-8gb-all-nearai/);
   assert.match(r, /\$bad\+\+/);
+});
+
+test("ARCH-613 step B up.ps1 -Agent on needs config\\receipt-public-key.pem (the agent image carries it) and starts the agent with --receipt-verify=on", () => {
+  const up = readFileSync(new URL("../../test-console/up.ps1", import.meta.url), "utf8");
+  const a = up.slice(up.indexOf('if ($Agent -eq "on") {'), up.indexOf("# NEAR AI model attestation (ARCH-411)"));
+  assert.ok(a.length > 0);
+  assert.match(a, /if \(-not \(Test-Path \(Join-Path \$repo "config\\receipt-public-key\.pem"\)\)\) \{ Stop-Here "-Agent on needs config\\receipt-public-key\.pem .*desk\.ps1 -ReceiptKey once" \}/);
+  assert.match(a, /"--agent-policy=on", "--spend-dir=\/data\/spend", "--receipt-verify=on"\)/);
+  assert.ok(a.indexOf("receipt-public-key.pem") < a.indexOf("$agentCmd = @("), "checked before the agent's command is built");
 });

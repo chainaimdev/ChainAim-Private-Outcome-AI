@@ -9,7 +9,8 @@
  *   GET  /policy     {on, tenants: [{id, autoApproveMaxUsd, maxPerJobUsd, dailyCapUsd, requireAttestedRoute, counter,
  *                    spentTodayUsd}]} (ARCH-620): the limits from tenant.json and today's spend; {on: false} when off
  *   POST /run        {tenant, folder, question, model?, answerModel?, phrase?, sql?} -> text/event-stream:
- *                    masked, tool_called, job_ran, quoted, policy, signed, settled, released, done (or refused / error)
+ *                    masked, tool_called, job_ran, quoted, policy, signed, settled, released, receipt_verified or
+ *                    receipt_failed, done (or refused / error)
  *
  * --host H                 listen address (default 127.0.0.1; 0.0.0.0 in the container)
  * --port N                 (default 8760)
@@ -37,6 +38,14 @@
  * --spend-dir DIR          the daily spend ledger, <DIR>/<tenant>/spend-YYYY-MM-DD.jsonl (UTC; job ids, amounts and
  *                          transactions only), checked writable at start-up (default runtime/agent-spend at the
  *                          repository root; /data/spend on the volume chainaim-agent-spend in compose)
+ * --receipt-verify on|off  after a paid release, fetch the job's signed receipt from the console and verify it with the
+ *                          PINNED key (privateAI-design-32 step B, scripts/agent-receipt.ts); a failed check is the step
+ *                          receipt_failed, never a refusal, since the payment already went through (default on). On: start-up
+ *                          refuses a missing or non-Ed25519 key file, naming the path
+ * --receipt-public-key PATH  the pinned console public key (default config/receipt-public-key.pem at the repository root,
+ *                          committed; exported by desk.ps1 -ReceiptKey). The publicKeyPem the console sends is never used
+ * --receipt-poll-ms N / --receipt-poll-max N  how often and how many times to ask for the receipt, which the console makes
+ *                          just after the release (defaults 1000 and 15, as tab 03)
  * --run-timeout-sec N      a run is cancelled if not signed by then (default 300)
  * --body-max-bytes N       largest POST /run body (default 65536)
  *
@@ -51,6 +60,7 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { BedrockModel } from "@strands-agents/sdk";
 import { SpendLedger } from "../../../packages/agent-policy/src/index.ts";
+import { loadPinnedKey, type ReceiptCheck } from "./agent-receipt.ts";
 import { AccountQueue, loadAgentTenants, loadPolicies, parseRunRequest, payingNetwork, policyViews, publicTenants, runAgentJob, SetupError, sseFrame, type AgentPolicy, type AgentTenant } from "./agent-jobs-core.ts";
 import { presidioClient, PROMPT_SCANNERS, PromptScan, type PromptScanner } from "./prompt-scan.ts";
 
@@ -83,6 +93,10 @@ const { values } = parseArgs({
     "agent-max-amount": { type: "string" },
     "agent-policy": { type: "string", default: "on" },
     "spend-dir": { type: "string", default: join(REPO, "runtime", "agent-spend") },
+    "receipt-verify": { type: "string", default: "on" },
+    "receipt-public-key": { type: "string", default: join(REPO, "config", "receipt-public-key.pem") },
+    "receipt-poll-ms": { type: "string", default: "1000" },
+    "receipt-poll-max": { type: "string", default: "15" },
     "run-timeout-sec": { type: "string", default: "300" },
     "body-max-bytes": { type: "string", default: "65536" },
   },
@@ -139,6 +153,18 @@ const tenantIds = values["agent-tenants"].split(",").map((s) => s.trim()).filter
 const policyOn = onOff("agent-policy", values["agent-policy"]);
 const spendDir = values["spend-dir"].trim();
 if (policyOn && spendDir === "") fail("--spend-dir must not be empty with --agent-policy on");
+const receiptOn = onOff("receipt-verify", values["receipt-verify"]);
+const receiptPollMs = whole("receipt-poll-ms", values["receipt-poll-ms"], 100, 60000);
+const receiptPollMax = whole("receipt-poll-max", values["receipt-poll-max"], 1, 120);
+let receiptCheck: ReceiptCheck | undefined;
+if (receiptOn) {
+  const keyPath = values["receipt-public-key"].trim();
+  try {
+    receiptCheck = { ...loadPinnedKey(keyPath), keyPath, pollMs: receiptPollMs, pollMax: receiptPollMax, fetchTimeoutMs: 5000 };
+  } catch (e) {
+    fail(`--receipt-public-key: ${(e as Error).message} (or start with --receipt-verify off)`);
+  }
+}
 
 let tenants: AgentTenant[];
 let network: string;
@@ -221,7 +247,7 @@ createServer(async (req, res) => {
       res.on("close", () => { if (!finished) stop.abort(); });
       const timer = setTimeout(() => stop.abort(), runTimeoutMs);
       try {
-        await runAgentJob(run, { tenants: byId, console: consoleUrl, paywall: paywallUrl, scan, promptMask, makeModel, maxTurns, ...(maxAmount ? { maxAmount } : {}), ...(policy ? { policy } : {}), queue, tenantLabel, log },
+        await runAgentJob(run, { tenants: byId, console: consoleUrl, paywall: paywallUrl, scan, promptMask, makeModel, maxTurns, ...(maxAmount ? { maxAmount } : {}), ...(policy ? { policy } : {}), ...(receiptCheck ? { receiptCheck } : {}), queue, tenantLabel, log },
           (e) => { if (!res.writableEnded && !res.destroyed) res.write(sseFrame(e)); }, stop.signal);
       } catch (e) {
         if (!res.writableEnded && !res.destroyed) res.write(sseFrame({ type: "error", reason: `the agent service failed: ${e instanceof Error ? e.message : String(e)}` }));
@@ -246,4 +272,7 @@ createServer(async (req, res) => {
   console.log(policy
     ? `[agent] spending policy on (tenant.json "policy"): ${policyViews(tenants, policy).map((v) => ("error" in v ? `${v.id} ${v.error}` : `${v.id} auto-pay <= ${v.autoApproveMaxUsd}, max ${v.maxPerJobUsd}/job, ${v.dailyCapUsd}/day (spent ${v.spentTodayUsd})${v.requireAttestedRoute ? ", attested route only" : ""}`)).join("; ")}; ledger ${spendDir}`
     : "[agent] spending policy off (--agent-policy off): every quote within --agent-max-amount is paid");
+  console.log(receiptCheck
+    ? `[agent] receipt check on: each paid job's receipt is verified with the pinned key ${receiptCheck.keyId} from ${receiptCheck.keyPath} (asked ${receiptPollMax} times, ${receiptPollMs} ms apart)`
+    : "[agent] receipt check off (--receipt-verify off)");
 });

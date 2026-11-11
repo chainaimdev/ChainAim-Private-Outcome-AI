@@ -28,7 +28,8 @@ one READY table across both. Neither launcher is changed or renamed; each team k
                 create the console's Ed25519 receipt signing key in <secretsDir>\chainaim.env (scripts\receipt-key.ts) and
                 stop. Prints the key id and the PUBLIC key only. A valid key already there is kept (safe to run twice);
                 -ReceiptKeyRotate replaces it (receipts signed before verify only with the old public key). This script
-                still never reads a secret: the Node script does the file work. Runs on its own.
+                still never reads a secret: the Node script does the file work. Runs on its own. Also writes the PUBLIC
+                key to config\receipt-public-key.pem (committed; the agent and -VerifyReceipt pin it).
   -RejudgeReceiver ACCOUNT  -RejudgeReason "TEXT"
                 after the start, clear FALSE reconcile mismatches in the NEAR admin UI (near-watch src/rejudge.ts
                 --all-mismatches; chainaim-adminUI-NEAR src/reconcile.ts rejudge). ACCOUNT is the pay-to you checked the
@@ -483,6 +484,8 @@ if ($receiptsMode -eq "on" -and -not $paid) { Stop-Here "receipts need paid jobs
 if ($ReceiptKey) {
   if (-not (Test-Path $secrets)) { Stop-Here "the secrets folder $secrets does not exist (secretsDir in $Settings)" }
   $keyArgs = @("scripts\receipt-key.ts", "--secrets-file", (Join-Path $secrets "chainaim.env"), "--var", $ReceiptKeyName)
+  # Step B: the PUBLIC key also goes to config\receipt-public-key.pem (committed), the key the agent and verifiers pin.
+  $keyArgs += @("--public-out", "config\receipt-public-key.pem")
   if ($ReceiptKeyRotate) { $keyArgs += "--rotate" }
   Say "RUN" "receipt signing key $ReceiptKeyName in $secrets\chainaim.env$(if ($ReceiptKeyRotate) { ' (rotate)' }); only the key id and PUBLIC key are printed"
   & node @keyArgs

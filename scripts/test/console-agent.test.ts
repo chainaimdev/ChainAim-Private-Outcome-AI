@@ -284,7 +284,7 @@ describe("ARCH-620 the agent's spending policy, relayed read-only", () => {
 
 // ---- the page fragment's script in a stand-in DOM -----------------------------------------------------------------
 type Node0 = { id?: string; tagName?: string; children: unknown[]; hidden: boolean; disabled: boolean; checked: boolean; value: string; textContent: string; className: string; [k: string]: any };
-function runFragment(agentConfigStatus: number, initiallyTicked = false, policy?: { answer: unknown; frame: string }) {
+function runFragment(agentConfigStatus: number, initiallyTicked = false, policy?: { answer: unknown; frame: string }, stream?: (text: string) => string) {
   const all: Node0[] = [];
   const el = (tag: string): Node0 => {
     const n: Node0 = {
@@ -315,7 +315,8 @@ function runFragment(agentConfigStatus: number, initiallyTicked = false, policy?
       const sentBody = JSON.parse(init!.body!);
       posted.push(`tenant=${sentBody.tenant}`);
       const withPolicy = policy ? settledFrame.replace("event: signed", policy.frame + "event: signed") : settledFrame;
-      const text = FRAMES.join("").replace("event: released", withPolicy + "event: released");
+      const full = FRAMES.join("").replace("event: released", withPolicy + "event: released");
+      const text = stream ? stream(full) : full;
       return { ok: true, status: 200, headers: { get: () => "text/event-stream; charset=utf-8" }, body: body(text) };
     }
     return jsonRes(404, { error: "no route" });
@@ -440,5 +441,47 @@ describe("ARCH-620 tab 03: the policy line under Who pays? and the agent's polic
     assert.match(steps[i - 1], /^\[ChainAim\] Quoted 0\.003 USDC/);
     assert.match(steps[i + 1], /^\[Agent t02\] Payment signed by chainaim-t02-seller\.testnet/);
     assert.match(steps.join("|"), /^\[Agent t02\] Question .*\|\[Agent t02\] The agent asked ChainAim.*\|\[ChainAim\] Job run and held.*\|\[NEAR\] Settled on NEAR · .*\|\[ChainAim\] Result released: 1 row\(s\)\|Done$/);
+  });
+});
+
+describe("step B tab 03: the agent's own receipt check, and the status line after a stopped run", () => {
+  const pickAgent = async (dom: ReturnType<typeof runFragment>, tenant: string) => {
+    await dom.settle();
+    dom.byId("xpayNear").checked = true;
+    await dom.byId("xpayNear").onchange();
+    dom.byId("xpayWhoAgent").checked = true;
+    dom.byId("xpayWhoMe").checked = false;
+    dom.byId("xpayWhoAgent").onchange();
+    dom.byId("xpayTenant").value = tenant;
+  };
+  const stepsOf = (dom: ReturnType<typeof runFragment>) => dom.byId("xagentSteps").children.map((li: any) => li.children.map((c: any) => c.textContent).join(""));
+
+  test("ARCH-613 ARCH-616: receipt_verified is shown as the agent's step after Result released, naming the pinned key", async () => {
+    const frame = `event: receipt_verified\ndata: ${JSON.stringify({ jobId: JOB_ID, receiptId: "r".repeat(32), keyId: "d27d1e9f17a0104e34c46cf3e5233f23", settled: true, transaction: "TXHASH1234567" })}\n\n`;
+    const dom = runFragment(200, false, undefined, (t) => t.replace("event: done", frame + "event: done"));
+    await pickAgent(dom, "t02");
+    await dom.postData("/crossask", { folder: data, question: "q" });
+    const steps = stepsOf(dom);
+    assert.equal(steps.at(-2), "[Agent t02] Agent verified the receipt ✓ · signed by the pinned key d27d1e9f… · result, job and amount and transaction match");
+    assert.match(steps.at(-3)!, /^\[ChainAim\] Result released/);
+  });
+
+  test("ARCH-613: receipt_failed is a step with the reason; the released result is still returned (the payment stands)", async () => {
+    const frame = `event: receipt_failed\ndata: ${JSON.stringify({ jobId: JOB_ID, reason: "the receipt was signed by another key" })}\n\n`;
+    const dom = runFragment(200, false, undefined, (t) => t.replace("event: done", frame + "event: done"));
+    await pickAgent(dom, "t02");
+    const result = await dom.postData("/crossask", { folder: data, question: "q" });
+    assert.deepEqual(result, { result: { columns: ["who"], rows: [{ who: R_MARKER }] } });
+    assert.equal(stepsOf(dom).at(-2), "[Agent t02] Receipt check failed ✗: the receipt was signed by another key (the payment stands)");
+  });
+
+  test("ARCH-620: after a refusal the status line no longer says the agent is running and paying", async () => {
+    const refused = `event: refused\ndata: ${JSON.stringify({ reason: "refused by t03's spending policy: the cheapest quote 0.01 USD is above maxPerJobUsd 0.005; nothing was signed or paid" })}\n\n`;
+    const dom = runFragment(200, false, undefined, (t) => t.slice(0, t.indexOf("event: quoted")) + refused);
+    await pickAgent(dom, "t02");
+    await assert.rejects(dom.postData("/crossask", { folder: data, question: "q" }), /^Error: Not paid: refused by t03's spending policy/);
+    const line = dom.byId("xpayInfo").textContent;
+    assert.ok(!/is running and paying the job/.test(line), line);
+    assert.match(line, /^On, AI agent: Ask runs the job/);
   });
 });

@@ -418,3 +418,17 @@ Nothing to do: the default (30) is right. The console registers each paid job wi
 so a console clock slightly ahead of the paywall's refused every paid job (owner test runs 2026-11-10). The paywall now
 allows `PAID_JOBS_CLOCK_SKEW_SEC` seconds of difference (0 to 300; 0 = the old strict check). Set it in the paywall's
 environment only if the console and paywall run on machines whose clocks differ by more than that.
+
+## Pinned receipt public key for the agent (privateAI-design-32 step B, added 2026-11-10)
+
+The tab 03 agent verifies each paid job's receipt with the console's public key from `config/receipt-public-key.pem`
+(`--receipt-public-key`, default that path; `--receipt-verify on|off`, default on), never with the key the console sends.
+The file is a PUBLIC key (not secret) and is committed to the repository (owner decision, chat near-ai-impl-6).
+
+1. `.\test-console\desk.ps1 -ReceiptKey` — keeps the existing signing key and now also writes its public key to
+   `config\receipt-public-key.pem` (`scripts\receipt-key.ts --public-out`). Expected: `KEY ID  d27d1e9f17a0104e34c46cf3e5233f23`
+   and `OK      public key written to config\receipt-public-key.pem`.
+2. Without that file, `up.ps1 -Agent on` stops with "-Agent on needs config\receipt-public-key.pem" (the agent image copies it),
+   and `services/paywall/test/agent-receipt.test.ts` fails its "pinned key is d27d1e9f…" test.
+3. `-ReceiptKey -ReceiptKeyRotate` also rewrites the file. Then rebuild the agent image (`desk.ps1 -All`) and commit the new
+   file; receipts signed before the rotation verify only with the old key.

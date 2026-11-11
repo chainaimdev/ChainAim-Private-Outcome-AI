@@ -291,6 +291,8 @@ try {
     if (-not $env:BEDROCK_API_KEY) { Stop-Here "-Agent on needs BEDROCK_API_KEY (in $SecretsFile, or held by the running ca-gateway) for the agent's Bedrock model" }
     if ($AgentTenants -notmatch '^[A-Za-z0-9_-]+(,[A-Za-z0-9_-]+)*$') { Stop-Here "-AgentTenants must be tenant ids separated by commas, e.g. t01,t02,t03" }
     if ($AgentTimeoutSec -lt 1) { Stop-Here "-AgentTimeoutSec must be at least 1" }
+    # Step B: the agent image carries the console's pinned receipt public key (committed; not secret).
+    if (-not (Test-Path (Join-Path $repo "config\receipt-public-key.pem"))) { Stop-Here "-Agent on needs config\receipt-public-key.pem (the agent verifies each receipt with it): run .\test-console\desk.ps1 -ReceiptKey once" }
     Set-Secret "AWS_BEARER_TOKEN_BEDROCK" $env:BEDROCK_API_KEY
     Set-Secret "AGENT_ENV_FILE" ($AgentEnvFile.Replace("\", "/"))
     $consoleCmd += @("--agent-service=http://agent:$AgentPort", "--agent-forward-timeout-sec=$($AgentTimeoutSec + 30)",
@@ -298,7 +300,7 @@ try {
     $agentCmd = @("--host=0.0.0.0", "--port=$AgentPort", "--allowed-hosts=agent:$AgentPort,127.0.0.1:$AgentPort,localhost:$AgentPort",
       "--tenants=/app/rig/tenants", "--agent-tenants=$AgentTenants", "--console=http://console-api:$ApiPort", "--paywall=http://paywall:8080",
       "--region=$AgentRegion", "--model-id=$AgentModelId", "--aws-auth=bearer", "--presidio-url=http://presidio.railway.internal:3000",
-      "--run-timeout-sec=$AgentTimeoutSec", "--agent-policy=on", "--spend-dir=/data/spend")
+      "--run-timeout-sec=$AgentTimeoutSec", "--agent-policy=on", "--spend-dir=/data/spend", "--receipt-verify=on")
     Say "OK" "agent mode on: tenants $AgentTenants, Bedrock $AgentModelId in $AgentRegion; keys from $AgentEnvFile (mounted, not read here); Bedrock key passed by name"
   }
   # NEAR AI model attestation (ARCH-411): ca-attest reads the models to attest from the catalog the gateway runs with.

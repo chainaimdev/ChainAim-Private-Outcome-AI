@@ -479,3 +479,14 @@ Still open: the Crossmark web page payment; Open Question 4 (Bazaar); `RUN-ON-AN
   attestation evidence (mixed route) -> report it before changing anything. Then BUILD_LOG + ship.
 - Then B (receipt verified by the agent against config/receipt-public-key.pem), C (-AgentAsk), D (-VerifyReceipt).
 
+
+## RESUME POINT — 2026-11-10 ~22:45Z (chat near-ai-impl-6): design-32 step B agent verifies the receipt (pinned key) — written, NOT run on the PC
+- BUILD_LOG "design-32 step B". Design DESIGN/privateAI-design-32b-AGENT-RECEIPT-VERIFY-2026-11-10T2245.md.
+- Next (owner, one at a time): 1. desk.ps1 -ReceiptKey (expect KEY ID d27d1e9f17a0104e34c46cf3e5233f23 and "public key written
+  to config\receipt-public-key.pem"); 2. desk.ps1 -All (expect paywall 325, root 624; agent image rebuilt with the key; agent
+  log "receipt check on ... pinned key d27d1e9f..."); 3. tab 03 AI agent t01 on smb-fin-1 -> step "[Agent t01] Agent verified
+  the receipt ✓" and panel "· verified by Agent t01 ✓"; t03 -> refused, quote shown as 0.01, status line back to "On, AI
+  agent: ..."; 4. BUILD_LOG + ship v1.5.4 (the new config\receipt-public-key.pem must be in the commit).
+- Then C (desk.ps1 -AgentAsk), D (desk.ps1 -VerifyReceipt <file>), demo video.
+- 2026-11-11 ~04:00Z: desk.ps1 -All ALL OK (paywall 325, analyst 234, smoke FAIL 0); live t01 "Agent verified the receipt ✓" +
+  panel "verified by Agent t01 ✓"; t03 refused with quote 0.01 and status line reset. Step B verified. Next: ship v1.5.4, then C.

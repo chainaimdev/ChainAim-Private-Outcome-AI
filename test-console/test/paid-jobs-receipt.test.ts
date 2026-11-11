@@ -30,7 +30,7 @@ test("ARCH-613 datasetId is the picked dataset's config id; templateLabel only w
 
 test("ARCH-615 the receipt panel runs after both paid releases, only with receipts on, polls GET /jobs/<id>/receipt and downloads {receipt, publicKeyPem}", () => {
   assert.match(js, /attestPanel\(job\.jobId\);\s*receiptPanel\(job\.jobId\);/, "Me path");
-  assert.match(js, /if \(result !== undefined && settled && ranJob\) receiptPanel\(ranJob\);/, "AI agent path");
+  assert.match(js, /if \(result !== undefined && settled && ranJob\) receiptPanel\(ranJob, receiptCheck\);/, "AI agent path, with what the agent's own check found (step B)");
   assert.match(js, /if \(result !== undefined && settled && ranJob\) attestPanel\(ranJob\);/, "the AI proof line is unchanged (console-progress.test.ts)");
   const p = js.slice(js.indexOf("function receiptPanel"), js.indexOf("const explorerLink"));
   assert.match(p, /config\.receipts !== true/, "nothing shown when the console has receipts off");
@@ -68,4 +68,15 @@ test("ARCH-615 the page never handles a key or the released rows in the receipt 
   const p = js.slice(js.indexOf("function receiptPanel"), js.indexOf("const explorerLink"));
   assert.ok(!/PRIVATE KEY|RECEIPT_SIGNING_KEY|localStorage|sessionStorage/.test(p));
   assert.ok(!/result\.rows|\.answer\b/.test(p), "the receipt panel shows hashes' metadata only, never the result");
+});
+
+test("step B ARCH-613 the receipt panel says whether the paying agent verified the receipt with its pinned key; the Me path passes no check", () => {
+  const p = js.slice(js.indexOf("function receiptPanel"), js.indexOf("const explorerLink"));
+  assert.match(p, /function receiptPanel\(jobId, agentCheck\)/);
+  assert.match(p, /agentCheck\.ok \? ` · verified by \$\{agentCheck\.who\} ✓` : ` · \$\{agentCheck\.who\}'s check failed ✗`/);
+  assert.match(js, /attestPanel\(job\.jobId\);\s*receiptPanel\(job\.jobId\);/, "Me path: no agent check");
+  const run = js.slice(js.indexOf("async function agentRun"), js.indexOf("function attestPanel") > 0 ? js.indexOf("function attestPanel") : undefined);
+  assert.match(run, /type === "receipt_verified"/);
+  assert.match(run, /type === "receipt_failed"/);
+  assert.ok(run.indexOf('type === "receipt_failed"') < run.indexOf('type === "refused"'), "a failed receipt check is a step, not a thrown refusal");
 });

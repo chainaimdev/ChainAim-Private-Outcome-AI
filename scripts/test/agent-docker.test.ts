@@ -116,3 +116,16 @@ test("ARCH-620: compose builds the agent from the repository root and keeps its 
   assert.match(dockerfile, /"--spend-dir", "\/data\/spend"\]/);
   assert.match(readFileSync(join(ROOT, "test-console/up.ps1"), "utf8"), /"--agent-policy=on", "--spend-dir=\/data\/spend"/);
 });
+
+test("step B ARCH-613: the agent image carries packages/receipt and the pinned config/receipt-public-key.pem (its default --receipt-public-key); never a private key", () => {
+  const { files } = runtimeImports(ENTRY);
+  assert.ok(files.includes("packages/receipt/src/index.ts"), "the walk follows agent-receipt.ts into packages/receipt");
+  const sources = copySources(DOCKERFILE);
+  assert.ok(sources.includes("config/receipt-public-key.pem"), "agent.Dockerfile copies the pinned key");
+  assert.match(readFileSync(DOCKERFILE, "utf8"), /^COPY config\/receipt-public-key\.pem config\/receipt-public-key\.pem$/m, "to /app/config, where agent-jobs.ts looks by default (REPO = /app)");
+  assert.equal(keptByIgnore(IGNORE, "config/receipt-public-key.pem"), true);
+  for (const f of ["config/receipt-signing-key.pem", "config/local/chainaim.env", "config/datasets.json", "runtime/receipts/x.json"]) assert.equal(keptByIgnore(IGNORE, f), false, `${f} would be in the build context`);
+  const missed = runtimeImports(ENTRY).files.filter((f) => !sources.filter((s) => !s.startsWith("packages/receipt")).some((s) => under(f, s)));
+  assert.deepEqual(missed, ["packages/receipt/src/index.ts"], "the check catches a missing packages/receipt COPY");
+  assert.match(readFileSync(join(ROOT, "services/paywall/scripts/agent-jobs.ts"), "utf8"), /"receipt-public-key": \{ type: "string", default: join\(REPO, "config", "receipt-public-key\.pem"\) \}/);
+});

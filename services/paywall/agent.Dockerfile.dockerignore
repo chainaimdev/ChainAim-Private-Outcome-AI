@@ -15,6 +15,9 @@
 !services/gateway/src/privacy/residual.ts
 !packages/agent-policy/package.json
 !packages/agent-policy/src
+!packages/receipt/package.json
+!packages/receipt/src
+!config/receipt-public-key.pem
 **/node_modules
 **/.env
 **/*.env

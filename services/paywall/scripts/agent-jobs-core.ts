@@ -18,6 +18,10 @@
  *   4. it pays <paywall>/v1/jobs/<jobId>/release with payAndFetchNear (scripts/near.ts) and the tenant's payer:
  *      a NEP-366 delegate signed with the tenant's key and submitted by ChainAim's relayer, so the tenant account
  *      needs USDC only
+ *   4b. with a receipt check (privateAI-design-32 step B; --receipt-verify on), after the release the agent fetches the
+ *      job's signed receipt from the console and verifies it with the PINNED public key (agent-receipt.ts): signature,
+ *      settlement, the released result's hash, the job id, the amount and the transaction it paid with. The step is
+ *      `receipt_verified` or `receipt_failed` (a reason; the payment stands, so never `refused`)
  *   5. the released result goes to the run's event stream only. The tool's reply to the model is
  *      {status, amountUsdc, transaction, rows} (rows = how many result rows, never their values); the agent
  *      writes no summary and its final text is not used
@@ -35,6 +39,7 @@ import { checksFor, decide, parsePolicy, policyView, type Policy, type PolicyChe
 import { NEAR_NETWORKS } from "../src/config.ts";
 import { nearBuyer, nearNetworkName, payAndFetchNear, SetupError, type NearBuyer } from "./near.ts";
 import { AskRefused } from "./private-ask-core.ts";
+import { verifyPaidReceipt, type PaidJob, type ReceiptCheck, type ReceiptEvent } from "./agent-receipt.ts";
 import type { PromptScan } from "./prompt-scan.ts";
 import { loadTenants } from "./rig-core.ts";
 
@@ -154,6 +159,8 @@ export type AgentEvent =
   | { type: "signed"; account: string }
   | { type: "settled"; transaction: string; network: string }
   | { type: "released"; jobId: string; rows: number; calls: number; result: unknown }
+  /** Step B: the job's signed receipt checked against the pinned key (agent-receipt.ts); after released, before done. */
+  | ReceiptEvent
   | { type: "done" }
   | { type: "refused"; reason: string }
   | { type: "error"; reason: string; transaction?: string };
@@ -218,6 +225,8 @@ export type RunDeps = {
   maxAmount?: string;
   /** The tenants' spending policy (ARCH-620); unset = no policy step (--agent-policy off). */
   policy?: AgentPolicy;
+  /** The receipt check after a paid release (step B); unset = no receipt step (--receipt-verify off). */
+  receiptCheck?: ReceiptCheck;
   queue: AccountQueue;
   /** How the agent's instructions name the tenant; the tenant's real name is never sent unless given here. */
   tenantLabel: string;
@@ -365,7 +374,8 @@ async function runAndPay(
       ? { reply: { status: "failed" as const, reason }, terminal: { type: "error" as const, reason, ...(transaction ? { transaction } : {}) } }
       : refuse(reason);
 
-  return deps.queue.run(tenant.accountId, async () => {
+  type Slot = { reply: JobsToolReply; terminal?: AgentEvent & { type: "refused" | "error" }; paid?: PaidJob };
+  const out: Slot = await deps.queue.run(tenant.accountId, async (): Promise<Slot> => {
     // ARCH-620: the policy decides before anything is signed; in this queue slot, so today's spend cannot change under it.
     let maxAmount = deps.maxAmount;
     if (deps.policy) {
@@ -415,8 +425,11 @@ async function runAndPay(
     const rows = Array.isArray(r?.result?.rows) ? r.result.rows.length : 0;
     const calls = Array.isArray(r?.served) ? r.served.filter((s) => s && typeof s.model === "string" && s.model !== "").length : 0;
     emit({ type: "released", jobId: job.jobId, rows, calls, result });
-    return { reply: { status: "paid" as const, amountUsdc: job.totalUsd, transaction, rows } };
+    return { reply: { status: "paid" as const, amountUsdc: job.totalUsd, transaction, rows }, paid: { jobId: job.jobId, amount: job.amount, transaction, result } };
   });
+  // Step B, outside the queue slot (the tenant's next payment need not wait for it): the receipt of the paid job.
+  if (out.paid && deps.receiptCheck) emit(await verifyPaidReceipt(deps.receiptCheck, deps.console, out.paid));
+  return { reply: out.reply, ...(out.terminal ? { terminal: out.terminal } : {}) };
 }
 
 /**
@@ -439,7 +452,8 @@ function applyPolicy(
   } catch (e) {
     return { refused: `the spend ledger could not be read (${(e as Error).message}), so nothing was signed or paid` };
   }
-  const quote: Quote = { quoteId: job.jobId, route: job.route ?? "unknown", priceUsd: job.totalUsd, attested: job.attested, expiresAt: job.expiresAt };
+  // The quote in plain decimals ("0.010000" -> "0.01"), so the checks and the reasons read as the page shows prices.
+  const quote: Quote = { quoteId: job.jobId, route: job.route ?? "unknown", priceUsd: plainUsd(job.totalUsd), attested: job.attested, expiresAt: job.expiresAt };
   const now = (policy.now ?? Date.now)();
   let checks: PolicyCheck[];
   let d: ReturnType<typeof decide>;
@@ -454,9 +468,15 @@ function applyPolicy(
     return { maxAmount: (cap) => (cap !== undefined && decimalLess(cap, job.totalUsd) ? cap : job.totalUsd) };
   }
   const by = `${tenantId}'s spending policy`;
-  if (d.action === "approve") return { refused: `${by} needs a person to approve this ${job.totalUsd} USDC job (${d.reason}); approval in tab 03 is not built yet (ARCH-621), so nothing was signed or paid` };
+  if (d.action === "approve") return { refused: `${by} needs a person to approve this ${plainUsd(job.totalUsd)} USDC job (${d.reason}); approval in tab 03 is not built yet (ARCH-621), so nothing was signed or paid` };
   if (d.action === "counter") return { refused: `${by} would ask for a smaller job at ${d.ceilingUsd} USD (${d.reason}); counter-offers are not built yet (ARCH-623), so nothing was signed or paid` };
   return { refused: `refused by ${by}: ${d.reason}; nothing was signed or paid` };
+}
+
+/** A non-negative decimal without trailing zeros ("0.010000" -> "0.01", "1.000" -> "1"); anything else unchanged. */
+export function plainUsd(v: string): string {
+  if (!/^\d+\.\d+$/.test(v)) return v;
+  return v.replace(/0+$/, "").replace(/\.$/, "");
 }
 
 /** a < b for two non-negative decimal strings of any length (no float). */

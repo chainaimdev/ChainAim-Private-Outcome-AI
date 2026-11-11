@@ -1200,3 +1200,45 @@ Built in the AI's workspace on a snapshot of the owner's repo (main = e8626e8, v
   signed or paid"; no signed / settled step, no receipt.
 - Cosmetic, open: the quote shows as 0.010000 in the policy step and refusal (raw totalUsd); after a refusal the status
   line still reads "...is running and paying the job…" above the red "Not paid" line.
+
+## 2026-11-10 design-32 step B: the agent verifies the receipt with the pinned key — written and tested in the workspace, NOT run on the PC
+
+- Design: DESIGN/privateAI-design-32b-AGENT-RECEIPT-VERIFY-2026-11-10T2245.md (verify side of ARCH-613/615/616; no new ID).
+- [verify] done: scripts/receipt-key.ts already had --public-out; desk.ps1 -ReceiptKey now always passes
+  `--public-out config\receipt-public-key.pem` (help text updated; desk.ps1 still pure ASCII).
+- New services/paywall/scripts/agent-receipt.ts: loadPinnedKey, checkReceipt, verifyPaidReceipt (polls GET
+  <console>/jobs/<id>/receipt pollMax x pollMs; ignores the console's publicKeyPem; verifyReceipt with the PINNED key and
+  the released result; binds jobId, amountUnits and settlement.transaction; "receipts are off" stops at once; never throws).
+- agent-jobs-core.ts: events receipt_verified {jobId, receiptId, keyId, settled, transaction?} / receipt_failed {jobId,
+  reason} after released, outside the queue slot; RunDeps.receiptCheck; plainUsd() for the policy quote and refusal text
+  ("0.010000" -> "0.01"). The tool reply to the model keeps the quote as sent (agent-jobs.test.ts ARCH-305 pins it).
+- agent-jobs.ts: --receipt-verify on|off (default on; start-up refuses a missing/non-Ed25519 key, naming the path),
+  --receipt-public-key (default <repo>/config/receipt-public-key.pem), --receipt-poll-ms 1000, --receipt-poll-max 15;
+  start-up line names the pinned key id.
+- Image: agent.Dockerfile + its ignore file copy/keep packages/receipt and config/receipt-public-key.pem. up.ps1 -Agent on
+  stops without the file and passes --receipt-verify=on.
+- Tab 03 paid-jobs.html: agent steps "Agent verified the receipt ✓ ..." / "Receipt check failed ✗: ... (the payment
+  stands)"; receiptPanel(jobId, agentCheck) adds "· verified by Agent tNN ✓"; agentStep catch -> explain() so a refused
+  run no longer leaves "...is running and paying the job…".
+- Tests: services/paywall/test/agent-receipt.test.ts (14, incl. whole run with the real paywall + NEAR double);
+  agent-docker.test.ts +1; desk.test.ts +1 and -ReceiptKey --public-out; console-agent.test.ts +3;
+  paid-jobs-receipt.test.ts +1 (pinned AI-agent line now `receiptPanel(ranJob, receiptCheck)`); agent-policy.test.ts plain
+  decimals (+1 assertion).
+- Workspace runs (owner's PC folder via the Linux shell): agent-receipt 13/14 (the one failure: config/receipt-public-key.pem
+  not exported yet, ENOENT, expected until the owner runs desk.ps1 -ReceiptKey); agent-policy 11/11; desk + agent-docker
+  28/28; console-agent + paid-jobs-receipt 29/29; paywall agent-receipt-fields, agent, attest-strip, balances, buy-rlusd,
+  client-mask 51/51; config..paid-jobs 93/93; check-deps OK. NOT runnable here: agent-jobs.test.ts and other tests that
+  start the analyst (the Windows node_modules has no Linux DuckDB binding) and the slower paywall files (shell time limit):
+  desk.ps1 -All on the PC runs them. Expected counts on the PC: paywall 311 + 14 = 325, root 619 + 5 = 624.
+- Owner desk.ps1 -All 03:57Z (first run stopped on agent-jobs.test.ts ARCH-305: the tool reply's amountUsdc had been made
+  plain; reverted to the quote as sent). Second run: analyst 234/234, paywall 325/325, "OK all terminal suites passed";
+  agent image built with packages/receipt + config/receipt-public-key.pem; READY all OK incl. agent, attest, receipts OK;
+  UI smoke PASS 60 WARN 1 SKIP 5 FAIL 0; "ALL OK".
+- Owner live 2026-11-11 ~04:00Z, tab 03, smb-fin-1 "Cash flow vs installment", answer nearai/deepseek-v4.1-flash:
+  t01 -> policy pay ✓ (quote 0.01), signed, settled tx gzDPwE9q…XYbJwC, released 1 row, "[Agent t01] Agent verified the
+  receipt ✓ · signed by the pinned key d27d1e9f… · result, job and amount and transaction match", Done; AI proof 1/1
+  verified; panel "Signed receipt ✓ · smb-fin-1 · "Cash flow vs installment" · settled on near:testnet, transaction
+  gzDPwE9q… · key id d27d1e9f17a0104e34c46cf3e5233f23 · verified by Agent t01 ✓".
+  t03 -> "Spending policy: refused ✗ · ... at most 0.005 a job (quote 0.01) ✗ ... pays by itself up to 0.005 ✗", "Not paid:
+  refused by t03's spending policy: the cheapest quote 0.01 USD is above maxPerJobUsd 0.005; nothing was signed or paid";
+  status line back to "On, AI agent: Ask runs the job ..." (both cosmetic items fixed). Step B done; ship v1.5.4.

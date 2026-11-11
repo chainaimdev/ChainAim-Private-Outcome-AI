@@ -174,7 +174,7 @@ describe("ARCH-620 the tenant's policy between quoted and signed", () => {
     assert.equal(p.decision, "pay");
     assert.equal(p.tenant, "t01");
     assert.deepEqual(p.checks.map((c) => [c.check, c.limit, c.value, c.ok]).slice(1), [
-      ["attested_route", "required", "attested", true], ["max_per_job", "0.05", "0.003000", true], ["daily_cap", "1", "0.003", true], ["auto_approve", "0.05", "0.003000", true],
+      ["attested_route", "required", "attested", true], ["max_per_job", "0.05", "0.003", true], ["daily_cap", "1", "0.003", true], ["auto_approve", "0.05", "0.003", true],
     ]);
     assert.equal(p.spentTodayUsd, "0");
     assert.deepEqual(double.state.transfers.map((t) => [t.sender, t.amount]), [[ACCOUNTS.t01, 3000n]]);
@@ -191,10 +191,11 @@ describe("ARCH-620 the tenant's policy between quoted and signed", () => {
     assert.deepEqual(types(events), ["masked", "tool_called", "job_ran", "quoted", "policy", "refused"]);
     const p = policyStep(events)!;
     assert.equal(p.decision, "refuse");
-    assert.deepEqual(p.checks.filter((c) => !c.ok).map((c) => [c.check, c.limit, c.value]), [["max_per_job", "0.005", "0.010000"], ["auto_approve", "0.005", "0.010000"]]);
+    assert.deepEqual(p.checks.filter((c) => !c.ok).map((c) => [c.check, c.limit, c.value]), [["max_per_job", "0.005", "0.01"], ["auto_approve", "0.005", "0.01"]], "plain decimals, as the page shows prices (owner run: raw 0.010000)");
     assert.equal(p.checks.some((c) => c.check === "attested_route"), false, "t03 does not require the attested route");
     const refused = events.at(-1) as Extract<AgentEvent, { type: "refused" }>;
     assert.match(refused.reason, /^refused by t03's spending policy: .*above maxPerJobUsd 0\.005.*nothing was signed or paid$/);
+    assert.ok(refused.reason.includes("0.01 USD") && !refused.reason.includes("0.010000"), "the quote reads 0.01, not the raw 0.010000");
     assert.deepEqual(double.state.transfers, []);
     assert.deepEqual(ledgerLines("t03"), []);
     assert.match(logs.at(-1)!, /"tenant":"t03",.*"status":"refused"/);
