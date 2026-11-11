@@ -31,6 +31,74 @@
       }
     },
     {
+      "id": "smb-erp-fin",
+      "label": "Small Biz Financials - 2 (ERPNext)",
+      "folder": "smb-2-erp-fin/erpnext",
+      "engine": "crossask",
+      "subfolders": true,
+      "defaultSubfolder": "orion",
+      "description": "ERPNext v16 books of three demo borrowers (sales orders, invoices, receipts, supplier bills, bank transactions), one CSV per record type made by tools/erpnext-split from the CreditSeal bundles. Each template runs an exact SQL query that rebuilds totals as tools/erpnext-split/README.md defines them, so its table is the same every run (a typed question still gets a model-written query).",
+      "templates": [
+        {
+          "label": "Cash flow vs installment",
+          "q": "By month, how much money came in and went out of the bank, and could we afford a 20,000 monthly loan payment?",
+          "sql": "SELECT strftime(CAST(date AS DATE), '%Y-%m') AS month, sum(CAST(deposit AS DECIMAL(18,2))) AS cash_in, sum(CAST(withdrawal AS DECIMAL(18,2))) AS cash_out, sum(CAST(deposit AS DECIMAL(18,2))) - sum(CAST(withdrawal AS DECIMAL(18,2))) AS net_cash_flow, CAST(20000 AS DECIMAL(18,2)) AS installment, sum(CAST(deposit AS DECIMAL(18,2))) - sum(CAST(withdrawal AS DECIMAL(18,2))) - 20000 AS left_after_installment, sum(CAST(deposit AS DECIMAL(18,2))) - sum(CAST(withdrawal AS DECIMAL(18,2))) >= 20000 AS covers_installment FROM bank_transaction WHERE docstatus = 1 GROUP BY 1 ORDER BY 1"
+        },
+        {
+          "label": "Biggest payments out",
+          "q": "What are our 5 biggest payments out of the bank, and what were they for?",
+          "sql": "SELECT CAST(date AS DATE) AS date, description, reference_number, CAST(withdrawal AS DECIMAL(18,2)) AS amount_out FROM bank_transaction WHERE docstatus = 1 AND CAST(withdrawal AS DECIMAL(18,2)) > 0 ORDER BY amount_out DESC, date LIMIT 5"
+        },
+        {
+          "label": "Top customers by sales",
+          "q": "Who are our top customers by invoiced sales over the last 12 months, and does any one of them make up more than 25 percent?",
+          "sql": "SELECT * FROM (WITH last_inv AS (SELECT max(CAST(posting_date AS DATE)) AS d FROM sales_invoice WHERE docstatus = 1 AND is_return = 0), s AS (SELECT si.customer, sum(CAST(it.qty AS DECIMAL(18,2)) * CAST(it.rate AS DECIMAL(18,2))) AS sales FROM sales_invoice si JOIN sales_invoice_item it ON it.parent = si.name CROSS JOIN last_inv WHERE si.docstatus = 1 AND si.is_return = 0 AND CAST(si.posting_date AS DATE) > last_inv.d - INTERVAL 12 MONTH GROUP BY si.customer) SELECT c.customer_name AS customer, s.sales AS invoiced_sales, round(100 * s.sales / sum(s.sales) OVER (), 2) AS share_pct, 100 * s.sales / sum(s.sales) OVER () > 25 AS over_25_pct FROM s JOIN customer c ON c.name = s.customer ORDER BY s.sales DESC) AS r ORDER BY invoiced_sales DESC, customer"
+        },
+        {
+          "label": "Late payers",
+          "q": "Which customers pay us late, and by how many days on average?",
+          "sql": "SELECT * FROM (WITH d AS (SELECT si.customer, CAST(p.posting_date AS DATE) - CAST(si.due_date AS DATE) AS delay FROM payment_entry_reference r JOIN payment_entry p ON p.name = r.parent JOIN sales_invoice si ON si.name = r.reference_name WHERE r.reference_doctype = 'Sales Invoice' AND p.docstatus = 1 AND si.docstatus = 1) SELECT c.customer_name AS customer, count(*) AS payments, count(*) FILTER (WHERE delay > 0) AS late_payments, round(avg(delay), 2) AS avg_delay_days, round(avg(delay) FILTER (WHERE delay > 0), 2) AS avg_days_late, max(delay) AS longest_delay_days FROM d JOIN customer c ON c.name = d.customer GROUP BY c.customer_name ORDER BY avg_delay_days DESC) AS r ORDER BY avg_delay_days DESC, customer"
+        },
+        {
+          "label": "Supplier bills due",
+          "q": "How much do we still owe each supplier, and how much of it is due in the next 30 days?",
+          "sql": "SELECT * FROM (WITH cutoff AS (SELECT max(CAST(date AS DATE)) AS d FROM bank_transaction WHERE docstatus = 1), pi_items AS (SELECT parent, sum(CAST(qty AS DECIMAL(18,2)) * CAST(rate AS DECIMAL(18,2))) AS amt FROM purchase_invoice_item GROUP BY parent), pi_paid AS (SELECT r.reference_name, sum(CAST(r.allocated_amount AS DECIMAL(18,2))) AS amt FROM payment_entry_reference r JOIN payment_entry p ON p.name = r.parent CROSS JOIN cutoff WHERE r.reference_doctype = 'Purchase Invoice' AND p.docstatus = 1 AND CAST(p.posting_date AS DATE) <= cutoff.d GROUP BY r.reference_name), b AS (SELECT pi.supplier, CAST(pi.due_date AS DATE) AS due, cutoff.d AS asof_d, coalesce(pi_items.amt, 0) - coalesce(pi_paid.amt, 0) AS unpaid FROM purchase_invoice pi CROSS JOIN cutoff LEFT JOIN pi_items ON pi_items.parent = pi.name LEFT JOIN pi_paid ON pi_paid.reference_name = pi.name WHERE pi.docstatus = 1 AND pi.is_return = 0 AND CAST(pi.posting_date AS DATE) <= cutoff.d) SELECT s.supplier_name AS supplier, max(asof_d) AS as_of, sum(unpaid) AS unpaid_total, sum(CASE WHEN due < asof_d THEN unpaid ELSE 0 END) AS overdue, sum(CASE WHEN due BETWEEN asof_d AND asof_d + 30 THEN unpaid ELSE 0 END) AS due_next_30_days, sum(CASE WHEN due > asof_d + 30 THEN unpaid ELSE 0 END) AS due_later FROM b JOIN supplier s ON s.name = b.supplier WHERE unpaid > 0.005 GROUP BY s.supplier_name ORDER BY unpaid_total DESC) AS r ORDER BY unpaid_total DESC, supplier"
+        },
+        {
+          "label": "Open receivables by age",
+          "q": "How much does each customer still owe us, and how overdue is it?",
+          "sql": "SELECT * FROM (WITH cutoff AS (SELECT max(CAST(date AS DATE)) AS d FROM bank_transaction WHERE docstatus = 1), si_items AS (SELECT parent, sum(CAST(qty AS DECIMAL(18,2)) * CAST(rate AS DECIMAL(18,2))) AS amt FROM sales_invoice_item GROUP BY parent), si_tax AS (SELECT parent, sum(CAST(tax_amount AS DECIMAL(18,2))) AS amt FROM sales_taxes_and_charges WHERE parenttype = 'Sales Invoice' GROUP BY parent), si_paid AS (SELECT r.reference_name, sum(CAST(r.allocated_amount AS DECIMAL(18,2))) AS amt FROM payment_entry_reference r JOIN payment_entry p ON p.name = r.parent CROSS JOIN cutoff WHERE r.reference_doctype = 'Sales Invoice' AND p.docstatus = 1 AND CAST(p.posting_date AS DATE) <= cutoff.d GROUP BY r.reference_name), o AS (SELECT si.customer, cutoff.d AS asof_d, cutoff.d - CAST(si.due_date AS DATE) AS days_past_due, coalesce(si_items.amt, 0) + coalesce(si_tax.amt, 0) - coalesce(CAST(si.discount_amount AS DECIMAL(18,2)), 0) - coalesce(si_paid.amt, 0) AS unpaid FROM sales_invoice si CROSS JOIN cutoff LEFT JOIN si_items ON si_items.parent = si.name LEFT JOIN si_tax ON si_tax.parent = si.name LEFT JOIN si_paid ON si_paid.reference_name = si.name WHERE si.docstatus = 1 AND si.is_return = 0 AND CAST(si.posting_date AS DATE) <= cutoff.d) SELECT c.customer_name AS customer, max(asof_d) AS as_of, sum(CASE WHEN days_past_due <= 0 THEN unpaid ELSE 0 END) AS not_yet_due, sum(CASE WHEN days_past_due BETWEEN 1 AND 30 THEN unpaid ELSE 0 END) AS days_1_30, sum(CASE WHEN days_past_due BETWEEN 31 AND 60 THEN unpaid ELSE 0 END) AS days_31_60, sum(CASE WHEN days_past_due BETWEEN 61 AND 90 THEN unpaid ELSE 0 END) AS days_61_90, sum(CASE WHEN days_past_due > 90 THEN unpaid ELSE 0 END) AS over_90, sum(unpaid) AS total_unpaid FROM o JOIN customer c ON c.name = o.customer WHERE unpaid > 0.005 GROUP BY c.customer_name ORDER BY total_unpaid DESC) AS r ORDER BY total_unpaid DESC, customer"
+        },
+        {
+          "label": "Credit limit exposure",
+          "q": "Which customers owe us more than their credit limit, counting unpaid invoices and orders not yet invoiced?",
+          "sql": "SELECT * FROM (WITH si_items AS (SELECT parent, sum(CAST(qty AS DECIMAL(18,2)) * CAST(rate AS DECIMAL(18,2))) AS amt FROM sales_invoice_item GROUP BY parent), si_tax AS (SELECT parent, sum(CAST(tax_amount AS DECIMAL(18,2))) AS amt FROM sales_taxes_and_charges WHERE parenttype = 'Sales Invoice' GROUP BY parent), si_paid AS (SELECT r.reference_name, sum(CAST(r.allocated_amount AS DECIMAL(18,2))) AS amt FROM payment_entry_reference r JOIN payment_entry p ON p.name = r.parent WHERE r.reference_doctype = 'Sales Invoice' AND p.docstatus = 1 GROUP BY r.reference_name), u AS (SELECT si.customer, sum(coalesce(si_items.amt, 0) + coalesce(si_tax.amt, 0) - coalesce(CAST(si.discount_amount AS DECIMAL(18,2)), 0) - coalesce(si_paid.amt, 0)) AS amt FROM sales_invoice si LEFT JOIN si_items ON si_items.parent = si.name LEFT JOIN si_tax ON si_tax.parent = si.name LEFT JOIN si_paid ON si_paid.reference_name = si.name WHERE si.docstatus = 1 AND si.is_return = 0 GROUP BY si.customer), invoiced_so AS (SELECT DISTINCT sales_order FROM sales_invoice_item WHERE sales_order IS NOT NULL AND sales_order <> ''), so_open AS (SELECT so.customer, sum(CAST(soi.qty AS DECIMAL(18,2)) * CAST(soi.rate AS DECIMAL(18,2))) AS amt FROM sales_order so JOIN sales_order_item soi ON soi.parent = so.name WHERE so.docstatus = 1 AND so.name NOT IN (SELECT sales_order FROM invoiced_so) GROUP BY so.customer) SELECT c.customer_name AS customer, CAST(cl.credit_limit AS DECIMAL(18,2)) AS credit_limit, coalesce(u.amt, 0) AS unpaid_invoices, coalesce(so_open.amt, 0) AS uninvoiced_orders, coalesce(u.amt, 0) + coalesce(so_open.amt, 0) AS exposure, CAST(cl.credit_limit AS DECIMAL(18,2)) - coalesce(u.amt, 0) - coalesce(so_open.amt, 0) AS headroom, coalesce(u.amt, 0) + coalesce(so_open.amt, 0) > CAST(cl.credit_limit AS DECIMAL(18,2)) AS over_limit FROM customer c LEFT JOIN customer_credit_limit cl ON cl.parent = c.name LEFT JOIN u ON u.customer = c.name LEFT JOIN so_open ON so_open.customer = c.name ORDER BY headroom) AS r ORDER BY headroom, customer"
+        }
+      ],
+      "setLabels": {
+        "orion": "Orion",
+        "mercury-textiles": "Mercury Textiles",
+        "jupiter-knitting": "Jupiter Knitting"
+      },
+      "fileKinds": {
+        "bank-transaction": "Bank transactions",
+        "customer-credit-limit": "Customer credit limits",
+        "customer": "Customers",
+        "item-reorder": "Item reorder levels",
+        "item": "Items",
+        "payment-entry-reference": "Payment allocations",
+        "payment-entry": "Payments (received and paid)",
+        "purchase-invoice-item": "Supplier bill lines",
+        "purchase-invoice": "Supplier bills",
+        "sales-invoice-item": "Sales invoice lines",
+        "sales-invoice": "Sales invoices",
+        "sales-order-item": "Sales order lines",
+        "sales-order": "Sales orders",
+        "sales-taxes-and-charges": "Invoice and order adjustments",
+        "supplier": "Suppliers"
+      }
+    },
+    {
       "id": "dental-prms",
       "label": "Practice Management - Dental",
       "folder": "prms/dent-prms-c-sample",

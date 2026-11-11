@@ -2,7 +2,8 @@
  * desk.ps1 -AgentAsk (privateAI-design-32 step C): one tab 03 "AI agent" run from the terminal, no browser.
  *
  *   node scripts/agent-ask.ts --tenant t01 --dataset smb-fin-1 [--template 1|LABEL] [--question TEXT] [--set NAME]
- *        [--root samples] [--answer-model default|none|provider/name] [--api http://127.0.0.1:8735]
+ *        [--root samples] [--answer-model default|none|provider/name] [--query-model default|provider/name]
+ *        [--api http://127.0.0.1:8735]
  *        [--out-dir runtime/agent-ask] [--show-rows 20] [--receipt-poll-ms 1000] [--receipt-poll-max 15]
  *
  *   --tenant         the tenant whose agent pays (one the agent service lists, e.g. t01)
@@ -12,6 +13,9 @@
  *   --question       ask this instead of a template (no exact query, no template label)
  *   --set            the dataset's set (subfolder), for datasets that have sets (default its defaultSubfolder)
  *   --answer-model   default = the console's default answer model (GET <api>/gateway/models), none = table only
+ *   --query-model    the model that writes the SQL (tab 03's "Writes the query"); default = the console's default. A
+ *                    template with an exact query sends none. An agent whose policy requires the attested route pays
+ *                    only when every model call is attested, e.g. nearai/deepseek-v4.1-flash for both models
  *   --api            the console API (default http://127.0.0.1:8735): the run goes through POST /agent/crossask, the
  *                    same relay, agent, spending policy, payment and receipt check as tab 03
  *   --out-dir        where the paid job's receipt and result are saved (default runtime/agent-ask, git-ignored):
@@ -38,7 +42,7 @@ try {
     strict: true,
     options: {
       tenant: { type: "string" }, dataset: { type: "string" }, template: { type: "string", default: "1" }, question: { type: "string" },
-      set: { type: "string" }, root: { type: "string", default: "samples" }, "answer-model": { type: "string", default: "default" },
+      set: { type: "string" }, root: { type: "string", default: "samples" }, "answer-model": { type: "string", default: "default" }, "query-model": { type: "string", default: "default" },
       api: { type: "string", default: "http://127.0.0.1:8735" }, "out-dir": { type: "string", default: join(REPO, "runtime", "agent-ask") },
       "show-rows": { type: "string", default: "20" }, "receipt-poll-ms": { type: "string", default: "1000" }, "receipt-poll-max": { type: "string", default: "15" },
     },
@@ -77,11 +81,11 @@ if (o!["answer-model"] === "default") {
   const gm = await getJson("/gateway/models");
   defaultAnswer = typeof gm.body?.defaultAnswerModel === "string" && gm.body.defaultAnswerModel ? gm.body.defaultAnswerModel : null;
 }
-const built = buildRun(tenant, ds.body.datasets as ListedDataset[], { dataset, template: o!.template!, question: o!.question, set: o!.set, answerModel: o!["answer-model"]! }, defaultAnswer);
+const built = buildRun(tenant, ds.body.datasets as ListedDataset[], { dataset, template: o!.template!, question: o!.question, set: o!.set, answerModel: o!["answer-model"]!, queryModel: o!["query-model"]! }, defaultAnswer);
 if ("error" in built) usage(built.error);
 const { run } = built as Exclude<typeof built, { error: string }>;
 
-say("RUN", `AI agent for ${t.name} (${tenant}) pays from ${t.accountId}; dataset ${built.datasetLabel}${built.templateLabel ? `, template "${built.templateLabel}"` : ""}; answer ${run.answerModel ?? "none (table only)"}`);
+say("RUN", `AI agent for ${t.name} (${tenant}) pays from ${t.accountId}; dataset ${built.datasetLabel}${built.templateLabel ? `, template "${built.templateLabel}"` : ""}; query ${run.model ?? (run.sql ? "none (exact query)" : "console default")}; answer ${run.answerModel ?? "none (table only)"}`);
 say("ASK", run.question);
 
 let r: Response;

@@ -116,6 +116,20 @@ describe("step C -AgentAsk: the run body is the page's", () => {
     assert.match((buildRun("t01", DATASETS, { dataset: "setted", template: "1", set: "X", answerModel: "none" }, null) as { error: string }).error, /has no set X/);
   });
 
+  test("ARCH-620: --query-model sends tab 03's 'Writes the query' model (so an attested-route policy can pay); default and an exact query send none; a bad id is refused", () => {
+    const typed = buildRun("t01", DATASETS, { dataset: "setted", template: "1", answerModel: "nearai/deepseek-v4.1-flash", queryModel: "nearai/deepseek-v4.1-flash" }, null);
+    assert.ok(!("error" in typed));
+    assert.equal(typed.run.model, "nearai/deepseek-v4.1-flash");
+    assert.equal(typed.run.answerModel, "nearai/deepseek-v4.1-flash");
+    const dflt = buildRun("t01", DATASETS, { dataset: "setted", template: "1", answerModel: "none", queryModel: "default" }, null);
+    assert.ok(!("error" in dflt) && !("model" in dflt.run), "default leaves the console's query model");
+    const unset = buildRun("t01", DATASETS, { dataset: "setted", template: "1", answerModel: "none" }, null);
+    assert.ok(!("error" in unset) && !("model" in unset.run), "absent = as before");
+    const exact = buildRun("t01", DATASETS, { dataset: "smb-fin-1", template: "1", answerModel: "none", queryModel: "nearai/deepseek-v4.1-flash" }, null);
+    assert.ok(!("error" in exact) && !("model" in exact.run) && exact.run.sql === "SELECT 1", "an exact query needs no query model");
+    assert.match((buildRun("t01", DATASETS, { dataset: "setted", template: "1", answerModel: "none", queryModel: "bad model" }, null) as { error: string }).error, /query model must be default or provider\/name, got bad model/);
+  });
+
   test("ARCH-306: step lines carry who did each step, as tab 03; the result table shows the answer and rows", () => {
     assert.deepEqual(parseFrame('event: settled\ndata: {"transaction":"T"}'), { type: "settled", data: { transaction: "T" } });
     assert.equal(stepLine("t01", "quoted", { totalUsd: "0.010000", network: "near:testnet", payTo: "p.testnet" }), "[ChainAim] Quoted 0.01 USDC on near:testnet to p.testnet");
@@ -133,7 +147,7 @@ describe("step C -AgentAsk: the real CLI against the console API", () => {
     const r = await ask("--tenant", "t01", "--dataset", "smb-fin-1", "--template", "1");
     assert.equal(r.code, 0, r.out + r.err);
     assert.deepEqual(consoleState.posted[0], { tenant: "t01", folder: "/app/sample-data/smb-fin/statements", question: "By month, how much cash came in?", phrase: "llm", datasetId: "smb-fin-1", answerModel: "nearai/deepseek-v4.1-flash", sql: "SELECT 1", templateLabel: "Cash flow vs installment" });
-    assert.match(r.out, /^RUN +AI agent for Northwind \(synthetic\) \(t01\) pays from chainaim-buyer-seller\.testnet; dataset Small Biz Financials - 1, template "Cash flow vs installment"; answer nearai\/deepseek-v4\.1-flash$/m);
+    assert.match(r.out, /^RUN +AI agent for Northwind \(synthetic\) \(t01\) pays from chainaim-buyer-seller\.testnet; dataset Small Biz Financials - 1, template "Cash flow vs installment"; query none \(exact query\); answer nearai\/deepseek-v4\.1-flash$/m);
     assert.match(r.out, / 4\. \[ChainAim\] Quoted 0\.01 USDC/);
     assert.match(r.out, / 8\. \[ChainAim\] Result released: 1 row\(s\)\n +9\. \[Agent t01\] Agent verified the receipt OK/);
     assert.match(r.out, /Answer:\n  Net cash flow was 742\.25\./);
@@ -153,6 +167,16 @@ describe("step C -AgentAsk: the real CLI against the console API", () => {
     assert.match(v.out, new RegExp(`result +sha256 ${resultSha256(RESULT)} · matches .*chainaim-result-${jobId}\\.json`));
     assert.match(v.out, /settled +near:testnet transaction gzDPwE9q\S+ · invoice inv-1 · payer chainaim-buyer-seller\.testnet/);
     assert.match(v.out, /^OK +receipt valid: signed by the pinned key [0-9a-f]{32}, settlement signed too, result matches$/m);
+  });
+
+  test("ARCH-620: the CLI's --query-model reaches the console's /agent/crossask as model, and the RUN line names it", async () => {
+    consoleState.stream = paidStream;
+    consoleState.receipt = (id) => receiptFor(id, RESULT, signer, TX);
+    consoleState.posted = [];
+    const r = await ask("--tenant", "t01", "--dataset", "setted", "--question", "Total?", "--answer-model", "nearai/deepseek-v4.1-flash", "--query-model", "nearai/deepseek-v4.1-flash");
+    assert.equal(r.code, 0, r.out + r.err);
+    assert.equal(consoleState.posted[0].model, "nearai/deepseek-v4.1-flash");
+    assert.match(r.out, /; query nearai\/deepseek-v4\.1-flash; answer nearai\/deepseek-v4\.1-flash$/m);
   });
 
   test("ARCH-620: a refused run prints the policy step and Not paid, saves nothing, exit 1", async () => {

@@ -23,6 +23,7 @@
     "models:start": "scripts/serve-local-models.sh",
     "models:stop": "scripts/serve-local-models.sh --stop",
     "eval:iter0": "node scripts/iter0-matrix.ts",
-    "dental": "node services/analyst/scripts/dental.ts"
+    "dental": "node services/analyst/scripts/dental.ts",
+    "test:erpnext-split": "node --test \"tools/erpnext-split/test/*.test.ts\""
   }
 }

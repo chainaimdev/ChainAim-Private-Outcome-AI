@@ -53,7 +53,7 @@ one READY table across both. Neither launcher is changed or renamed; each team k
                 pulled, and whether free RAM covers MemoryNeedGb. 7 GB: deepseek-r1:8b at numCtx 12288 loaded at 6.0 GB
                 (q8_0 K/V) and 7.2 GB (f16) in DESIGN/2026-10-17T1948-0500_local-gpu-models-session.md D14.
   -AgentAsk -Tenant t01 [-Dataset smb-fin-1] [-Template 1|LABEL] [-AgentQuestion "TEXT"] [-AgentSet NAME]
-           [-AgentAnswerModel default|none|ID]
+           [-AgentAnswerModel default|none|ID] [-AgentQueryModel default|ID]
                 one tab 03 "AI agent" run from the terminal, no browser (privateAI-design-32 step C; scripts\agent-ask.ts):
                 the same console relay, agent, spending policy, NEAR payment and receipt check as the page. Prints each
                 step with who did it and the result; saves the receipt and the result in runtime\agent-ask\ for
@@ -182,6 +182,7 @@ param(
   [string]$AgentQuestion = "",
   [string]$AgentSet = "",
   [string]$AgentAnswerModel = "default",
+  [string]$AgentQueryModel = "default",
   [string]$VerifyReceipt = "",
   [string]$VerifyResult = "auto",
   [string[]]$RequireModels = @("local", "bedrock", "nearai"),
@@ -358,8 +359,11 @@ if ($AgentAsk) {
   if ($Dataset -notmatch '^[A-Za-z0-9_.-]{1,64}$') { Stop-Here "-Dataset must be a dataset id of config\datasets.json, e.g. smb-fin-1" }
   if ($Template -notmatch '^[\x20-\x7E]{1,120}$') { Stop-Here "-Template must be a template number (1, 2, ...) or its label" }
   if ($AgentAnswerModel -ne "default" -and $AgentAnswerModel -ne "none" -and $AgentAnswerModel -notmatch '^[\w.-]+/[\w.:-]+$') { Stop-Here "-AgentAnswerModel must be default, none or provider/name" }
+  # The model that writes the SQL (tab 03's "Writes the query"); default = the console's default. An agent whose policy
+  # requires the attested route pays only when every model call is attested (e.g. nearai/... for both models).
+  if ($AgentQueryModel -ne "default" -and $AgentQueryModel -notmatch '^[\w.-]+/[\w.:-]+$') { Stop-Here "-AgentQueryModel must be default or provider/name" }
   if ((HttpStatus "http://127.0.0.1:8735/") -eq 0) { Stop-Here "the console API (127.0.0.1:8735) is not running: start the desk with the agent first (.\test-console\desk.ps1 -All), then run -AgentAsk" }
-  $askArgs = @("scripts\agent-ask.ts", "--api", "http://127.0.0.1:8735", "--tenant", $Tenant, "--dataset", $Dataset, "--template", $Template, "--answer-model", $AgentAnswerModel)
+  $askArgs = @("scripts\agent-ask.ts", "--api", "http://127.0.0.1:8735", "--tenant", $Tenant, "--dataset", $Dataset, "--template", $Template, "--answer-model", $AgentAnswerModel, "--query-model", $AgentQueryModel)
   if ($AgentQuestion) { $askArgs += @("--question", $AgentQuestion) }
   if ($AgentSet) { $askArgs += @("--set", $AgentSet) }
   & node @askArgs

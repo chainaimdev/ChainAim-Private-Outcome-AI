@@ -11,7 +11,11 @@ export type ListedDataset = {
   templates: { label: string; q: string; sql?: string }[]; sets: { name: string; files: string[] }[]; defaultSubfolder: string | null;
 };
 
-export type AskChoice = { dataset: string; template: string; question?: string; set?: string; answerModel: string };
+/**
+ * queryModel: the model that writes the SQL (tab 03's "Writes the query"); absent or "default" = the console's default, as
+ * before. A template with an exact query (sql) needs no query model, so it is not sent then.
+ */
+export type AskChoice = { dataset: string; template: string; question?: string; set?: string; answerModel: string; queryModel?: string };
 
 /** The run body for POST /agent/crossask, or a plain reason. `defaultAnswerModel` is the console's (GET /gateway/models). */
 export function buildRun(tenant: string, list: readonly ListedDataset[], c: AskChoice, defaultAnswerModel: string | null):
@@ -41,9 +45,12 @@ export function buildRun(tenant: string, list: readonly ListedDataset[], c: AskC
   }
   const answerModel = c.answerModel === "default" ? defaultAnswerModel : c.answerModel === "none" ? null : c.answerModel;
   if (answerModel && !/^[\w.-]+\/[\w.:-]+$/.test(answerModel)) return { error: `answer model must be default, none or provider/name, got ${answerModel}` };
+  const queryModel = c.queryModel && c.queryModel !== "default" ? c.queryModel : null;
+  if (queryModel && !/^[\w.-]+\/[\w.:-]+$/.test(queryModel)) return { error: `query model must be default or provider/name, got ${queryModel}` };
   return {
     run: {
       tenant, folder, question, phrase: answerModel ? "llm" : "none", datasetId: d.id,
+      ...(queryModel && !sql ? { model: queryModel } : {}),
       ...(answerModel ? { answerModel } : {}), ...(sql ? { sql } : {}), ...(templateLabel ? { templateLabel } : {}),
     },
     datasetLabel: d.label, templateLabel,

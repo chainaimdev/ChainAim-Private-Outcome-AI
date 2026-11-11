@@ -302,12 +302,14 @@ test("ARCH-613 step B up.ps1 -Agent on needs config\\receipt-public-key.pem (the
 test("ARCH-613 ARCH-620 step C/D -AgentAsk runs scripts\\agent-ask.ts against the console API and -VerifyReceipt runs scripts\\verify-receipt.ts with the pinned key; each runs on its own, before any start", () => {
   assert.match(code, /\[switch\]\$AgentAsk,/); assert.match(code, /\[string\]\$Tenant = "t01",/); assert.match(code, /\[string\]\$Dataset = "smb-fin-1",/);
   assert.match(code, /\[string\]\$Template = "1",/); assert.match(code, /\[string\]\$AgentAnswerModel = "default",/);
+  assert.match(code, /\[string\]\$AgentQueryModel = "default",/);
   assert.match(code, /\[string\]\$VerifyReceipt = "",/); assert.match(code, /\[string\]\$VerifyResult = "auto",/);
   assert.match(code, /if \(\$AgentAsk -and \(\$otherModes -or \$VerifyReceipt\)\) \{ Stop-Here "-AgentAsk runs on its own/);
   assert.match(code, /if \(\$VerifyReceipt -and \$otherModes\) \{ Stop-Here "-VerifyReceipt runs on its own/);
   assert.ok(code.indexOf("$otherModes =") < code.indexOf("if ($Logs.Count)"), "checked before anything runs");
   const a = code.slice(code.indexOf("if ($AgentAsk) {"), code.indexOf("if ($VerifyReceipt) {"));
-  assert.match(a, /\$askArgs = @\("scripts\\agent-ask\.ts", "--api", "http:\/\/127\.0\.0\.1:8735", "--tenant", \$Tenant, "--dataset", \$Dataset, "--template", \$Template, "--answer-model", \$AgentAnswerModel\)/);
+  assert.match(a, /\$askArgs = @\("scripts\\agent-ask\.ts", "--api", "http:\/\/127\.0\.0\.1:8735", "--tenant", \$Tenant, "--dataset", \$Dataset, "--template", \$Template, "--answer-model", \$AgentAnswerModel, "--query-model", \$AgentQueryModel\)/);
+  assert.match(a, /if \(\$AgentQueryModel -ne "default" -and \$AgentQueryModel -notmatch '\^\[\\w\.-\]\+\/\[\\w\.:-\]\+\$'\) \{ Stop-Here "-AgentQueryModel must be default or provider\/name" \}/);
   assert.match(a, /HttpStatus "http:\/\/127\.0\.0\.1:8735\/"/); assert.match(a, /& node @askArgs\s+exit \$LASTEXITCODE/);
   const v = code.slice(code.indexOf("if ($VerifyReceipt) {"), code.indexOf("# ---------------------------------------------------------------- -Smoke"));
   assert.match(v, /\$verArgs = @\("scripts\\verify-receipt\.ts", "--file", \$VerifyReceipt, "--public-key", "config\\receipt-public-key\.pem", "--result", \$VerifyResult\)/);
