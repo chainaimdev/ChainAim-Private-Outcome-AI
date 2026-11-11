@@ -46,6 +46,19 @@ one READY table across both. Neither launcher is changed or renamed; each team k
                 container's use, the models Ollama has loaded (ollama ps: size and CPU/GPU split), whether MemoryModel is
                 pulled, and whether free RAM covers MemoryNeedGb. 7 GB: deepseek-r1:8b at numCtx 12288 loaded at 6.0 GB
                 (q8_0 K/V) and 7.2 GB (f16) in DESIGN/2026-10-17T1948-0500_local-gpu-models-session.md D14.
+  -AgentAsk -Tenant t01 [-Dataset smb-fin-1] [-Template 1|LABEL] [-AgentQuestion "TEXT"] [-AgentSet NAME]
+           [-AgentAnswerModel default|none|ID]
+                one tab 03 "AI agent" run from the terminal, no browser (privateAI-design-32 step C; scripts\agent-ask.ts):
+                the same console relay, agent, spending policy, NEAR payment and receipt check as the page. Prints each
+                step with who did it and the result; saves the receipt and the result in runtime\agent-ask\ for
+                -VerifyReceipt. Needs the desk running with the agent (desk.ps1 -All). Runs on its own.
+                Exit 0 = paid and receipt verified; 1 = refused, error or receipt check failed; 2 = not reachable / usage.
+  -VerifyReceipt FILE [-VerifyResult auto|none|FILE]
+                check a receipt offline with the pinned key config\receipt-public-key.pem (privateAI-design-32 step D;
+                scripts\verify-receipt.ts): tab 03's downloaded chainaim-receipt-<jobId>.json or -AgentAsk's. Signature,
+                settlement signature and, when the released result is at hand (-VerifyResult; auto = the
+                chainaim-result-<jobId>.json beside it), the result's hash. No service needed. Runs on its own.
+                Exit 0 = valid; 1 = not valid (reason printed); 2 = usage or unreadable file.
   -Smoke  [-SmokeModel bedrock/nemotron-nano-3-30b] [-SmokeSets default|all] [-SmokeDatasets all|ID,ID]
          [-SmokeAnswerModel none|ID] [-SmokeCheckAnswers on|off] [-SmokeDryRun]
          -SmokeCheckAnswers on (default): results with a rule in config\answer-checks.json are compared with the
@@ -153,6 +166,15 @@ param(
   [switch]$ShipSkipTests,
   [switch]$ShipNoPush,
   [switch]$ShipDryRun,
+  [switch]$AgentAsk,
+  [string]$Tenant = "t01",
+  [string]$Dataset = "smb-fin-1",
+  [string]$Template = "1",
+  [string]$AgentQuestion = "",
+  [string]$AgentSet = "",
+  [string]$AgentAnswerModel = "default",
+  [string]$VerifyReceipt = "",
+  [string]$VerifyResult = "auto",
   [string[]]$RequireModels = @("local", "bedrock", "nearai"),
   [string]$Settings = "config\local\desk.json"
 )
@@ -203,6 +225,10 @@ if ($Ship -and ($Check -or $Stop -or $Test -or $Build -or $WithStub -or $Agent -
 # -All and -Windows options are checked before anything else runs.
 if ($All -and ($Check -or $Stop -or $Test -or $Ship -or $Logs.Count -or $Memory -or $Smoke -or $SmbSample -or $ChiroSample)) { Stop-Here "-All runs the tests, the start and the smoke check itself: leave out -Check, -Stop, -Test, -Ship, -Logs, -Memory, -Smoke, -SmbSample and -ChiroSample" }
 if (-not $All -and ($AllSkipTests -or $AllSkipSmoke -or $AllSmbSample)) { Stop-Here "-AllSkipTests, -AllSkipSmoke and -AllSmbSample need -All" }
+# -AgentAsk / -VerifyReceipt (privateAI-design-32 steps C and D) each run on their own; checked before anything runs.
+$otherModes = $Check -or $Stop -or $Test -or $Build -or $WithStub -or $Agent -or $Attest -or $Receipts -or $ReceiptKey -or $All -or $Ship -or $Logs.Count -or $Memory -or $Smoke -or $SmbSample -or $ChiroSample -or $RejudgeReceiver
+if ($AgentAsk -and ($otherModes -or $VerifyReceipt)) { Stop-Here "-AgentAsk runs on its own: leave out the other mode switches" }
+if ($VerifyReceipt -and $otherModes) { Stop-Here "-VerifyReceipt runs on its own: leave out the other mode switches" }
 $WindowNames = @($Windows | ForEach-Object { $_ -split "," } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
 if ($All -and -not $WindowNames.Count) { $WindowNames = @("analyst") }
 foreach ($n in $WindowNames) { if (-not $LogContainers.Contains($n)) { Stop-Here "-Windows $n is not a service here; use one of: $($LogContainers.Keys -join ', ')" } }
@@ -310,6 +336,29 @@ if ($ChiroSample) {
   if ($chiroFailed) { Say "FAIL" ("{0} of {1} chiro set(s) failed verification" -f $chiroFailed, $chiroSets.Count); exit 1 }
   Say "OK" ("{0} chiro set(s) written and verified (ALL CHECKS PASS each); answer keys carry query_answers" -f $chiroSets.Count)
   exit 0
+}
+
+# ---------------------------------------------------------------- -AgentAsk: one tab 03 agent run from the terminal (step C)
+if ($AgentAsk) {
+  if ($Tenant -notmatch '^[A-Za-z0-9_-]{1,32}$') { Stop-Here "-Tenant must be a tenant id such as t01" }
+  if ($Dataset -notmatch '^[A-Za-z0-9_.-]{1,64}$') { Stop-Here "-Dataset must be a dataset id of config\datasets.json, e.g. smb-fin-1" }
+  if ($Template -notmatch '^[\x20-\x7E]{1,120}$') { Stop-Here "-Template must be a template number (1, 2, ...) or its label" }
+  if ($AgentAnswerModel -ne "default" -and $AgentAnswerModel -ne "none" -and $AgentAnswerModel -notmatch '^[\w.-]+/[\w.:-]+$') { Stop-Here "-AgentAnswerModel must be default, none or provider/name" }
+  if ((HttpStatus "http://127.0.0.1:8735/") -eq 0) { Stop-Here "the console API (127.0.0.1:8735) is not running: start the desk with the agent first (.\test-console\desk.ps1 -All), then run -AgentAsk" }
+  $askArgs = @("scripts\agent-ask.ts", "--api", "http://127.0.0.1:8735", "--tenant", $Tenant, "--dataset", $Dataset, "--template", $Template, "--answer-model", $AgentAnswerModel)
+  if ($AgentQuestion) { $askArgs += @("--question", $AgentQuestion) }
+  if ($AgentSet) { $askArgs += @("--set", $AgentSet) }
+  & node @askArgs
+  exit $LASTEXITCODE
+}
+
+# ---------------------------------------------------------------- -VerifyReceipt: offline receipt check, pinned key (step D)
+if ($VerifyReceipt) {
+  if (-not (Test-Path -LiteralPath $VerifyReceipt -PathType Leaf)) { Stop-Here "-VerifyReceipt: no file $VerifyReceipt (tab 03's Download receipt saves chainaim-receipt-<jobId>.json; -AgentAsk saves it in runtime\agent-ask)" }
+  if (-not (Test-Path "config\receipt-public-key.pem")) { Stop-Here "config\receipt-public-key.pem is missing: run .\test-console\desk.ps1 -ReceiptKey once" }
+  $verArgs = @("scripts\verify-receipt.ts", "--file", $VerifyReceipt, "--public-key", "config\receipt-public-key.pem", "--result", $VerifyResult)
+  & node @verArgs
+  exit $LASTEXITCODE
 }
 
 # ---------------------------------------------------------------- -Smoke: every tab-03 template through the console API (reads only)

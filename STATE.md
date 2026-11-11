@@ -490,3 +490,10 @@ Still open: the Crossmark web page payment; Open Question 4 (Bazaar); `RUN-ON-AN
 - Then C (desk.ps1 -AgentAsk), D (desk.ps1 -VerifyReceipt <file>), demo video.
 - 2026-11-11 ~04:00Z: desk.ps1 -All ALL OK (paywall 325, analyst 234, smoke FAIL 0); live t01 "Agent verified the receipt ✓" +
   panel "verified by Agent t01 ✓"; t03 refused with quote 0.01 and status line reset. Step B verified. Next: ship v1.5.4, then C.
+- 2026-11-11 04:02Z: shipped v1.5.4 (commit aa5647d "design-32 step B ...", main pushed; local tag v1.5.4). Next: C desk.ps1 -AgentAsk.
+
+## RESUME POINT — 2026-11-11 ~04:40Z (chat near-ai-impl-6): steps C and D written, tested in workspace, NOT run on the PC
+- Next (owner, one at a time): desk.ps1 -All (expect root 635, paywall 325, analyst 234); then .\test-console\desk.ps1 -AgentAsk -Tenant t01
+  (expect steps 1-10, PAID, SAVED receipt/result in runtime\agent-ask, OK receipt verified); then desk.ps1 -VerifyReceipt <saved file>
+  (expect OK receipt valid ... result matches) and on the tab 03 Downloads file; then ship v1.5.5. Then the demo video.
+- 2026-11-11 04:29Z: C (-AgentAsk) and D (-VerifyReceipt) owner-verified live. Next: ship v1.5.5, then the demo video.

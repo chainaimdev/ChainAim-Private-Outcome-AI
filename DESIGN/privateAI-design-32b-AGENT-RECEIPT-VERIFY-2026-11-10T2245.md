@@ -54,3 +54,22 @@ polling, unsettled, receipts off, unreachable console, key loading, the committe
 the real paywall + NEAR double (released -> receipt_verified -> done; other key -> receipt_failed -> done).
 `agent-docker.test.ts` +1, `desk.test.ts` +1 (and -ReceiptKey --public-out), `console-agent.test.ts` +3,
 `paid-jobs-receipt.test.ts` +1 (pinned line updated), `agent-policy.test.ts` plain decimals.
+
+## Steps C and D (added 2026-11-11)
+
+C. `desk.ps1 -AgentAsk -Tenant t01 [-Dataset smb-fin-1] [-Template 1|LABEL] [-AgentQuestion "..."] [-AgentSet NAME]
+[-AgentAnswerModel default|none|ID]` -> `scripts/agent-ask.ts` (pure parts `scripts/agent-ask-core.ts`). Reads GET
+/datasets, /agent/config, /gateway/models from the console API (8735), then POST /agent/crossask with the page's exact body
+(folder, question, template sql, datasetId, templateLabel, answerModel/phrase), so the terminal and tab 03 share the relay,
+agent, policy, payment and receipt check. Prints each step with its actor tag and the result; saves
+`runtime/agent-ask/chainaim-receipt-<jobId>.json` ({receipt, publicKeyPem}, the page's download format) and
+`chainaim-result-<jobId>.json`. Exit 0 paid + receipt verified; 1 refused / error / receipt check failed; 2 usage / unreachable.
+Crossask datasets only (domain-pack datasets use tab 03's pack path, not the agent).
+
+D. `desk.ps1 -VerifyReceipt FILE [-VerifyResult auto|none|FILE]` -> `scripts/verify-receipt.ts`: offline, pinned
+`config/receipt-public-key.pem`, packages/receipt verifyReceipt; the key inside the file is only compared, never trusted;
+auto = the chainaim-result-<jobId>.json beside the receipt. Prints ids, dataset, template, files, hashes, calls, price,
+settlement + explorer link. Exit 0 valid, 1 not valid (reason), 2 usage.
+
+Tests: scripts/test/agent-ask.test.ts (10: run body, steps, real CLIs vs a loopback console API, tampering, pinned key),
+desk.test.ts +1.

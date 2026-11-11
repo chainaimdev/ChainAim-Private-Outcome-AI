@@ -1242,3 +1242,16 @@ Built in the AI's workspace on a snapshot of the owner's repo (main = e8626e8, v
   t03 -> "Spending policy: refused ✗ · ... at most 0.005 a job (quote 0.01) ✗ ... pays by itself up to 0.005 ✗", "Not paid:
   refused by t03's spending policy: the cheapest quote 0.01 USD is above maxPerJobUsd 0.005; nothing was signed or paid";
   status line back to "On, AI agent: Ask runs the job ..." (both cosmetic items fixed). Step B done; ship v1.5.4.
+
+## 2026-11-11 design-32 steps C and D: desk.ps1 -AgentAsk (headless agent run) and -VerifyReceipt (offline check) — written and tested in the workspace, NOT run on the PC
+
+- Design: DESIGN/privateAI-design-32b-AGENT-RECEIPT-VERIFY-2026-11-10T2245.md "Steps C and D".
+- New scripts/agent-ask-core.ts + scripts/agent-ask.ts (C), scripts/verify-receipt.ts (D). desk.ps1: -AgentAsk -Tenant
+  -Dataset -Template -AgentQuestion -AgentSet -AgentAnswerModel; -VerifyReceipt FILE -VerifyResult; each runs on its own
+  ($otherModes check before anything runs); help text; still pure ASCII.
+- Tests: scripts/test/agent-ask.test.ts 10/10 (real CLIs as child processes vs a loopback console API stand-in; receipts
+  signed by packages/receipt), desk.test.ts 24/24 (+1), check-deps OK. Expected root on the PC: 624 + 11 = 635.
+- Owner desk.ps1 -Test 04:26Z: analyst 234/234, paywall 325/325, "OK all terminal suites passed" (root exit 0; its count was above the pasted part).
+- Owner live 04:28Z: desk.ps1 -AgentAsk -Tenant t01 -> steps 1-10 (policy pay OK, daily 0.02 with this job; settled tx uubWU56h…7YQ; "Agent verified the receipt OK"), answer + 1-row table, PAID, SAVED runtime\agent-ask\chainaim-receipt/result-979411bbcbe9763364452472387c0304.json, "OK paid, result released, receipt verified by the agent". Step C verified.
+- Owner 04:29Z: desk.ps1 -VerifyReceipt runtime\agent-ask\chainaim-receipt-979411bb….json -> KEY pinned d27d1e9f…, file key is the pinned key, smb-fin-1 "Cash flow vs installment", 4 files, result matches, 1 call DeepSeek-V4.1-Flash attest verified, settled uubWU56h…, "OK receipt valid … settlement signed too, result matches". Step D verified. Ship v1.5.5.
+- 2026-11-11 04:29Z: C and D owner-verified live. Next: ship v1.5.5, then the demo video.
