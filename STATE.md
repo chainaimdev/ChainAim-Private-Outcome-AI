@@ -497,3 +497,37 @@ Still open: the Crossmark web page payment; Open Question 4 (Bazaar); `RUN-ON-AN
   (expect steps 1-10, PAID, SAVED receipt/result in runtime\agent-ask, OK receipt verified); then desk.ps1 -VerifyReceipt <saved file>
   (expect OK receipt valid ... result matches) and on the tab 03 Downloads file; then ship v1.5.5. Then the demo video.
 - 2026-11-11 04:29Z: C (-AgentAsk) and D (-VerifyReceipt) owner-verified live. Next: ship v1.5.5, then the demo video.
+- 2026-11-11 04:31Z: shipped v1.5.5 (commit d169ee1, tag pushed and checked on origin). Next: 90 s demo video, then open items (firm pricing 3e etc.).
+
+## RESUME POINT — 2026-11-11 ~17:55Z (chat near-ai-impl-6): AP2 / UCP integration decided, NOT started
+- Specs read: https://ucp.dev/documentation/ucp-and-ap2/#protocol-flow and
+  https://ucp.dev/latest/specification/payment/extensions/ap2-mandates/#business-authorization (capability
+  dev.ucp.common.payment.ap2_mandate v2026-08-25; ap2.merchant_authorization = detached JWS over JCS(checkout minus ap2),
+  alg ES256/384/512, kid -> keys[] JWK in /.well-known/ucp; ap2.checkout_mandate = SD-JWT+kb by the platform; payment
+  mandate in payment.instruments[*].credential.token, verified by the PSP; error codes mandate_required ... ).
+- NOT read yet: UCP checkout object schema; AP2 mandate claims (ap2-protocol.org).
+- Owner decisions: scope = Phase 1 (console signs quote, agent verifies before policy, receipt hash) + Phase 2 (agent signs
+  checkout mandate, paywall verifies before settle; per-tenant mandate keys). Algorithm: BOTH, flag --ap2-alg ES256|EdDSA
+  (ES256 = new key via desk.ps1 -Ap2Key; EdDSA = the existing receipt key). Default ES256 (AI's pick, to confirm).
+- File list: chat near-ai-impl-6 answer "changes needed to what files" (copied into the next chat's handoff).
+
+## RESUME POINT — 2026-11-11 ~18:30Z (chat nearao-impl-7): design-33 AP2 written, 2 owner decisions OPEN, no code yet
+- Design DESIGN/privateAI-design-33-AP2-UCP-MANDATES-2026-11-11T1830.md (ARCH-626..633; specs read listed in §0).
+- OPEN D1: AP2/UCP allow only ES256/384/512 for merchant_authorization; EdDSA would be non-conformant. AI recommends ES256 only.
+- OPEN D2: UCP amounts are integer ISO 4217 minor units (cents); quotes are 6-decimal USDC. AI recommends --price-round cent
+  under --ap2 on (x402 amount = cents x 10^4).
+- Next: owner answers D1/D2; then Phase 1 code + tests in order ARCH-626, 627, 629, 628, 630, 631.
+- 2026-11-11 18:24Z owner: D1 = ES256 only for AP2 (receipt keeps Ed25519); D2 = --price-round cent|micro (default micro,
+  cent under --ap2 on). Phase 1 started with ARCH-626 packages/ap2.
+- 2026-11-11 ~18:45Z: ARCH-626 packages/ap2 done in workspace (14/14; BUILD_LOG "design-33 ARCH-626"). Next: ARCH-627
+  (receipt-key --alg ES256, desk.ps1 -Ap2Key, config/ap2-public-key.jwk.json), then 629, 628, 630, 631. Not run on the PC yet.
+- 2026-11-11 ~18:32Z owner desk.ps1 -Test: ALL OK (analyst 234, paywall 325, root passed incl. packages/ap2). Next: ARCH-627.
+- ~19:00Z ARCH-627 written + workspace-tested (BUILD_LOG "design-33 ARCH-627"). Next (owner): desk.ps1 -Ap2Key (expect
+  "OK AP2 signing key (ES256) AP2_SIGNING_KEY created", KEY ID, JWK, "public key written to config\ap2-public-key.jwk.json").
+  Then AI: ARCH-629 --price-round, ARCH-628 console signing.
+- ~18:40Z owner desk.ps1 -Ap2Key OK: AP2 key id 83816e6fd32b879fd96d0318a40cd40d, config\ap2-public-key.jwk.json written
+  (commit with the next ship). Next (AI): ARCH-629 --price-round cent|micro, then ARCH-628 console signs the checkout.
+- ~18:47Z owner desk.ps1 -Test after ARCH-627: ALL OK. Next (AI, new chat): ARCH-629, then ARCH-628.
+- ~18:51Z owner -Ship -ShipDryRun -ShipSkipTests -ShipTag v1.5.6: 13 files listed, exactly the expected set (no secrets,
+  no .env). Next (owner): the same command without -ShipDryRun -ShipSkipTests -> v1.5.6 checkpoint (AP2 groundwork,
+  no runtime change). v1.6.0 stays for AP2 Phase 1 live.

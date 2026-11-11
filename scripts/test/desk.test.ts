@@ -31,10 +31,11 @@ test("a conductor: runs nearadminup.ps1 then test-console\\up.ps1, and their dow
   assert.ok(!/&\s*\(?[^\n]*stack\.ps1/.test(code), "never calls stack.ps1 (compose owns the containers)");
 });
 
-test("ARCH-613 ARCH-620 -Test, -All and -Ship run the receipt and agent-policy package suites", () => {
+test("ARCH-613 ARCH-620 ARCH-626 -Test, -All and -Ship run the receipt, agent-policy and ap2 package suites", () => {
   const suites = code.slice(code.indexOf("function Invoke-Suites"), code.indexOf("if ($Test) {"));
   assert.match(suites, /"packages\/receipt\/test\/\*\.test\.ts"/);
   assert.match(suites, /"packages\/agent-policy\/test\/\*\.test\.ts"/);
+  assert.match(suites, /"packages\/ap2\/test\/\*\.test\.ts"/, "design-33 ARCH-626: the AP2 package suite runs with -Test, -All and -Ship");
   assert.match(suites, /"packages\/crossask\/test\/\*\.test\.ts"/);
   assert.match(suites, /& npm --prefix services\\paywall test/);
   assert.match(suites, /return @\(\$a, \$b, \$c\)/);
@@ -313,4 +314,22 @@ test("ARCH-613 ARCH-620 step C/D -AgentAsk runs scripts\\agent-ask.ts against th
   assert.match(v, /& node @verArgs\s+exit \$LASTEXITCODE/);
   assert.ok(!/docker|Get-Content|RECEIPT_SIGNING_KEY/.test(a + v), "no service started, no file or secret read by desk.ps1 itself");
   assert.ok(code.indexOf("if ($AgentAsk) {") < code.indexOf("# 1. pre-flight") && code.indexOf("if ($VerifyReceipt) {") < code.indexOf("# 1. pre-flight"), "no start");
+});
+
+test("ARCH-627 -Ap2Key runs scripts\\receipt-key.ts --alg ES256 on <secretsDir>\\chainaim.env, writes config\\ap2-public-key.jwk.json and stops; checked before anything runs", () => {
+  assert.match(code, /\[switch\]\$Ap2Key,/); assert.match(code, /\[switch\]\$Ap2KeyRotate,/);
+  assert.match(code, /\[string\]\$Ap2KeyName = "AP2_SIGNING_KEY",/);
+  assert.match(ps, /-Ap2Key \[-Ap2KeyRotate\] \[-Ap2KeyName AP2_SIGNING_KEY\]/, "documented in the help");
+  for (const m of ["-Ap2Key runs on its own", "-Ap2KeyRotate needs -Ap2Key", "-Ap2KeyName and -ReceiptKeyName must differ"]) {
+    assert.ok(code.indexOf(m) > 0 && code.indexOf(m) < code.indexOf("if ($Logs.Count)"), `${m}: checked before anything runs`);
+  }
+  assert.match(code, /\$otherModes = [^\n]*-or \$Ap2Key -or/, "-AgentAsk / -VerifyReceipt refuse it beside them");
+  const k = code.slice(code.indexOf("if ($Ap2Key) {"), code.indexOf("function AdminRoot"));
+  assert.ok(k.length > 0 && code.indexOf("if ($Ap2Key) {") < code.indexOf("# 1. pre-flight"), "no start");
+  assert.match(k, /\$ap2Args = @\("scripts\\receipt-key\.ts", "--secrets-file", \(Join-Path \$secrets "chainaim\.env"\), "--alg", "ES256", "--var", \$Ap2KeyName\)/);
+  assert.match(k, /\$ap2Args \+= @\("--public-out", "config\\ap2-public-key\.jwk\.json"\)/);
+  assert.match(k, /if \(\$Ap2KeyRotate\) \{ \$ap2Args \+= "--rotate" \}/);
+  assert.match(k, /& node @ap2Args/); assert.match(k, /exit 0/);
+  assert.ok(!/"--env-file"/.test(k), "never --env-file (lesson 2)");
+  assert.ok(!/docker|Stop-Process|Get-Content|Select-String/.test(k), "touches no service and reads no file itself");
 });

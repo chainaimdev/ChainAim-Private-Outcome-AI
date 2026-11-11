@@ -1,0 +1,10 @@
+{
+  "name": "@chainaim/ap2",
+  "version": "0.1.0",
+  "private": true,
+  "description": "AP2 mandates over UCP checkout (privateAI-design-33 ARCH-626): JCS (RFC 8785), JWS detached content (RFC 7515 Appendix F) with ES256 in IEEE P1363 form, EC P-256 JWK and key ids (RFC 7638 thumbprint), and the UCP AP2 error codes. The console signs the quote, the buyer's agent verifies with the same code. No runtime dependencies (node:crypto only).",
+  "type": "module",
+  "engines": { "node": ">=22.22" },
+  "exports": { ".": "./src/index.ts" },
+  "scripts": { "test": "node --test \"test/*.test.ts\"" }
+}

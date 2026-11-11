@@ -12,6 +12,7 @@ import { fileURLToPath } from "node:url";
 import { sign, verify, createPublicKey, createPrivateKey } from "node:crypto";
 import { ensureReceiptKey, readEnvValue, upsertEnvLine } from "../receipt-key-core.ts";
 import { signerFromEnv } from "../../packages/receipt/src/index.ts";
+import { keyFromJwk, signerFromEnv as ap2SignerFromEnv, signMerchantAuthorization, verifyMerchantAuthorization } from "../../packages/ap2/src/index.ts";
 
 const CLI = fileURLToPath(new URL("../receipt-key.ts", import.meta.url));
 const fresh = () => mkdtempSync(join(tmpdir(), "receipt-key-"));
@@ -111,5 +112,71 @@ test("ARCH-614 the CLI prints the key id and PUBLIC key only; a second run keeps
     const r3 = run("--secrets-file", f);
     assert.equal(r3.status, 1);
     assert.match(r3.stderr, /-ReceiptKeyRotate/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("ARCH-627 ensureReceiptKey ES256: a P-256 key the AP2 signer reads, with its public JWK; kept on a second run; the receipt key beside it untouched", () => {
+  const dir = fresh();
+  try {
+    const f = join(dir, "chainaim.env");
+    const receipt = ensureReceiptKey(f, "RECEIPT_SIGNING_KEY", false);
+    const text0 = readFileSync(f, "utf8");
+    const a = ensureReceiptKey(f, "AP2_SIGNING_KEY", false, "ES256");
+    assert.equal(a.outcome, "created");
+    const text1 = readFileSync(f, "utf8");
+    assert.ok(text1.startsWith(text0), "the receipt key line is kept as it was");
+    assert.equal(ensureReceiptKey(f, "RECEIPT_SIGNING_KEY", false).keyId, receipt.keyId);
+    const value = readEnvValue(text1, "AP2_SIGNING_KEY")!;
+    const s = ap2SignerFromEnv({ AP2_SIGNING_KEY: value }, "AP2_SIGNING_KEY");
+    assert.equal(s.kid, a.keyId);
+    assert.deepEqual(a.publicJwk, s.publicJwk);
+    assert.equal(keyFromJwk(a.publicJwk).kid, a.keyId, "the published JWK passes the verifier's own checks");
+    const checkout = { id: "j1", totals: [{ type: "total", amount: 1 }] };
+    assert.equal(verifyMerchantAuthorization(signMerchantAuthorization(checkout, s), checkout, [a.publicJwk]).ok, true);
+    assert.equal(createPublicKey(a.publicKeyPem).asymmetricKeyDetails?.namedCurve, "prime256v1");
+    assert.equal(JSON.stringify(a).includes(keyBody(value)), false, "the result never carries the private key");
+    const b = ensureReceiptKey(f, "AP2_SIGNING_KEY", false, "ES256");
+    assert.equal(b.outcome, "kept");
+    assert.equal(readFileSync(f, "utf8"), text1, "a second run changes nothing");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("ARCH-627 ensureReceiptKey: a key of the other kind is refused without rotate (Ed25519 under --alg ES256 and the reverse), naming the right rotate switch", () => {
+  const dir = fresh();
+  try {
+    const f = join(dir, "chainaim.env");
+    ensureReceiptKey(f, "K", false);
+    const before = readFileSync(f, "utf8");
+    assert.throws(() => ensureReceiptKey(f, "K", false, "ES256"), /K in the env file is not a valid EC P-256 \(ES256\) PKCS#8 PEM key; replace it with -Ap2KeyRotate/);
+    assert.equal(readFileSync(f, "utf8"), before);
+    ensureReceiptKey(f, "E", false, "ES256");
+    assert.throws(() => ensureReceiptKey(f, "E", false), /not a valid Ed25519 PKCS#8 PEM key; replace it with -ReceiptKeyRotate/);
+    assert.throws(() => ensureReceiptKey(f, "E", false, "EdDSA" as never), /must be one of ed25519, ES256/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("ARCH-627 the CLI with --alg ES256: default variable AP2_SIGNING_KEY, a JWK Set public file, no private key printed; a bad --alg exits 2", () => {
+  const dir = fresh();
+  try {
+    const f = join(dir, "chainaim.env");
+    const pub = join(dir, "ap2-public-key.jwk.json");
+    const r1 = run("--secrets-file", f, "--alg", "ES256", "--public-out", pub);
+    assert.equal(r1.status, 0, r1.stderr);
+    const value = readEnvValue(readFileSync(f, "utf8"), "AP2_SIGNING_KEY")!;
+    assert.ok(value, "AP2_SIGNING_KEY is the default variable with ES256");
+    assert.equal(readEnvValue(readFileSync(f, "utf8"), "RECEIPT_SIGNING_KEY"), undefined);
+    const out = r1.stdout + r1.stderr;
+    assert.match(out, /OK      AP2 signing key \(ES256\) AP2_SIGNING_KEY created/);
+    const kid = /KEY ID  ([0-9a-f]{32})/.exec(out)![1];
+    assert.equal(/PRIVATE KEY/.test(out.replace("private key not shown", "")), false);
+    assert.equal(out.includes(keyBody(value)), false);
+    assert.equal(/"d"/.test(out), false, "no private JWK member printed");
+    const set = JSON.parse(readFileSync(pub, "utf8")) as { keys: unknown[] };
+    assert.equal(set.keys.length, 1);
+    assert.equal(keyFromJwk(set.keys[0]).kid, kid);
+    assert.deepEqual(Object.keys(set.keys[0] as object).sort(), ["alg", "crv", "kid", "kty", "use", "x", "y"]);
+    const r2 = run("--secrets-file", f, "--alg", "ES256");
+    assert.match(r2.stdout, /kept \(use -Ap2KeyRotate to replace it\)/);
+    assert.equal(run("--secrets-file", f, "--alg", "EdDSA").status, 2);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });

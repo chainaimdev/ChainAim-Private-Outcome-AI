@@ -1255,3 +1255,34 @@ Built in the AI's workspace on a snapshot of the owner's repo (main = e8626e8, v
 - Owner live 04:28Z: desk.ps1 -AgentAsk -Tenant t01 -> steps 1-10 (policy pay OK, daily 0.02 with this job; settled tx uubWU56h…7YQ; "Agent verified the receipt OK"), answer + 1-row table, PAID, SAVED runtime\agent-ask\chainaim-receipt/result-979411bbcbe9763364452472387c0304.json, "OK paid, result released, receipt verified by the agent". Step C verified.
 - Owner 04:29Z: desk.ps1 -VerifyReceipt runtime\agent-ask\chainaim-receipt-979411bb….json -> KEY pinned d27d1e9f…, file key is the pinned key, smb-fin-1 "Cash flow vs installment", 4 files, result matches, 1 call DeepSeek-V4.1-Flash attest verified, settled uubWU56h…, "OK receipt valid … settlement signed too, result matches". Step D verified. Ship v1.5.5.
 - 2026-11-11 04:29Z: C and D owner-verified live. Next: ship v1.5.5, then the demo video.
+
+## design-33 ARCH-626 packages/ap2 (chat nearao-impl-7, 2026-11-11 ~18:45Z) - written and run in the Linux workspace
+- Design: DESIGN/privateAI-design-33-AP2-UCP-MANDATES-2026-11-11T1830.md. Owner decisions 18:24Z: D1 ES256 only for AP2
+  (receipt keeps Ed25519), D2 --price-round cent|micro (cent under --ap2 on).
+- New packages/ap2 (package.json, src/index.ts, test/ap2.test.ts): JCS (RFC 8785), detached JWS ES256 IEEE P1363
+  (signMerchantAuthorization / verifyMerchantAuthorization with UCP AP2 error codes), attachedJws (AP2 checkout_jwt),
+  publicJwkOf / keyFromJwk / kidOf (RFC 7638 thumbprint id, relabelled kid refused), signerFromEnv (AP2_SIGNING_KEY),
+  merchantAuthSha256. node:crypto only.
+- desk.ps1 root test line: + "packages/ap2/test/*.test.ts" (still pure ASCII).
+- Run: node --test "packages/ap2/test/*.test.ts" -> tests 14, pass 14, fail 0 (RFC 8785 3.2.2/3.2.3 sample, sorting
+  example and 15 Appendix B number rows included). node --test scripts/test/desk.test.ts -> 24/24. node scripts/check-deps.ts -> OK.
+- Expected root total on the PC: 635 + 14 = 649.
+- Owner desk.ps1 -Test ~18:32Z: analyst 234/234, paywall 325/325, "OK all terminal suites passed" (root suite incl.
+  packages/ap2 passed; its count was above the pasted part). ARCH-626 verified on the PC.
+
+## design-33 ARCH-627 AP2 signing key tooling (chat nearao-impl-7, ~19:00Z) - written and run in the Linux workspace
+- Owner ran desk.ps1 -Ap2Key before it existed (13:33 local): "A parameter cannot be found that matches parameter name
+  'Ap2Key'", nothing changed. Built now.
+- scripts/receipt-key-core.ts: KEY_ALGS ed25519|ES256, keyInfoOf, newKeyValue(alg), publicFileText (PEM / JWK Set),
+  ensureReceiptKey(..., alg = "ed25519"); refusal names -ReceiptKeyRotate or -Ap2KeyRotate. Ed25519 behaviour unchanged.
+- scripts/receipt-key.ts: --alg ed25519|ES256 (default ed25519); --var default RECEIPT_SIGNING_KEY / AP2_SIGNING_KEY.
+- test-console/desk.ps1: -Ap2Key [-Ap2KeyRotate] [-Ap2KeyName AP2_SIGNING_KEY], help, checks before anything runs,
+  in $otherModes; block = receipt-key.ts --alg ES256 --public-out config\ap2-public-key.jwk.json, then exit. ASCII only.
+- Tests: scripts/test/receipt-key.test.ts +3 (ARCH-627), scripts/test/desk.test.ts +1 (ARCH-627) and the package-suite
+  guard now also requires packages/ap2. Run: desk.test.ts + receipt-key.test.ts + packages/ap2 -> tests 47, pass 47, fail 0;
+  check-deps OK. MANUAL_SETUP "AP2 signing key". Expected root on the PC: 649 + 4 = 653.
+- Owner desk.ps1 -Ap2Key ~18:40Z: "OK AP2 signing key (ES256) AP2_SIGNING_KEY created in C:\PRIV-AI-SECRETS\chainaim.env",
+  KEY ID 83816e6fd32b879fd96d0318a40cd40d, public JWK (EC P-256, use sig, alg ES256, no d), config\ap2-public-key.jwk.json
+  written. AI check: keyFromJwk on the file -> kid matches its RFC 7638 thumbprint id. ARCH-627 verified on the PC.
+- Owner desk.ps1 -Test ~18:47Z (after ARCH-627): analyst 234/234, paywall 325/325, "OK all terminal suites passed" (root
+  passed; its count and the ARCH-626/627 lines were above the pasted part). ARCH-627 tests verified on the PC.

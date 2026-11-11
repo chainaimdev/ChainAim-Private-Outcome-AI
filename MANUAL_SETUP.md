@@ -432,3 +432,17 @@ The file is a PUBLIC key (not secret) and is committed to the repository (owner 
    and `services/paywall/test/agent-receipt.test.ts` fails its "pinned key is d27d1e9f…" test.
 3. `-ReceiptKey -ReceiptKeyRotate` also rewrites the file. Then rebuild the agent image (`desk.ps1 -All`) and commit the new
    file; receipts signed before the rotation verify only with the old key.
+
+## AP2 signing key (privateAI-design-33 ARCH-627, 2026-11-11)
+
+The console signs each paid job's quote as a UCP AP2 `merchant_authorization` (ES256, EC P-256). The private key lives in
+`<secretsDir>\chainaim.env` under `AP2_SIGNING_KEY` (PKCS#8 PEM, newlines written as `\n` on one line); it is a separate
+key from `RECEIPT_SIGNING_KEY` (Ed25519, receipts).
+
+1. `.\test-console\desk.ps1 -Ap2Key` — runs `scripts\receipt-key.ts --alg ES256`, writes `AP2_SIGNING_KEY` into
+   chainaim.env (created when missing, every other line kept), prints the key id and the PUBLIC JWK only, and writes the
+   public key as a JWK Set to `config\ap2-public-key.jwk.json`. Running it again keeps a valid key.
+2. Commit `config\ap2-public-key.jwk.json` with the next ship: the agent pins it (design-33 ARCH-630). It is not secret.
+3. Replace the key: `.\test-console\desk.ps1 -Ap2Key -Ap2KeyRotate`, then commit the new public file; quotes signed
+   before verify only with the old key. Another variable name: `-Ap2KeyName NAME` (must differ from `-ReceiptKeyName`).
+The console does not read the key yet: AP2 signing (`--ap2 on`) arrives with ARCH-628.

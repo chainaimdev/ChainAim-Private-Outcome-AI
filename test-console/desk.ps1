@@ -30,6 +30,12 @@ one READY table across both. Neither launcher is changed or renamed; each team k
                 -ReceiptKeyRotate replaces it (receipts signed before verify only with the old public key). This script
                 still never reads a secret: the Node script does the file work. Runs on its own. Also writes the PUBLIC
                 key to config\receipt-public-key.pem (committed; the agent and -VerifyReceipt pin it).
+  -Ap2Key [-Ap2KeyRotate] [-Ap2KeyName AP2_SIGNING_KEY]
+                create the console's ES256 (EC P-256) AP2 signing key in <secretsDir>\chainaim.env (scripts\receipt-key.ts
+                --alg ES256; privateAI-design-33 ARCH-627) and stop. The console signs each paid job's quote with it as a
+                UCP AP2 merchant_authorization. Prints the key id and the PUBLIC key only; a valid key already there is
+                kept; -Ap2KeyRotate replaces it. Writes the PUBLIC key as a JWK Set to config\ap2-public-key.jwk.json
+                (committed; the agent pins it). Runs on its own.
   -RejudgeReceiver ACCOUNT  -RejudgeReason "TEXT"
                 after the start, clear FALSE reconcile mismatches in the NEAR admin UI (near-watch src/rejudge.ts
                 --all-mismatches; chainaim-adminUI-NEAR src/reconcile.ts rejudge). ACCOUNT is the pay-to you checked the
@@ -130,6 +136,9 @@ param(
   [switch]$ReceiptKey,
   [switch]$ReceiptKeyRotate,
   [string]$ReceiptKeyName = "RECEIPT_SIGNING_KEY",
+  [switch]$Ap2Key,
+  [switch]$Ap2KeyRotate,
+  [string]$Ap2KeyName = "AP2_SIGNING_KEY",
   [switch]$NoBrowser,
   [string[]]$Logs = @(),
   [int]$LogLines = 40,
@@ -218,7 +227,12 @@ try { [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false) } 
 # -ReceiptKey options are checked before anything else runs.
 if ($ReceiptKeyName -notmatch '^[A-Z_][A-Z0-9_]*$') { Stop-Here "-ReceiptKeyName must be an environment variable name such as RECEIPT_SIGNING_KEY" }
 if ($ReceiptKeyRotate -and -not $ReceiptKey) { Stop-Here "-ReceiptKeyRotate needs -ReceiptKey" }
-if ($ReceiptKey -and ($Check -or $Stop -or $Test -or $Build -or $WithStub -or $Agent -or $Attest -or $Receipts -or $All -or $Ship -or $Logs.Count -or $Memory -or $Smoke -or $SmbSample -or $ChiroSample -or $RejudgeReceiver)) { Stop-Here "-ReceiptKey runs on its own: leave out the other mode switches" }
+if ($ReceiptKey -and ($Check -or $Stop -or $Test -or $Build -or $WithStub -or $Agent -or $Attest -or $Receipts -or $Ap2Key -or $All -or $Ship -or $Logs.Count -or $Memory -or $Smoke -or $SmbSample -or $ChiroSample -or $RejudgeReceiver)) { Stop-Here "-ReceiptKey runs on its own: leave out the other mode switches" }
+# -Ap2Key options (privateAI-design-33 ARCH-627) are checked before anything else runs.
+if ($Ap2KeyName -notmatch '^[A-Z_][A-Z0-9_]*$') { Stop-Here "-Ap2KeyName must be an environment variable name such as AP2_SIGNING_KEY" }
+if ($Ap2KeyName -eq $ReceiptKeyName) { Stop-Here "-Ap2KeyName and -ReceiptKeyName must differ: the AP2 key (ES256) and the receipt key (Ed25519) are two keys" }
+if ($Ap2KeyRotate -and -not $Ap2Key) { Stop-Here "-Ap2KeyRotate needs -Ap2Key" }
+if ($Ap2Key -and ($Check -or $Stop -or $Test -or $Build -or $WithStub -or $Agent -or $Attest -or $Receipts -or $ReceiptKey -or $All -or $Ship -or $Logs.Count -or $Memory -or $Smoke -or $SmbSample -or $ChiroSample -or $RejudgeReceiver)) { Stop-Here "-Ap2Key runs on its own: leave out the other mode switches" }
 
 # -Ship options are checked before anything else runs.
 if ($Ship -and ($Check -or $Stop -or $Test -or $Build -or $WithStub -or $Agent -or $Attest -or $Receipts -or $Logs.Count -or $Memory -or $Smoke -or $SmbSample -or $ChiroSample -or $RejudgeReceiver)) { Stop-Here "-Ship runs on its own: leave out the other mode switches" }
@@ -226,7 +240,7 @@ if ($Ship -and ($Check -or $Stop -or $Test -or $Build -or $WithStub -or $Agent -
 if ($All -and ($Check -or $Stop -or $Test -or $Ship -or $Logs.Count -or $Memory -or $Smoke -or $SmbSample -or $ChiroSample)) { Stop-Here "-All runs the tests, the start and the smoke check itself: leave out -Check, -Stop, -Test, -Ship, -Logs, -Memory, -Smoke, -SmbSample and -ChiroSample" }
 if (-not $All -and ($AllSkipTests -or $AllSkipSmoke -or $AllSmbSample)) { Stop-Here "-AllSkipTests, -AllSkipSmoke and -AllSmbSample need -All" }
 # -AgentAsk / -VerifyReceipt (privateAI-design-32 steps C and D) each run on their own; checked before anything runs.
-$otherModes = $Check -or $Stop -or $Test -or $Build -or $WithStub -or $Agent -or $Attest -or $Receipts -or $ReceiptKey -or $All -or $Ship -or $Logs.Count -or $Memory -or $Smoke -or $SmbSample -or $ChiroSample -or $RejudgeReceiver
+$otherModes = $Check -or $Stop -or $Test -or $Build -or $WithStub -or $Agent -or $Attest -or $Receipts -or $ReceiptKey -or $Ap2Key -or $All -or $Ship -or $Logs.Count -or $Memory -or $Smoke -or $SmbSample -or $ChiroSample -or $RejudgeReceiver
 if ($AgentAsk -and ($otherModes -or $VerifyReceipt)) { Stop-Here "-AgentAsk runs on its own: leave out the other mode switches" }
 if ($VerifyReceipt -and $otherModes) { Stop-Here "-VerifyReceipt runs on its own: leave out the other mode switches" }
 $WindowNames = @($Windows | ForEach-Object { $_ -split "," } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
@@ -382,8 +396,8 @@ if ($Smoke) {
 # The terminal suites, shared by -Test and -Ship. Output goes to the screen; the exit codes are returned.
 function Invoke-Suites {
   Say "TEST" "terminal suites (each starts its own servers; near-watch path from config\local\repos.json)"
-  # packages/receipt and packages/agent-policy: privateAI-design-32 ARCH-613..616 and ARCH-620..624 (pure, no servers).
-  & node --test "packages/crossask/test/*.test.ts" "packages/receipt/test/*.test.ts" "packages/agent-policy/test/*.test.ts" "scripts/test/*.test.ts" "services/gateway/test/*.test.ts" "test-console/test/*.test.ts" | Out-Host
+  # packages/receipt and packages/agent-policy: privateAI-design-32 ARCH-613..616 and ARCH-620..624; packages/ap2: design-33 ARCH-626 (pure, no servers).
+  & node --test "packages/crossask/test/*.test.ts" "packages/receipt/test/*.test.ts" "packages/agent-policy/test/*.test.ts" "packages/ap2/test/*.test.ts" "scripts/test/*.test.ts" "services/gateway/test/*.test.ts" "test-console/test/*.test.ts" | Out-Host
   $a = $LASTEXITCODE
   & npm --prefix services\analyst test | Out-Host
   $b = $LASTEXITCODE
@@ -540,6 +554,21 @@ if ($ReceiptKey) {
   & node @keyArgs
   if ($LASTEXITCODE) { Stop-Here "scripts\receipt-key.ts stopped (exit $LASTEXITCODE): its message is above; nothing else changed" }
   Say "NEXT" "start (or restart) the desk so the console signs receipts: .\test-console\desk.ps1 -All"
+  exit 0
+}
+
+# ---------------------------------------------------------------- -Ap2Key: the AP2 signing key (ES256), then stop
+# privateAI-design-33 ARCH-627. The same Node script as -ReceiptKey with --alg ES256; this script only passes paths.
+if ($Ap2Key) {
+  if (-not (Test-Path $secrets)) { Stop-Here "the secrets folder $secrets does not exist (secretsDir in $Settings)" }
+  $ap2Args = @("scripts\receipt-key.ts", "--secrets-file", (Join-Path $secrets "chainaim.env"), "--alg", "ES256", "--var", $Ap2KeyName)
+  # The PUBLIC key as a JWK Set goes to config\ap2-public-key.jwk.json (committed), the key the agent pins.
+  $ap2Args += @("--public-out", "config\ap2-public-key.jwk.json")
+  if ($Ap2KeyRotate) { $ap2Args += "--rotate" }
+  Say "RUN" "AP2 signing key $Ap2KeyName (ES256) in $secrets\chainaim.env$(if ($Ap2KeyRotate) { ' (rotate)' }); only the key id and PUBLIC key are printed"
+  & node @ap2Args
+  if ($LASTEXITCODE) { Stop-Here "scripts\receipt-key.ts stopped (exit $LASTEXITCODE): its message is above; nothing else changed" }
+  Say "NEXT" "commit config\ap2-public-key.jwk.json with the next ship; the console uses the key once AP2 signing is on (design-33 ARCH-628)"
   exit 0
 }
 
