@@ -1404,3 +1404,69 @@ Built in the AI's workspace on a snapshot of the owner's repo (main = e8626e8, v
 - Admin suites run here (PC Linux shell) on the current admin tree: near-watch 72 pass / 0 fail (1 skipped of 73),
   typecheck OK; admin-console 64/64, typecheck OK.
 - 2026-11-12 ~02:15Z owner: -ShipRepo admin dry run (all admin suites OK) and real ship: admin 123bb3f pushed. VERIFIED.
+
+## design-34 ARCH-637 paywall: estimate-first offer release = verify -> run -> settle (chat near-ai-impl-9, 2026-11-12 ~17:40Z) - written, tested in the PC's Linux shell
+- services/paywall jobs.ts: Job.run?: true (an estimate-first offer), parseJob accepts run: true only; JobBook.isRun.
+  config.ts: PAID_JOBS_RUN_TIMEOUT_SEC (default 300; 1..XRPL_MAX_TIMEOUT_SECONDS-30, so the buyer's signed NEAR delegate
+  outlives the run, V-P2). app.ts release(): an offer -> runOffer: POST <console>/internal/jobs/:id/run (x-jobs-key, run
+  timeout); 409/422 pass on with "you were not charged", any other non-200 -> 502; the x402 middleware verified before the
+  handler and settles only a 2xx, so a refused or failed run is never settled (ARCH-611); endPaying -> payable again.
+  Held jobs (no run) unchanged (GET as before). errorBody gains 422.
+- Tests: paid-jobs.test.ts +6 (ARCH-637 config bounds; unpaid release = 402 and the console is NEVER asked to run;
+  paid release runs once then settles once; 409 and 422 settle nothing and the offer is payable again; held job without a
+  run call; run must be true) + config deepEqual gains runTimeoutSec (lesson 6); job-clock-skew.test.ts source guard
+  pattern + runTimeoutSec. paid-jobs + job-clock-skew + config + near-config 58/58. The full paywall suite exceeds this
+  shell's 180 s call limit and agent-jobs.test.ts needs DuckDB: the PC's -Test proves the rest.
+- DEVIATION from design-34 §1 (AI choice, to confirm): the question is held by the console with the offer (never sent to a
+  model, the analyst or the gateway before payment), not sent with the release; the release carries no body because the
+  wallet bundle (services/web payNearRelease) and the agent post it empty. Stricter variant (sizes only before payment) =
+  a services/web bundle change, later.
+
+## design-34 ARCH-636 + ARCH-638 console estimate-first offers (chat near-ai-impl-9, 2026-11-12 ~18:30Z) - written, unit-tested in the PC's Linux shell
+- NEW test-console/console/offers.ts: offerConfig (--offer-mode estimate-first|run-hold default estimate-first,
+  --offer-modes default both, --cost-model default config/cost-model.json REQUIRED for estimate-first (start-up names
+  desk.ps1 -Calibrate), --offer-max-tokens 2048, --offer-size-tolerance-pct 10), folderSize (stat only, nothing opened),
+  crossaskBasis (packages/offer checkBasis), withinBasis (409 when the folder grew past the tolerance or gained files),
+  OfferStore (expiry -> job feed expired; drop after a good run).
+- server.ts: POST /offers (host check; same body checks as /jobs/crossask; folder sized, priced by quoteOffer with the
+  cost model, registered with the paywall run:true, AP2-signed with dev.chainaim.job.mode = estimate-first, held; logs ids,
+  amounts, sizes only); runOffer = the /internal/jobs/:id/run hook (re-size -> 409; crossAsk with the basis's retries,
+  rows, prompt size and max_tokens on every call; more calls than priced -> 409; no result / no receipt -> 422; else held
+  as a job with receipt priceUsd = estimate, actualUsd = metered, quoteBasis.pricing = estimate-first; job feed quoted with
+  metered steps and the paid total; attestation started; overrun logged). /jobs/config gains offers {mode, modes}. Release
+  relay timeout + crossask timeout when offers are on.
+- jobs.ts: registerJob(..., run?: true); internalHandler(..., run?) adds POST /internal/jobs/:id/run (held job answered, not
+  re-run). ap2.ts: optional mode in dev.chainaim.job. packages/offer: OfferBasis scan/mask split (strict tsc narrowing; no
+  behaviour change). console.Dockerfile + .dockerignore: packages/offer (lesson 1). up.ps1 -OfferMode auto|estimate-first|
+  run-hold (auto = estimate-first when config\cost-model.json exists) -OfferModes.
+- Tests (Linux): offers.test.ts 4 (new), jobs.test.ts +1 (run route), ap2 unchanged 14/14 together; console-docker 23/23
+  (packages/offer copied); check-deps OK; desk + compose 31/31; strict tsc on server.ts/offers.ts/paywall app.ts/offer OK.
+- NOT yet: console integration test (needs DuckDB: PC only), page mode choice (ARCH-642), agent offerMode, desk guard for up.ps1.
+
+## design-34 ARCH-642 tab 03 pricing choice + agent offerMode (chat near-ai-impl-9, 2026-11-12 ~19:15Z) - written, tested in the PC's Linux shell; NOT run on the PC
+- paid-jobs.html: "Pricing: Estimate first (pay before any work) · Run first (ChainAim works before you agree...)" shown when
+  /jobs/config offers both (default its offers.mode); Me + estimate first -> POST /offers, "Price N USDC, estimated before any
+  work (files, at most N model calls) ... Nothing has run yet", button "Pay and run"; run first / a console without offers ->
+  /jobs/crossask and "Pay" exactly as before; the agent run carries offerMode; agent step "estimated" shown.
+- Agent: agent-jobs-core.ts RunRequest.offerMode (checked), RunDeps.defaultOfferMode, POST /offers when estimate-first (404 ->
+  "this console does not offer estimate-first... run desk.ps1 -Calibrate"), event estimated; agent-jobs.ts --offer-mode
+  (default estimate-first, D5); up.ps1 passes the console's mode to the agent. scripts/agent-ask.ts --offer-mode (default
+  estimate-first) + step line; desk.ps1 -AgentAsk -OfferMode estimate-first|run-hold (default estimate-first).
+- Tests (Linux): console-agent ARCH-642 4 new + ARCH-309 9/9; paid-jobs-receipt 13/13 (Me-path line pattern updated);
+  agent-ap2 12/12 (+2: estimate-first path runs once inside the paid release; refused before signing runs nothing),
+  agent-policy 11, agent-receipt 14, agent-receipt-fields 3 (anchor updated); agent-ask 45 with desk; desk.test.ts +1 guard
+  (up.ps1 offers, -AgentAsk -OfferMode). console-paid-jobs.test.ts: /jobs/config deepEqual + offers (lesson 6) and a NEW
+  ARCH-636/637/638 describe (no model call at estimate; 402 for the estimate; run once, then held; folder grown -> 409;
+  missing cost model stops start-up naming -Calibrate; run-hold only -> no /offers): DuckDB -> PC only (syntax-checked here).
+- 2026-11-12 ~18:35Z owner -Test: root exit 1 (analyst 234, paywall 344/344). Root output scrolled out of the window, so the
+  root suite was run in the PC's Linux shell with DuckDB's Linux binding from /tmp/duck (NODE_PATH; nothing added to the repo):
+  the one failure was my new ARCH-636 test's leak check matching "sql" inside the basis field "sqlRetries". FIX: the check
+  looks for "result": / "answer": / "sql": fields and the data (MARKER, "There are 3", count(*)). Then root = console-paid-jobs
+  30 pass + 1 skip, scripts/test 158/158, packages + gateway + test-console 520/520 = 709, 0 fail.
+- 2026-11-12 ~19:00Z owner live tab 03 (ERPNext Orion "Credit limit exposure", AI agent t02, estimate first): estimated 0.05
+  (nothing run), signed quote OK, then t02's policy refused "attested route ✗": POST /offers always said attested false. FIX
+  (ARCH-636/638): jobs.ts attestableModels(catalog) (a model whose every deployment says attest) -> PaidJobsConfig.attestable;
+  offers.ts offerModels/attestedRoute (every model the run may call is attestable; exact SQL calls only the answer model);
+  /offers answers it and holds it; runOffer refuses (422, not charged) when an attested estimate's run returns a call without
+  attestation evidence. offers+jobs 13/13; console-paid-jobs + offers + jobs 43 pass/1 skip; console-agent + docker +
+  test-console 109/109 (Linux, DuckDB from /tmp); strict tsc server.ts OK.

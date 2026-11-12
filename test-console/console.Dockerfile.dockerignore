@@ -7,6 +7,8 @@
 !packages/receipt/src
 !packages/ap2/package.json
 !packages/ap2/src
+!packages/offer/package.json
+!packages/offer/src
 !services/web/src/balance.ts
 !services/web/src/near-wallets.ts
 !config

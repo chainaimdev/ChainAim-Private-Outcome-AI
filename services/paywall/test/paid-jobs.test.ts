@@ -60,7 +60,13 @@ describe("ARCH-106 configuration", () => {
     for (const bad of [{ PAID_JOBS_KEY: "short-key" }, { PAID_JOBS_RESULT_URL: "" }]) {
       try { loadConfig({ ...env, ...bad }); } catch (e) { assert.equal((e as Error).message.includes(JOBS_KEY), false); }
     }
-    assert.deepEqual(loadConfig(env).paidJobs, { key: JOBS_KEY, resultUrl: "http://host.docker.internal:8731", ttlSec: 900, clockSkewSec: 30, max: 1000 });
+    assert.deepEqual(loadConfig(env).paidJobs, { key: JOBS_KEY, resultUrl: "http://host.docker.internal:8731", ttlSec: 900, clockSkewSec: 30, max: 1000, runTimeoutSec: 300 });
+  });
+  it("ARCH-637: PAID_JOBS_RUN_TIMEOUT_SEC: default 300, and 30 s under XRPL_MAX_TIMEOUT_SECONDS so the signed payment outlives the run", () => {
+    assert.equal(loadConfig({ ...env, PAID_JOBS_RUN_TIMEOUT_SEC: "570" }).paidJobs?.runTimeoutSec, 570);
+    assert.throws(() => loadConfig({ ...env, PAID_JOBS_RUN_TIMEOUT_SEC: "571" }), /PAID_JOBS_RUN_TIMEOUT_SEC must be from 1 to 570 \(30 s under XRPL_MAX_TIMEOUT_SECONDS, 600 s/);
+    assert.throws(() => loadConfig({ ...env, PAID_JOBS_RUN_TIMEOUT_SEC: "0" }), /PAID_JOBS_RUN_TIMEOUT_SEC/);
+    assert.equal(loadConfig({ ...env, XRPL_MAX_TIMEOUT_SECONDS: "900", PAID_JOBS_RUN_TIMEOUT_SEC: "870" }).paidJobs?.runTimeoutSec, 870);
   });
 });
 
@@ -74,7 +80,10 @@ describe("paid jobs (PAID_JOBS=on, PAY_RAILS=xrpl,near)", () => {
   // The console's internal listener: held results by job id, x-jobs-key checked.
   const held = new Map<string, unknown>();
   const consoleSeen: { method: string; path: string; key: string | undefined }[] = [];
-  const consoleState = { failGet: false, failReleased: false };
+  const consoleState = { failGet: false, failReleased: false, runStatus: 200 as 200 | 409 | 422 };
+  /** ARCH-637: estimate-first offers the stand-in runs only when asked (POST /internal/jobs/:id/run), counted per id. */
+  const offers = new Map<string, unknown>();
+  const runs = new Map<string, number>();
   const consoleServer: Server = createServer((req, res) => {
     req.resume();
     req.on("end", () => {
@@ -84,6 +93,15 @@ describe("paid jobs (PAID_JOBS=on, PAY_RAILS=xrpl,near)", () => {
       if (key !== JOBS_KEY) return send(401, { error: "x-jobs-key is missing or wrong" });
       const get = /^\/internal\/jobs\/([0-9a-f]{32})$/.exec(req.url!);
       const rel = /^\/internal\/jobs\/([0-9a-f]{32})\/released$/.exec(req.url!);
+      const run = /^\/internal\/jobs\/([0-9a-f]{32})\/run$/.exec(req.url!);
+      if (req.method === "POST" && run) {
+        runs.set(run[1], (runs.get(run[1]) ?? 0) + 1);
+        if (!offers.has(run[1])) return send(404, { error: "no such job" });
+        if (consoleState.runStatus === 409) return send(409, { error: "the folder has grown since the estimate (re-estimate it)" });
+        if (consoleState.runStatus === 422) return send(422, { error: "the job did not produce a result" });
+        held.set(run[1], offers.get(run[1]));
+        return send(200, { jobId: run[1], result: offers.get(run[1]) });
+      }
       if (req.method === "GET" && get) {
         if (consoleState.failGet || !held.has(get[1])) return send(404, { error: "no such job" });
         return send(200, { jobId: get[1], result: held.get(get[1]) });
@@ -149,6 +167,7 @@ describe("paid jobs (PAID_JOBS=on, PAY_RAILS=xrpl,near)", () => {
     consoleSeen.length = 0;
     consoleState.failGet = false;
     consoleState.failReleased = false;
+    consoleState.runStatus = 200;
     logs.length = 0;
     // Time only moves forward, past every job an earlier test registered (at most 600 s), so the cap of 3 is per test.
     now += 700_000;
@@ -161,6 +180,14 @@ describe("paid jobs (PAID_JOBS=on, PAY_RAILS=xrpl,near)", () => {
     const jobId = newJobId();
     held.set(jobId, result);
     const r = await register({ jobId, amount, expiresAt: now + 600_000 });
+    assert.equal(r.status, 201, await r.clone().text());
+    return jobId;
+  }
+  /** ARCH-637: an estimate-first offer: registered with run: true, nothing run or held yet. */
+  async function offer(amount: string, result: unknown = { answer: `the answer to ${MARKER}`, rows: [{ who: MARKER }] }): Promise<string> {
+    const jobId = newJobId();
+    offers.set(jobId, result);
+    const r = await register({ jobId, amount, expiresAt: now + 600_000, run: true });
     assert.equal(r.status, 201, await r.clone().text());
     return jobId;
   }
@@ -366,5 +393,58 @@ describe("paid jobs (PAID_JOBS=on, PAY_RAILS=xrpl,near)", () => {
       assert.equal(l.includes(MARKER), false, l);
       assert.equal(l.includes(JOBS_KEY), false, l);
     }
+  });
+
+  // ---- ARCH-637 estimate-first: verify -> run -> settle ----
+  it("ARCH-637: an unpaid release of an offer is quoted (402) and the console is never asked to run it", async () => {
+    const id = await offer("20000");
+    const q = await quote(id);
+    assert.equal(q.accepts[0].amount, "20000");
+    assert.equal(runs.get(id) ?? 0, 0, "no work before the go-ahead");
+    assert.equal(consoleSeen.some((c) => c.path.includes(id)), false);
+  });
+
+  it("ARCH-637: a paid release runs the offer once, after the payment is verified, then settles and returns the result", async () => {
+    const id = await offer("20000");
+    const { header } = await signedHeader(id);
+    assert.equal(runs.get(id) ?? 0, 0);
+    const r = await pay(id, header);
+    assert.equal(r.status, 200, await r.clone().text());
+    assert.deepEqual((await r.json()).rows, [{ who: MARKER }]);
+    assert.equal(runs.get(id), 1);
+    assert.equal(double.state.transfers.length, 1, "settled once");
+    assert.equal(double.state.transfers[0].amount, 20000n);
+    await waitFor(() => consoleSeen.some((c) => c.path === `/internal/jobs/${id}/released`));
+    const call = consoleSeen.find((c) => c.path === `/internal/jobs/${id}/run`)!;
+    assert.deepEqual([call.method, call.key], ["POST", JOBS_KEY]);
+    assert.equal((await fetch(releaseUrl(id), { method: "POST" })).status, 409, "released: not payable again");
+  });
+
+  for (const status of [409, 422] as const) {
+    it(`ARCH-637 ARCH-611: a run the console refuses (${status}) settles nothing; the offer may be paid again`, async () => {
+      const id = await offer("20000");
+      consoleState.runStatus = status;
+      const r = await pay(id, (await signedHeader(id)).header);
+      assert.equal(r.status, status);
+      assert.match((await r.json()).error.message, /you were not charged/);
+      assert.equal(double.state.transfers.length, 0, "the signed delegate was never submitted");
+      consoleState.runStatus = 200;
+      const again = await pay(id, (await signedHeader(id)).header);
+      assert.equal(again.status, 200, "payable again after an unsettled release");
+      assert.equal(double.state.transfers.length, 1);
+    });
+  }
+
+  it("ARCH-637: a held job (no run) is released as before, without a run call", async () => {
+    const id = await job("2000");
+    assert.equal((await pay(id, (await signedHeader(id)).header)).status, 200);
+    assert.equal(runs.get(id) ?? 0, 0);
+    assert.ok(consoleSeen.some((c) => c.method === "GET" && c.path === `/internal/jobs/${id}`));
+  });
+
+  it("ARCH-637: run must be true or left out", async () => {
+    const r = await register({ jobId: newJobId(), amount: "100", expiresAt: now + 60_000, run: "yes" });
+    assert.equal(r.status, 400);
+    assert.match((await r.json()).error.message, /run must be true/);
   });
 });

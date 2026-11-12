@@ -16,7 +16,8 @@ test("ARCH-613 both payment paths send the request through withReceiptFields (Me
   const wrap = js.slice(js.indexOf("postData = async (url, body) =>"));
   assert.match(wrap, /const sent = withReceiptFields\(body\);/);
   assert.match(wrap, /if \(agentChosen\(\)\) return agentStep\(sent\);/);
-  assert.match(wrap, /const job = await free\("\/jobs\/crossask", sent\);/);
+  // privateAI-design-34 ARCH-642: the Me path posts /offers (estimate first) or /jobs/crossask (run first), both with sent.
+  assert.match(wrap, /const job = await free\(modeChosen\(\) === "estimate-first" \? "\/offers" : "\/jobs\/crossask", sent\);/);
   assert.ok(!/free\("\/jobs\/crossask", body\)/.test(wrap) && !/agentStep\(body\)/.test(wrap), "never the bare body");
 });
 

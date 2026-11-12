@@ -9,7 +9,11 @@
 import { InvoiceBook, invoiceIdOf } from "./invoices.ts";
 
 /** What the console registers. */
-export type Job = { jobId: string; amount: string; expiresAt: number };
+/**
+ * run (privateAI-design-34 ARCH-637): an estimate-first offer. Nothing has run yet: the paid release asks the console to run
+ * it (POST /internal/jobs/:id/run) after the payment is verified and before it is settled. Absent = a held job (run-hold).
+ */
+export type Job = { jobId: string; amount: string; expiresAt: number; run?: true };
 export type JobState = "open" | "expired" | "released" | "unknown";
 
 export const JOB_ID = /^[0-9a-f]{32}$/;
@@ -52,6 +56,11 @@ export class JobBook {
     if (!j) return "unknown";
     if (j.released) return "released";
     return j.expiresAt <= this.now() ? "expired" : "open";
+  }
+
+  /** True for an estimate-first offer (registered with run: true): its release runs it. */
+  isRun(jobId: string): boolean {
+    return this.jobs.get(jobId)?.run === true;
   }
 
   /** The amount of an open job, or undefined. */
@@ -139,12 +148,13 @@ export class JobInvoices {
  * console's clock to run that far ahead of this one (PAID_JOBS_CLOCK_SKEW_SEC); 0 is the strict check.
  */
 export function parseJob(body: unknown, now: number, ttlSec: number, clockSkewSec = 0): Job | { error: string } {
-  const b = body as { jobId?: unknown; amount?: unknown; expiresAt?: unknown } | null;
+  const b = body as { jobId?: unknown; amount?: unknown; expiresAt?: unknown; run?: unknown } | null;
   if (typeof b !== "object" || b === null) return { error: "body must be a JSON object {jobId, amount, expiresAt}" };
   if (typeof b.jobId !== "string" || !JOB_ID.test(b.jobId)) return { error: "jobId must be 32 lowercase hex characters" };
   if (typeof b.amount !== "string" || !/^[1-9]\d{0,30}$/.test(b.amount)) return { error: "amount must be a positive whole number of USDC base units, as a string" };
   if (typeof b.expiresAt !== "number" || !Number.isInteger(b.expiresAt)) return { error: "expiresAt must be a time in milliseconds since 1970" };
   if (b.expiresAt <= now) return { error: "expiresAt must be in the future" };
   if (b.expiresAt > now + (ttlSec + clockSkewSec) * 1000) return { error: `expiresAt must be at most PAID_JOBS_TTL_SEC (${ttlSec} s) from now, plus PAID_JOBS_CLOCK_SKEW_SEC (${clockSkewSec} s) for clock differences` };
-  return { jobId: b.jobId, amount: b.amount, expiresAt: b.expiresAt };
+  if (b.run !== undefined && b.run !== true) return { error: "run must be true (an estimate-first offer) or left out (a held job)" };
+  return { jobId: b.jobId, amount: b.amount, expiresAt: b.expiresAt, ...(b.run === true ? { run: true as const } : {}) };
 }

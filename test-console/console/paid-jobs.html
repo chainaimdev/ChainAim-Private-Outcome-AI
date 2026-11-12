@@ -7,6 +7,10 @@
      with --agent-service), "Who pays?" offers "AI agent" and a tenant picker. Then Ask posts to /agent/crossask: the
      tenant's agent runs the job, pays it from the tenant's NEAR account, and the page shows its steps live, then the
      released result in the same renderer. "Me" is the Intear flow above, unchanged.
+     Estimate first (privateAI-design-34 ARCH-642, owner D4/D5): when GET /jobs/config offers both modes, "Pricing:" lets
+     the buyer pick "Estimate first" (the console's default) or "Run first". Estimate first: Me posts POST /offers (a firm
+     price from sizes, nothing run) and "Pay and run" pays it, the job running inside the paid release; the AI agent gets
+     offerMode with its run. A console without offers (or with run-hold only) behaves exactly as before.
      Receipts (privateAI-design-32 ARCH-613/615): both paths send datasetId (the picked dataset's config id) and templateLabel
      (the picked template's label, only while the question is still that template's text) so the console's receipt names
      them; after a paid release, when GET /jobs/config says receipts are on, GET /jobs/<id>/receipt is shown with its key id
@@ -37,7 +41,20 @@
   label.className = "paybox";
   const tick = document.createElement("input");
   tick.type = "checkbox"; tick.id = "xpayNear";
-  label.append(tick, " Pay with USDC · NEAR (run, see the total, then pay to see the result)");
+  label.append(tick, " Pay with USDC · NEAR");
+  // privateAI-design-34 ARCH-642 (owner D5): how the job is priced, when /jobs/config offers both (default: its offers.mode).
+  const modeBox = document.createElement("div");
+  modeBox.id = "xpayMode"; modeBox.hidden = true;
+  const modeChoice = (id, text) => {
+    const l = document.createElement("label");
+    const r = document.createElement("input");
+    r.type = "radio"; r.name = "xpayMode"; r.id = id;
+    l.append(r, ` ${text} `);
+    return { l, r };
+  };
+  const estimateFirst = modeChoice("xpayModeEstimate", "Estimate first (pay before any work)");
+  const runFirst = modeChoice("xpayModeRun", "Run first (ChainAim works before you agree; the result is held until you pay)");
+  modeBox.append("Pricing: ", estimateFirst.l, "· ", runFirst.l);
   const info = document.createElement("span");
   info.className = "muted"; info.id = "xpayInfo";
   info.textContent = "Off: Ask runs the job free, as before.";
@@ -68,7 +85,7 @@
   // Signed Job Evidence Receipt of the paid job (ARCH-615): filled after the release, only when the console has receipts on.
   const rcpt = document.createElement("div");
   rcpt.id = "xreceipt";
-  box.append(label, who, info, pay, proof, rcpt);
+  box.append(label, modeBox, who, info, pay, proof, rcpt);
   ask.closest(".row-actions").after(box);
 
   let config = null;
@@ -92,16 +109,34 @@
     policies = j && j.on === true && Array.isArray(j.tenants) ? j.tenants : null;
     showPolicy();
   }).catch(() => { policies = null; showPolicy(); });
+  /** The pricing mode: estimate-first only when this console offers it (/jobs/config offers.modes); otherwise run-hold, as before. */
+  const modeChosen = () => {
+    const modes = config && config.offers && Array.isArray(config.offers.modes) ? config.offers.modes : ["run-hold"];
+    if (!modes.includes("estimate-first")) return "run-hold";
+    if (!modes.includes("run-hold")) return "estimate-first";
+    return runFirst.r.checked ? "run-hold" : "estimate-first";
+  };
+  const showModes = () => {
+    const modes = config && config.offers && Array.isArray(config.offers.modes) ? config.offers.modes : ["run-hold"];
+    modeBox.hidden = !tick.checked || !(modes.includes("estimate-first") && modes.includes("run-hold"));
+    if (!estimateFirst.r.checked && !runFirst.r.checked) { const first = config && config.offers && config.offers.mode === "estimate-first"; estimateFirst.r.checked = first; runFirst.r.checked = !first; }
+  };
   const explain = () => {
     if (!tick.checked || !config) return;
+    showModes();
     showPolicy();
+    if (modeChosen() === "estimate-first") {
+      if (agentChosen()) { const t = tenantOf(); say(`On, AI agent, estimate first: ChainAim prices the job from its sizes and does no work; the agent for ${t.name} checks the signed estimate and its policy, pays from ${t.accountId}, and only then does the job run. A run that fails is never charged.`); return; }
+      say(`On, estimate first: Ask shows a firm price from the job's sizes; nothing has run yet. Press Pay in ${config.walletName} and the job runs then; a run that fails is never charged. An estimate stays payable ${config.ttlMin} minutes.`);
+      return;
+    }
     if (agentChosen()) { const t = tenantOf(); say(`On, AI agent: Ask runs the job, and the agent for ${t.name} pays its total from ${t.accountId} by itself (no pop-up); its steps show below, then the result.`); return; }
     say(`On: Ask runs the job and shows its total; nothing is shown or charged until you press Pay in ${config.walletName}. A quote stays payable ${config.ttlMin} minutes.`);
   };
   tick.onchange = async () => {
     pay.replaceChildren();
     who.hidden = !tick.checked || agent === null;
-    if (!tick.checked) { say("Off: Ask runs the job free, as before."); return; }
+    if (!tick.checked) { modeBox.hidden = true; say("Off: Ask runs the job free, as before."); return; }
     try {
       const r = await fetch("/jobs/config");
       config = await r.json();
@@ -111,6 +146,7 @@
     } catch (e) { config = null; say(e.message, true); }
   };
   for (const r of [me.r, bot.r]) r.onchange = () => { tenantPick.disabled = !bot.r.checked; pay.replaceChildren(); explain(); };
+  for (const r of [estimateFirst.r, runFirst.r]) r.onchange = () => { pay.replaceChildren(); explain(); };
   tenantPick.onchange = explain;
   // The agent's tenants, when the console relays to an agent service; without one, /agent/config is 404 and nothing changes.
   fetch("/agent/config").then(async (r) => {
@@ -264,7 +300,7 @@
     const CHECK = { not_expired: (c) => "quote still valid", attested_route: (c) => "attested route", max_per_job: (c) => `at most ${c.limit} a job (quote ${c.value})`,
       daily_cap: (c) => `${c.limit} a day (with this job ${c.value})`, auto_approve: (c) => `pays by itself up to ${c.limit}` };
     say(`The AI agent for ${t.name} is running and paying the job…`);
-    const r = await fetch("/agent/crossask", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ...body, tenant: t.id }) });
+    const r = await fetch("/agent/crossask", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ...body, tenant: t.id, offerMode: modeChosen() }) });
     if (!r.ok || !/^text\/event-stream/i.test(r.headers.get("content-type") ?? "")) {
       const j = await r.json().catch(() => ({}));
       throw new Error((typeof j.error === "string" ? j.error : j.error?.message) ?? `HTTP ${r.status}`);
@@ -287,6 +323,7 @@
           step(by(AGENT), found.length ? `Question masked on this PC before the agent's model saw it: ${found.map(([k, n]) => `${k} ×${n}`).join(", ")}` : "Question checked on this PC before the agent's model saw it: nothing to mask");
         } else if (type === "tool_called") step(by(AGENT), "The agent asked ChainAim to run the job");
         else if (type === "job_ran" && (ranJob = /^[0-9a-f]{32}$/.test(String(d.jobId)) ? String(d.jobId) : null, true)) step(by("ChainAim"), `Job run and held (id ${String(d.jobId).slice(0, 8)}…); the result stays hidden until paid`);
+        else if (type === "estimated" && (ranJob = /^[0-9a-f]{32}$/.test(String(d.jobId)) ? String(d.jobId) : null, true)) step(by("ChainAim"), `Estimated from the job's sizes (id ${String(d.jobId).slice(0, 8)}…): nothing has run yet; it runs only after the payment`);
         else if (type === "quoted") { quoted = d; step(by("ChainAim"), `Quoted ${Number(d.totalUsd)} USDC on ${d.network} to ${d.payTo}`); }
         else if (type === "quote_signed") step(by(AGENT), `Quote signed by ChainAim ✓ · key id ${String(d.kid).slice(0, 8)}… · price, payee and network match`);
         else if (type === "policy") {
@@ -395,9 +432,12 @@
     return new Promise((resolve, reject) => {
       const total = document.createElement("p");
       total.id = "xpayTotal";
-      total.textContent = `Total cost ${Number(job.totalUsd)} USDC (expires ${new Date(job.expiresAt).toLocaleTimeString()}) · ${job.network} · to ${job.payTo}`;
+      const estimated = job.mode === "estimate-first";
+      total.textContent = estimated
+        ? `Price ${Number(job.totalUsd)} USDC, estimated before any work (${job.basis ? `${job.basis.files} file(s), at most ${job.basis.modelCalls} model call(s)` : "from the job's sizes"}; expires ${new Date(job.expiresAt).toLocaleTimeString()}) · ${job.network} · to ${job.payTo}. Nothing has run yet: the job runs when you pay, and a run that fails is not charged.`
+        : `Total cost ${Number(job.totalUsd)} USDC (expires ${new Date(job.expiresAt).toLocaleTimeString()}) · ${job.network} · to ${job.payTo}`;
       const button = document.createElement("button");
-      button.type = "button"; button.id = "xpayGo"; button.textContent = "Pay";
+      button.type = "button"; button.id = "xpayGo"; button.textContent = estimated ? "Pay and run" : "Pay";
       const cancel = document.createElement("button");
       cancel.type = "button"; cancel.className = "ghost"; cancel.textContent = "Don't pay";
       pay.replaceChildren(total, button, cancel);
@@ -428,7 +468,7 @@
           if (!payer) { say(`Connecting ${config.walletName}…`); payer = await w.nearConnect(config.wallet, job.network); }
           say(`Approve the payment of ${Number(job.totalUsd)} USDC in ${config.walletName}…`);
           const quote = { network: job.network, asset: job.asset, payTo: job.payTo, amount: job.amount };
-          const r = await w.nearPayAndRelease(payer, config.wallet, quote, `/paid/jobs/${job.jobId}/release`, () => say("Payment signed, waiting for the result…"));
+          const r = await w.nearPayAndRelease(payer, config.wallet, quote, `/paid/jobs/${job.jobId}/release`, () => say(estimated ? "Payment signed: the job is running now, then the payment settles…" : "Payment signed, waiting for the result…"));
           pay.replaceChildren();
           if (r.error) { reject(new Error(r.error + (r.transaction ? ` (transaction ${r.transaction})` : ""))); return; }
           const explorer = `https://${job.network === "near:mainnet" ? "" : "testnet."}nearblocks.io/txns/${r.transaction}`;
@@ -452,7 +492,7 @@
     pay.replaceChildren(); proof.replaceChildren(); rcpt.replaceChildren();
     const sent = withReceiptFields(body);
     if (agentChosen()) return agentStep(sent);
-    const job = await free("/jobs/crossask", sent);
+    const job = await free(modeChosen() === "estimate-first" ? "/offers" : "/jobs/crossask", sent);
     return payStep(job);
   };
 })();

@@ -43,6 +43,8 @@ try {
     options: {
       tenant: { type: "string" }, dataset: { type: "string" }, template: { type: "string", default: "1" }, question: { type: "string" },
       set: { type: "string" }, root: { type: "string", default: "samples" }, "answer-model": { type: "string", default: "default" }, "query-model": { type: "string", default: "default" },
+      // privateAI-design-34 D5: estimate-first (default: priced from sizes, runs only after payment) or run-hold.
+      "offer-mode": { type: "string", default: "estimate-first" },
       api: { type: "string", default: "http://127.0.0.1:8735" }, "out-dir": { type: "string", default: join(REPO, "runtime", "agent-ask") },
       "show-rows": { type: "string", default: "20" }, "receipt-poll-ms": { type: "string", default: "1000" }, "receipt-poll-max": { type: "string", default: "15" },
     },
@@ -84,6 +86,8 @@ if (o!["answer-model"] === "default") {
 const built = buildRun(tenant, ds.body.datasets as ListedDataset[], { dataset, template: o!.template!, question: o!.question, set: o!.set, answerModel: o!["answer-model"]!, queryModel: o!["query-model"]! }, defaultAnswer);
 if ("error" in built) usage(built.error);
 const { run } = built as Exclude<typeof built, { error: string }>;
+if (o!["offer-mode"] !== "estimate-first" && o!["offer-mode"] !== "run-hold") usage(`--offer-mode must be estimate-first or run-hold, got ${o!["offer-mode"]}`);
+run.offerMode = o!["offer-mode"]!;
 
 say("RUN", `AI agent for ${t.name} (${tenant}) pays from ${t.accountId}; dataset ${built.datasetLabel}${built.templateLabel ? `, template "${built.templateLabel}"` : ""}; query ${run.model ?? (run.sql ? "none (exact query)" : "console default")}; answer ${run.answerModel ?? "none (table only)"}`);
 say("ASK", run.question);

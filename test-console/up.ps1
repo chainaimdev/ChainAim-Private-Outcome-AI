@@ -42,6 +42,13 @@ this PC (server.ts --mode ui, which forwards every call to the console API in Do
                                                 line, when -PaidJobs is off or no key is found (desk.ps1 -Ap2Key makes one);
                                                 -Ap2 on stops instead, -Ap2 off turns it off. -Ap2KeyName NAME (default
                                                 AP2_SIGNING_KEY), -Ap2TermsUrl URL: the checkout's terms_of_service link.
+  -OfferMode auto|estimate-first|run-hold  [-OfferModes LIST]
+                                                tab 03 paid jobs (privateAI-design-34 D4/D5): estimate-first = price from
+                                                sizes, no work until the buyer pays; run-hold = run, quote, hold, pay to
+                                                release (as before). auto (default): estimate-first when
+                                                config\cost-model.json exists (desk.ps1 -Calibrate), else run-hold with an
+                                                INFO line. -OfferModes: the modes buyers may pick (default both when the
+                                                default is estimate-first; estimate-first alone hides the choice).
   .\test-console\down.ps1                       stop the UI and the compose stack (volumes kept)
 
 What it takes, from files outside the repository (NAME=value; values are never printed or written anywhere):
@@ -118,6 +125,8 @@ param(
   [ValidateSet("on", "off")][string]$Ap2 = "on",
   [string]$Ap2KeyName = "AP2_SIGNING_KEY",
   [string]$Ap2TermsUrl = "https://github.com/chainaimdev/chainaim-private-ai/blob/main/LICENSE",
+  [ValidateSet("auto", "estimate-first", "run-hold")][string]$OfferMode = "auto",
+  [string]$OfferModes = "",
   [int]$AttestPort = 8770,
   [string]$AttestCatalog = "config\generated\catalog.local.json",
   [string]$StateFile = "runtime\compose\last-start.json"
@@ -375,6 +384,23 @@ try {
     if ($consoleCmd -contains "--job-feed-url=$JobFeedUrl") { $consoleCmd += "--job-feed-ap2=on" }
     if ($agentCmd) { $agentCmd += @("--ap2-verify=on", "--ap2-public-key=/app/config/ap2-public-key.jwk.json") }
     Say "OK" "AP2 signed quotes on: whole-cent quotes signed ES256; key from $ap2KeyFrom (not printed)$(if ($agentCmd) { '; the agent verifies them with the pinned key' } else { '' })"
+  }
+  # Tab 03 offer modes (privateAI-design-34 ARCH-636, D4/D5): estimate-first needs the calibrated cost model.
+  if ($PaidJobs -eq "on") {
+    $costModel = Join-Path $repo "config\cost-model.json"
+    $om = $OfferMode
+    if ($om -eq "auto") {
+      if (Test-Path -LiteralPath $costModel) { $om = "estimate-first" }
+      else { $om = "run-hold"; Say "INFO" "estimate-first offers off: no config\cost-model.json (run .\test-console\desk.ps1 -Calibrate); tab 03 runs first and holds the result, as before (-OfferMode estimate-first to require it)" }
+    }
+    if ($om -eq "estimate-first" -and -not (Test-Path -LiteralPath $costModel)) { Stop-Here "-OfferMode estimate-first needs config\cost-model.json: run .\test-console\desk.ps1 -Calibrate first" }
+    $oms = if ($OfferModes) { $OfferModes } elseif ($om -eq "estimate-first") { "estimate-first,run-hold" } else { "run-hold" }
+    if ($oms -notmatch '^(estimate-first|run-hold)(,(estimate-first|run-hold))?$') { Stop-Here "-OfferModes must be estimate-first, run-hold or both separated by a comma" }
+    if (($oms -split ",") -notcontains $om) { Stop-Here "-OfferModes $oms must include the default mode $om" }
+    $consoleCmd += @("--offer-mode=$om", "--offer-modes=$oms", "--cost-model=/app/config/cost-model.json")
+    # The agent's default for a run that names no mode (the page always names one; -AgentAsk too).
+    if ($agentCmd) { $agentCmd += "--offer-mode=$om" }
+    Say "OK" "tab 03 offers: default $om; buyers may pick $oms"
   }
   $ap2Key = $null
   $port = "127.0.0.1:${ApiPort}:${ApiPort}"

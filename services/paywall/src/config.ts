@@ -161,6 +161,12 @@ export type PaidJobsConfig = {
   /** The longest a registered job may stay payable. */
   ttlSec: number;
   /**
+   * privateAI-design-34 ARCH-637: how long the console may take to run an estimate-first offer inside its paid release
+   * (PAID_JOBS_RUN_TIMEOUT_SEC, default 300 = the console's --crossask-timeout-sec). The buyer's signed NEAR delegate must
+   * still be valid when the run ends and the payment settles (V-P2), so it must stay 30 s under XRPL_MAX_TIMEOUT_SECONDS.
+   */
+  runTimeoutSec?: number;
+  /**
    * Allowed difference between the console's clock and this one when checking a job's expiresAt (PAID_JOBS_CLOCK_SKEW_SEC,
    * default 30). The console sets expiresAt = its now + --job-ttl-min, which by default equals PAID_JOBS_TTL_SEC, so with
    * no allowance a console clock even 1 ms ahead refused every job (owner test runs 2026-11-10).
@@ -368,7 +374,9 @@ export function loadConfig(env: Record<string, string | undefined>): PaywallConf
     if (clockSkewSec < 0 || clockSkewSec > 300) throw new Error("PAID_JOBS_CLOCK_SKEW_SEC must be from 0 to 300");
     const max = integer("PAID_JOBS_MAX", 1000);
     if (max < 1 || max > 100_000) throw new Error("PAID_JOBS_MAX must be from 1 to 100000");
-    paidJobs = { key: jobsKey, resultUrl: url("PAID_JOBS_RESULT_URL", resultRaw), ttlSec, clockSkewSec, max };
+    const runTimeoutSec = integer("PAID_JOBS_RUN_TIMEOUT_SEC", 300);
+    if (runTimeoutSec < 1 || runTimeoutSec > maxTimeoutSeconds - 30) throw new Error(`PAID_JOBS_RUN_TIMEOUT_SEC must be from 1 to ${maxTimeoutSeconds - 30} (30 s under XRPL_MAX_TIMEOUT_SECONDS, ${maxTimeoutSeconds} s, so the signed payment is still valid when the run ends)`);
+    paidJobs = { key: jobsKey, resultUrl: url("PAID_JOBS_RESULT_URL", resultRaw), ttlSec, clockSkewSec, max, runTimeoutSec };
   }
   if (near) {
     for (const [name, p] of Object.entries(prices)) {

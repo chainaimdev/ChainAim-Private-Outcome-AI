@@ -31,7 +31,7 @@ test("ARCH-106 PAID_JOBS_CLOCK_SKEW_SEC is read with paid jobs on, default 30, 0
   const config = readFileSync(new URL("../src/config.ts", import.meta.url), "utf8");
   assert.match(config, /const clockSkewSec = integer\("PAID_JOBS_CLOCK_SKEW_SEC", 30\);/);
   assert.match(config, /if \(clockSkewSec < 0 \|\| clockSkewSec > 300\)/);
-  assert.match(config, /ttlSec, clockSkewSec, max \};/);
+  assert.match(config, /ttlSec, clockSkewSec, max, runTimeoutSec \};/); // + runTimeoutSec (privateAI-design-34 ARCH-637)
   const app = readFileSync(new URL("../src/app.ts", import.meta.url), "utf8");
   assert.match(app, /parseJob\(body, \(deps\.now \?\? Date\.now\)\(\), paidJobs\.ttlSec, paidJobs\.clockSkewSec \?\? 0\)/);
 });

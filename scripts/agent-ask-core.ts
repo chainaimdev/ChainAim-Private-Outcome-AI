@@ -81,6 +81,8 @@ export function stepLine(tenant: string, type: string, d: Record<string, unknown
     }
     case "tool_called": return `${A} The agent asked ChainAim to run the job`;
     case "job_ran": return `[ChainAim] Job run and held (id ${String(d.jobId).slice(0, 8)}…); the result stays hidden until paid`;
+    // privateAI-design-34 ARCH-642: estimate first, nothing run before the payment.
+    case "estimated": return `[ChainAim] Estimated from the job's sizes (id ${String(d.jobId).slice(0, 8)}…): nothing has run yet; it runs only after the payment`;
     case "quoted": return `[ChainAim] Quoted ${Number(d.totalUsd)} USDC on ${String(d.network)} to ${String(d.payTo)}`;
     // privateAI-design-33 ARCH-630: ChainAim's signed quote, checked by the agent with the pinned AP2 key.
     case "quote_signed": return `${A} Quote signed by ChainAim OK · key id ${String(d.kid).slice(0, 8)}… · price, payee and network match`;

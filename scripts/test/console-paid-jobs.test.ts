@@ -385,7 +385,8 @@ describe("ARCH-101 / ARCH-112 the page and the relay", () => {
     const cfg = await call(consolePort, "GET", "/jobs/config");
     // defaultPayer (owner 2026-11-07): "me" unless the console runs with --default-payer agent
     // receipts (privateAI-design-32 ARCH-615): false unless the console runs with --receipts on
-    assert.deepEqual(JSON.parse(cfg.text), { wallet: "intear-wallet", walletName: "Intear Wallet", ttlMin: 15, defaultPayer: "me", attest: null, receipts: false });
+    // offers (privateAI-design-34 ARCH-642): estimate-first by default, since the repository has config/cost-model.json
+    assert.deepEqual(JSON.parse(cfg.text), { wallet: "intear-wallet", walletName: "Intear Wallet", ttlMin: 15, defaultPayer: "me", attest: null, receipts: false, offers: { mode: "estimate-first", modes: ["estimate-first", "run-hold"] } });
   });
 
   test("ARCH-112: the release relay adds no gateway key and logs neither the payment nor the result", async () => {
@@ -526,3 +527,68 @@ describe("ARCH-635 the free /crossask returns step timings only when asked (desk
     assert.equal("timings" in JSON.parse((await free({ timings: "yes" })).text), false, "only the boolean true turns them on");
   });
 });
+
+describe("privateAI-design-34 ARCH-636 ARCH-637 ARCH-638 estimate-first offers on the real console, analyst, gateway and paywall", () => {
+  const offerAt = (body: Record<string, unknown>, port = consolePort) => call(port, "POST", "/offers", { "content-type": "application/json" }, JSON.stringify(body));
+  const runAt = (jobId: string) => call(internalPort, "POST", `/internal/jobs/${jobId}/run`, { "x-jobs-key": JOBS_KEY });
+
+  test("ARCH-636: POST /offers prices from sizes only: no model call, no result, the paywall quotes the estimate and nothing runs before the run", async () => {
+    modelCalls = 0;
+    const r = await offerAt({ folder: data, question: QUESTION, model: MODEL, answerModel: MODEL, phrase: "llm" });
+    assert.equal(r.status, 200, r.text);
+    const j = JSON.parse(r.text);
+    assert.equal(modelCalls, 0, "no work before payment");
+    assert.equal(j.mode, "estimate-first");
+    assert.match(j.offerId, /^[0-9a-f]{32}$/); assert.equal(j.jobId, j.offerId);
+    assert.deepEqual([j.basis.files, j.basis.modelCalls], [1, 3], "1 + sqlRetries query calls + the answer call");
+    // No result, answer or query field, and none of the data ("sqlRetries" in the basis is a limit, not a query).
+    for (const leak of ['"result":', '"answer":', '"sql":', MARKER, "There are 3", "count(*)"]) assert.equal(r.text.includes(leak), false, leak);
+    const q = await fetch(`${paywallUrl}/v1/jobs/${j.jobId}/release`, { method: "POST" });
+    assert.equal(q.status, 402);
+    assert.equal(JSON.parse(Buffer.from(q.headers.get("payment-required")!, "base64").toString("utf8")).accepts[0].amount, j.amount);
+    assert.equal(modelCalls, 0, "an unpaid release runs nothing either");
+    assert.equal((await internal("GET", `/internal/jobs/${j.jobId}`, JOBS_KEY)).status, 404, "nothing is held: there is no result yet");
+  });
+
+  test("ARCH-637 ARCH-638: the run (as the paywall's paid release asks for it) runs once within the basis and answers the result", async () => {
+    const j = JSON.parse((await offerAt({ folder: data, question: QUESTION, model: MODEL, answerModel: MODEL, phrase: "llm" })).text);
+    modelCalls = 0;
+    const r = await runAt(j.jobId);
+    assert.equal(r.status, 200, r.text);
+    const body = JSON.parse(r.text);
+    assert.equal(body.jobId, j.jobId);
+    assert.equal(Number(body.result.result.rows[0].n), 3);
+    assert.equal(modelCalls, 2, "the query and the worded answer, now and not before");
+    const again = await runAt(j.jobId);
+    assert.equal(again.status, 200, "a retried release answers the held result");
+    assert.equal(modelCalls, 2, "not run twice");
+    assert.match(consoleProc.out(), new RegExp(`"event":"offer_ran","offerId":"${j.jobId}"`));
+  });
+
+  test("ARCH-638: a folder that grew past the tolerance after the estimate is refused (409) before any model call", async () => {
+    const grow = join(data, "grow");
+    mkdirSync(grow, { recursive: true });
+    writeFileSync(join(grow, "orders.csv"), "order_id,amount\n1,10\n");
+    try {
+      const j = JSON.parse((await offerAt({ folder: grow, question: "How many orders?", model: MODEL, phrase: "none" })).text);
+      writeFileSync(join(grow, "more.csv"), "order_id,amount\n2,20\n");
+      modelCalls = 0;
+      const r = await runAt(j.jobId);
+      assert.equal(r.status, 409, r.text);
+      assert.match(JSON.parse(r.text).error, /has 2 data files now, 1 when it was estimated: estimate it again/);
+      assert.equal(modelCalls, 0);
+    } finally { rmSync(grow, { recursive: true, force: true }); }
+  });
+
+  test("ARCH-636: estimate-first without a cost model stops start-up naming desk.ps1 -Calibrate; --offer-modes run-hold starts without one and has no /offers", async () => {
+    const port = await freePort(), iport = await freePort();
+    await assert.rejects(start(consoleArgs(port, iport, { "cost-model": join(dir, "no-cost-model.json") }), consoleReady(port), { PAID_JOBS_KEY: JOBS_KEY }, "the console"), /run \.\\test-console\\desk\.ps1 -Calibrate/);
+    const p2 = await freePort(), i2 = await freePort();
+    const c = await start(consoleArgs(p2, i2, { "cost-model": join(dir, "no-cost-model.json"), "offer-mode": "run-hold", "offer-modes": "run-hold" }), consoleReady(p2), { PAID_JOBS_KEY: JOBS_KEY }, "the console");
+    try {
+      assert.equal((await offerAt({ folder: data, question: QUESTION }, p2)).status, 404);
+      assert.deepEqual(JSON.parse((await call(p2, "GET", "/jobs/config")).text).offers, { mode: "run-hold", modes: ["run-hold"] });
+    } finally { await stop(c); }
+  });
+});
+

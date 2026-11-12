@@ -68,7 +68,7 @@ import { BedrockModel } from "@strands-agents/sdk";
 import { SpendLedger } from "../../../packages/agent-policy/src/index.ts";
 import { loadPinnedKey, type ReceiptCheck } from "./agent-receipt.ts";
 import { loadPinnedJwks, type Ap2Check } from "./agent-ap2.ts";
-import { AccountQueue, loadAgentTenants, loadPolicies, parseRunRequest, payingNetwork, policyViews, publicTenants, runAgentJob, SetupError, sseFrame, type AgentPolicy, type AgentTenant } from "./agent-jobs-core.ts";
+import { AccountQueue, OFFER_MODES, loadAgentTenants, loadPolicies, parseRunRequest, payingNetwork, policyViews, publicTenants, runAgentJob, SetupError, sseFrame, type AgentPolicy, type AgentTenant, type OfferMode } from "./agent-jobs-core.ts";
 import { presidioClient, PROMPT_SCANNERS, PromptScan, type PromptScanner } from "./prompt-scan.ts";
 
 const REPO = fileURLToPath(new URL("../../../", import.meta.url));
@@ -103,6 +103,8 @@ const { values } = parseArgs({
     "receipt-verify": { type: "string", default: "on" },
     "receipt-public-key": { type: "string", default: join(REPO, "config", "receipt-public-key.pem") },
     "ap2-verify": { type: "string", default: "off" },
+    // privateAI-design-34 D5: the mode of a run that names none (POST /run body offerMode overrides it).
+    "offer-mode": { type: "string", default: "estimate-first" },
     "ap2-public-key": { type: "string", default: join(REPO, "config", "ap2-public-key.jwk.json") },
     "ap2-skew-sec": { type: "string", default: "30" },
     "receipt-poll-ms": { type: "string", default: "1000" },
@@ -176,6 +178,8 @@ if (receiptOn) {
   }
 }
 const ap2On = onOff("ap2-verify", values["ap2-verify"]);
+const defaultOfferMode = values["offer-mode"] as OfferMode;
+if (!OFFER_MODES.includes(defaultOfferMode)) fail(`--offer-mode must be ${OFFER_MODES.join(" or ")}, got ${values["offer-mode"]}`);
 const ap2SkewSec = whole("ap2-skew-sec", values["ap2-skew-sec"], 0, 600);
 let ap2Check: Ap2Check | undefined;
 if (ap2On) {
@@ -268,7 +272,7 @@ createServer(async (req, res) => {
       res.on("close", () => { if (!finished) stop.abort(); });
       const timer = setTimeout(() => stop.abort(), runTimeoutMs);
       try {
-        await runAgentJob(run, { tenants: byId, console: consoleUrl, paywall: paywallUrl, scan, promptMask, makeModel, maxTurns, ...(maxAmount ? { maxAmount } : {}), ...(policy ? { policy } : {}), ...(receiptCheck ? { receiptCheck } : {}), ...(ap2Check ? { ap2Check } : {}), queue, tenantLabel, log },
+        await runAgentJob(run, { tenants: byId, console: consoleUrl, paywall: paywallUrl, scan, promptMask, makeModel, maxTurns, ...(maxAmount ? { maxAmount } : {}), ...(policy ? { policy } : {}), ...(receiptCheck ? { receiptCheck } : {}), ...(ap2Check ? { ap2Check } : {}), queue, tenantLabel, log, defaultOfferMode },
           (e) => { if (!res.writableEnded && !res.destroyed) res.write(sseFrame(e)); }, stop.signal);
       } catch (e) {
         if (!res.writableEnded && !res.destroyed) res.write(sseFrame({ type: "error", reason: `the agent service failed: ${e instanceof Error ? e.message : String(e)}` }));

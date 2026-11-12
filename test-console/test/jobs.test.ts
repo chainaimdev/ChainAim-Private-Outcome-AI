@@ -100,3 +100,38 @@ test("ARCH-629: --price-round micro by default, cent under --ap2 on, micro with 
   assert.throws(() => priceRoundOf({ ap2: "on", "price-round": "micro" }), /--ap2 on needs --price-round cent/);
   assert.throws(() => paidJobsConfig({ "price-round": "cent" }, {}), /--price-round needs --paid-jobs on/);
 });
+
+test("ARCH-637 ARCH-638: POST /internal/jobs/:id/run runs an offer through the hook; a job already held is answered, not run again; no hook = 404", async () => {
+  const store = new JobStore(5, 60_000);
+  const ran: string[] = [];
+  const OFFER = "a".repeat(32), REFUSED = "b".repeat(32);
+  const run = async (jobId: string) => {
+    ran.push(jobId);
+    if (jobId === REFUSED) return { status: 409, body: { error: "the folder has grown since the estimate" } };
+    store.hold(held(jobId, Date.now() + 60_000));
+    return { status: 200, body: { jobId, result: RESULT } };
+  };
+  const start = (h: ReturnType<typeof internalHandler>) => new Promise<{ server: Server; port: number }>((ok) => { const server = createServer(h); server.listen(0, "127.0.0.1", () => ok({ server, port: (server.address() as AddressInfo).port })); });
+  const call = (port: number, method: string, path: string, key?: string) => new Promise<{ status: number; body: any }>((resolve, reject) => {
+    const req = request({ host: "127.0.0.1", port, method, path, agent: false, headers: key ? { "x-jobs-key": key } : {} }, (res) => {
+      let t = ""; res.on("data", (d) => (t += d)); res.on("end", () => resolve({ status: res.statusCode!, body: JSON.parse(t) }));
+    });
+    req.on("error", reject); req.end();
+  });
+  const a = await start(internalHandler(store, KEY, undefined, run));
+  const b = await start(internalHandler(new JobStore(5, 60_000), KEY));
+  try {
+    assert.equal((await call(a.port, "POST", `/internal/jobs/${OFFER}/run`)).status, 401, "the key first");
+    assert.deepEqual(await call(a.port, "POST", `/internal/jobs/${OFFER}/run`, KEY), { status: 200, body: { jobId: OFFER, result: RESULT } });
+    assert.deepEqual(await call(a.port, "POST", `/internal/jobs/${OFFER}/run`, KEY), { status: 200, body: { jobId: OFFER, result: RESULT } }, "a retried release after a failed settlement");
+    assert.deepEqual(ran, [OFFER], "run once");
+    assert.deepEqual(await call(a.port, "POST", `/internal/jobs/${REFUSED}/run`, KEY), { status: 409, body: { error: "the folder has grown since the estimate" } });
+    assert.equal((await call(a.port, "GET", `/internal/jobs/${OFFER}/run`, KEY)).status, 404, "POST only");
+    assert.equal((await call(a.port, "POST", "/internal/jobs/NOTHEX/run", KEY)).status, 404);
+    assert.equal((await call(b.port, "POST", `/internal/jobs/${OFFER}/run`, KEY)).status, 404, "a console without offers has no run route");
+    assert.equal((await call(a.port, "POST", `/internal/jobs/${OFFER}/released`, KEY)).status, 200, "released as before");
+  } finally {
+    await new Promise<void>((ok) => a.server.close(() => ok()));
+    await new Promise<void>((ok) => b.server.close(() => ok()));
+  }
+});

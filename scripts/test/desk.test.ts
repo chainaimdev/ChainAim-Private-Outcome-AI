@@ -399,3 +399,16 @@ test("-Ship -ShipRepo admin (2026-11-12): the same test, commit and push for the
   assert.ok(s.indexOf("all admin suites passed") < s.indexOf('@("add"'), "admin tests before anything is staged");
   assert.ok(!/add -A|add \.|"-A"|--force|push -f|reset|checkout|pull|stash/.test(s), "never force, pull, reset, checkout or stash");
 });
+
+test("privateAI-design-34 ARCH-636 ARCH-642: up.ps1 -OfferMode auto (estimate-first when config\\cost-model.json exists) passes the offer flags to the console and the agent; -AgentAsk -OfferMode estimate-first by default", () => {
+  const up = readFileSync(new URL("../../test-console/up.ps1", import.meta.url), "utf8");
+  assert.match(up, /\[ValidateSet\("auto", "estimate-first", "run-hold"\)\]\[string\]\$OfferMode = "auto",/);
+  assert.match(up, /if \(Test-Path -LiteralPath \$costModel\) \{ \$om = "estimate-first" \}/);
+  assert.match(up, /Stop-Here "-OfferMode estimate-first needs config\\cost-model\.json: run \.\\test-console\\desk\.ps1 -Calibrate first"/);
+  assert.match(up, /\$consoleCmd \+= @\("--offer-mode=\$om", "--offer-modes=\$oms", "--cost-model=\/app\/config\/cost-model\.json"\)/);
+  assert.match(up, /if \(\$agentCmd\) \{ \$agentCmd \+= "--offer-mode=\$om" \}/);
+  assert.ok(!/[^\x00-\x7F]/.test(up), "up.ps1 stays ASCII (lesson 4)");
+  assert.match(code, /\[string\]\$OfferMode = "estimate-first",/);
+  const a = code.slice(code.indexOf("if ($AgentAsk) {"), code.indexOf("if ($VerifyJob) {"));
+  assert.match(a, /\$askArgs \+= @\("--offer-mode", \$OfferMode\)/);
+});

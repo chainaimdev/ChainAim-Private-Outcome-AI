@@ -168,6 +168,8 @@ import { datasetFiles, datasetIdOf, receiptConfig, receiptOnRelease, ReceiptStor
 import type { HeldJob, ReceiptHold } from "./jobs.ts";
 import { ap2Answer, ap2Config, signJobCheckout, ucpProfile, type Ap2Hold } from "./ap2.ts";
 import { filesRoot } from "../../packages/receipt/src/index.ts";
+import { quoteOffer } from "../../packages/offer/src/index.ts";
+import { attestedRoute, crossaskBasis, folderSize, OfferStore, offerConfig, withinBasis, type OfferRequest } from "./offers.ts";
 
 const { values: flags } = parseArgs({
   args: process.argv.slice(2),
@@ -216,6 +218,11 @@ const { values: flags } = parseArgs({
     "margin-pct": { type: "string" },
     "min-price-usd": { type: "string" },
     "price-round": { type: "string" },
+    "offer-mode": { type: "string" },
+    "offer-modes": { type: "string" },
+    "cost-model": { type: "string" },
+    "offer-max-tokens": { type: "string" },
+    "offer-size-tolerance-pct": { type: "string" },
     "job-feed-url": { type: "string" },
     "job-feed-key-env": { type: "string" },
     "job-feed-timeout-ms": { type: "string" },
@@ -315,6 +322,62 @@ const RECEIPTS = RECEIPT_CONFIG ? new ReceiptStore(RECEIPT_CONFIG) : undefined;
 /** AP2 signed quotes (privateAI-design-33 ARCH-628): undefined unless --ap2 on; start-up stops here when the key is missing or not P-256. */
 const AP2_CONFIG = MODE === "ui" ? undefined : ap2Config(flags, process.env, PAID_JOBS !== undefined);
 /** The paywall's release notice (jobs.ts internalHandler): the job feed's job_released, then the receipt, which is never awaited. */
+/**
+ * ARCH-637/638: the paid release of an estimate-first offer, called by the paywall after it verified the payment and
+ * before it settles. Runs the held request within the offer's basis: the folder re-sized (409 when it grew past
+ * --offer-size-tolerance-pct or gained files), the basis's retries, answer rows and prompt size, max_tokens on every
+ * model call, and no more model calls than were priced (409). A run with no result, or one no receipt can cover, is 422:
+ * the paywall settles nothing (design-32 ARCH-611). A good run becomes a held job (receipt, job feed, attestation as
+ * for run-hold) and its result goes back; the buyer pays the estimate, the metered cost goes in the receipt (actualUsd).
+ */
+async function runOffer(jobId: string): Promise<{ status: number; body: unknown }> {
+  const o = OFFERS?.get(jobId);
+  if (!o || !PAID_JOBS || !JOBS || !OFFER_CONFIG) return { status: 404, body: { error: "no such offer (it expired or was never made)" } };
+  const { config, error } = readDataConfig();
+  if (!config) return { status: 422, body: { error: `the job cannot run: ${error}` } };
+  let now;
+  try { now = await folderSize(o.request.folder, (n) => usableName(n, config), config.maxFiles); }
+  catch (e) { return { status: 422, body: { error: `the folder cannot be read: ${(e as Error).message}` } }; }
+  const grown = withinBasis(o.basis, now, OFFER_CONFIG.tolerancePct);
+  if (grown) return { status: 409, body: { error: grown } };
+  const r = o.request, bs = o.basis;
+  let out;
+  try {
+    out = await crossAsk({ folder: r.folder, question: r.question, model: r.model, answerModel: r.answerModel, phrase: r.phrase, sqlRetries: bs.sqlRetries, answerMaxRows: bs.answerMaxRows, maxPromptChars: bs.maxPromptChars, retryErrorMaxChars: CROSSASK_ERROR_CHARS, sql: r.sql, checkSmallNumbers: CHECK_SMALL },
+      { analyst: analystClient(ANALYST, CROSSASK_TIMEOUT_MS), chat: gatewayChat({ url: GATEWAY, key: KEY, timeoutMs: CROSSASK_TIMEOUT_MS, maxTokens: bs.maxTokens }), ...(JOB_FEED ? { clock: () => performance.now() } : {}) });
+  } catch (e) { return { status: 422, body: { error: `the job did not run: ${(e as Error).message}` } }; }
+  if (out.error || !out.result) return { status: 422, body: { error: "the job did not produce a result (run it unpaid to see why)" } };
+  const priced = (bs.userSql ? 0 : 1 + bs.sqlRetries) + (bs.phrase === "llm" ? 1 : 0);
+  if (out.served.length > priced) return { status: 409, body: { error: `the job made ${out.served.length} model calls, more than the ${priced} estimated` } };
+  // An estimate that promised an attested route (the buyer's policy may have paid for that) is void when a call lacks the evidence.
+  if (o.attested && !out.served.every((s) => s.attest !== undefined)) return { status: 422, body: { error: "the job ran on a route without NEAR AI attestation evidence, though the estimate said attested" } };
+  let metered;
+  try { metered = quoteJob(meterOf(out.served), PAID_JOBS.prices, PAID_JOBS.fees); }
+  catch (e) { return { status: 422, body: { error: `the job's calls could not be metered: ${(e as Error).message}` } }; }
+  if (Number(metered.totalUsd) > Number(o.quote.totalUsd)) console.log(JSON.stringify({ ts: new Date().toISOString(), route: "offer", event: "offer_overrun", offerId: jobId, priceUsd: o.quote.totalUsd, actualUsd: metered.totalUsd }));
+  let receiptHold: ReceiptHold | undefined;
+  if (RECEIPT_CONFIG) {
+    if (typeof out.sql !== "string" || !out.sql) return { status: 422, body: { error: "no receipt can be made (the job has no query)" } };
+    let files;
+    try { files = await datasetFiles(r.folder, RECEIPT_CONFIG.maxFiles, (n) => config.hideFolders.some((re) => re.test(n))); }
+    catch (e) { return { status: 422, body: { error: `no receipt can be made: ${(e as Error).message}` } }; }
+    receiptHold = {
+      network: o.network, quoteId: jobId, route: routeOf(r.model, r.answerModel), datasetId: datasetIdOf(r.datasetId, r.folder),
+      ...(templateLabelOf(r.templateLabel) ? { templateLabel: templateLabelOf(r.templateLabel) } : {}), files, sql: out.sql,
+      priceUsd: o.quote.totalUsd, actualUsd: metered.totalUsd,
+      quoteBasis: { pricing: "estimate-first", phrase: bs.phrase, userSql: bs.userSql, sqlRetries: bs.sqlRetries, answerMaxRows: bs.answerMaxRows, maxPromptChars: bs.maxPromptChars, maxTokens: bs.maxTokens, files: bs.files, totalBytes: bs.totalBytes, calls: out.served.length },
+    };
+  }
+  const { timings: _timings, ...result } = out;
+  // Held a little past the offer's expiry, so a settlement that lands near it still finds the job to release.
+  JOBS.hold({ jobId, result, amount: o.amount, breakdown: o.quote.breakdown, expiresAt: Math.max(o.expiresAt, Date.now() + 120_000), ...(receiptHold ? { receipt: receiptHold } : {}), ...(o.ap2 ? { ap2: o.ap2 } : {}) });
+  OFFERS!.drop(jobId);
+  // The feed: each step at its metered cost; the total is the estimate the buyer paid (near-watch reconciles on it).
+  JOB_FEED?.quoted({ jobId, network: o.network, expiresAt: o.expiresAt, out, quote: { ...metered, totalUsd: o.quote.totalUsd, amount: o.amount }, ...(o.ap2 ? { ap2: { kid: o.ap2.kid, merchantAuthSha256: o.ap2.merchantAuthSha256 } } : {}) });
+  ATTEST?.start(jobId, out.served);
+  console.log(JSON.stringify({ ts: new Date().toISOString(), route: "offer", event: "offer_ran", offerId: jobId, calls: out.served.length, priceUsd: o.quote.totalUsd, actualUsd: metered.totalUsd }));
+  return { status: 200, body: { jobId, result } };
+}
 function onJobReleased(jobId: string, job: HeldJob, notice: unknown): void {
   JOB_FEED?.released(jobId);
   if (!RECEIPTS || !RECEIPT_CONFIG) return;
@@ -438,6 +501,15 @@ const viewHeaders = { "content-security-policy": VIEW_CSP, "x-content-type-optio
 // every call so edits need no restart) are listed or read, after resolving links. Read-only; nothing is created.
 /** The repository root: relative paths in the data config and in config/datasets.json are resolved against it. */
 const REPO = fileURLToPath(new URL("../../", import.meta.url));
+/**
+ * Estimate-first offers (privateAI-design-34 ARCH-636): undefined without --paid-jobs on; start-up stops here when
+ * estimate-first is allowed but config/cost-model.json is missing or invalid (desk.ps1 -Calibrate). OFFERS holds them.
+ */
+const OFFER_CONFIG = MODE === "ui" ? undefined : offerConfig(flags, PAID_JOBS !== undefined, (f) => readFileSync(isAbsolute(f) ? f : join(REPO, f), "utf8"));
+const OFFERS = OFFER_CONFIG?.costModel && PAID_JOBS ? new OfferStore(PAID_JOBS.max, Date.now, (o) => {
+  JOB_FEED?.expired(o.offerId);
+  console.log(JSON.stringify({ ts: new Date().toISOString(), route: "offer", event: "offer_expired", offerId: o.offerId }));
+}) : undefined;
 type DataConfig = { allowedRoots: string[]; defaultFolder: string; extensions: string[]; maxBytes: Record<string, number>; exclude: RegExp[]; excludeText: string[]; maxFiles: number; defaultMode: "whole" | "pick"; hideFolders: RegExp[] };
 const fold = (p: string): string => (process.platform === "win32" ? p.toLowerCase() : p);
 function within(child: string, root: string): boolean {
@@ -793,7 +865,9 @@ createServer(async (req, res) => {
     }
     if (PAID_JOBS && JOBS && api === "jobs" && name === "config" && req.method === "GET") {
       if (!hostOk(req)) return dataJson(res, 403, { error: `open the console as http://127.0.0.1:${PORT}` });
-      return dataJson(res, 200, { wallet: NEAR_WALLET, walletName: NEAR_WALLETS[NEAR_WALLET!].name, ttlMin: PAID_JOBS.ttlMs / 60_000, defaultPayer: DEFAULT_PAYER, attest: ATTEST ? { pollMs: ATTEST_POLL_MS, pollMax: ATTEST_POLL_MAX } : null, receipts: RECEIPTS !== undefined });
+      return dataJson(res, 200, { wallet: NEAR_WALLET, walletName: NEAR_WALLETS[NEAR_WALLET!].name, ttlMin: PAID_JOBS.ttlMs / 60_000, defaultPayer: DEFAULT_PAYER, attest: ATTEST ? { pollMs: ATTEST_POLL_MS, pollMax: ATTEST_POLL_MAX } : null, receipts: RECEIPTS !== undefined,
+        // ARCH-642: the modes the pay box may offer and the default (estimate-first needs the cost model: OFFERS).
+        offers: OFFER_CONFIG ? { mode: OFFERS ? OFFER_CONFIG.mode : "run-hold", modes: OFFER_CONFIG.modes.filter((m) => m === "run-hold" || OFFERS) } : { mode: "run-hold", modes: ["run-hold"] } });
     }
     // ARCH-615: one job's signed receipt and the key to check it with; 404 when receipts are off or the job has none (yet).
     if (PAID_JOBS && api === "jobs" && req.method === "GET" && /^\/jobs\/[0-9a-f]{32}\/receipt$/.test(url.pathname)) {
@@ -806,6 +880,55 @@ createServer(async (req, res) => {
       return dataJson(res, 200, { receipt, publicKeyPem: RECEIPTS.publicKeyPem(), ...(quote ? { ap2: quote } : {}) });
     }
     // Run, meter, quote, hold, register: the page gets the cost and the job id, never the result.
+    // ARCH-636: an estimate-first offer. Sizes only: the folder's data files are stat()ed, never opened; no model,
+    // analyst or gateway call. The question is held with the offer until the paid release runs it (runOffer).
+    if (PAID_JOBS && JOBS && OFFERS && OFFER_CONFIG?.costModel && api === "offers" && !name && req.method === "POST") {
+      if (!hostOk(req)) return dataJson(res, 403, { error: `open the console as http://127.0.0.1:${PORT}` });
+      let b: Record<string, unknown>;
+      try { b = JSON.parse(await readBody(req)); } catch { return dataJson(res, 400, { error: "body must be JSON" }); }
+      if (b.kind !== undefined && b.kind !== "crossask") return dataJson(res, 400, { error: "kind must be crossask (tabs 01 and 02 offers come later: design-34 ARCH-640/641)" });
+      const model = typeof b.model === "string" && b.model ? b.model : DEFAULT_MODEL;
+      if (!/^[\w.-]+\/[\w.:-]+$/.test(model)) return dataJson(res, 400, { error: `model must look like provider/name, got ${model}` });
+      if (typeof b.folder !== "string" || typeof b.question !== "string" || !b.question.trim()) return dataJson(res, 400, { error: "folder and question are required" });
+      const phrase = b.phrase === "none" ? "none" : "llm";
+      const answerModel = typeof b.answerModel === "string" && b.answerModel ? b.answerModel : undefined;
+      if (answerModel && !/^[\w.-]+\/[\w.:-]+$/.test(answerModel)) return dataJson(res, 400, { error: `answerModel must look like provider/name, got ${answerModel}` });
+      if (JOBS.full() || OFFERS.full()) return dataJson(res, 503, { error: `${PAID_JOBS.max} paid jobs are open (--job-max); pay or let one expire first` });
+      const { config, error } = readDataConfig();
+      if (!config) return dataJson(res, 422, { error: `no estimate can be made: ${error}` });
+      let folder: string, size: { files: number; totalBytes: number };
+      try {
+        folder = await insideRoots(b.folder, config);
+        size = await folderSize(folder, (n) => usableName(n, config), config.maxFiles);
+      } catch (e) { return dataJson(res, 422, { error: `no estimate can be made: ${(e as Error).message}` }); }
+      if (!size.files) return dataJson(res, 422, { error: "no estimate can be made: the folder has no data files" });
+      const request: OfferRequest = { folder, question: b.question, model, ...(answerModel ? { answerModel } : {}), phrase, ...(typeof b.sql === "string" && b.sql.trim() ? { sql: b.sql } : {}), datasetId: b.datasetId, templateLabel: b.templateLabel };
+      let basis, quote;
+      try {
+        basis = crossaskBasis(request, size, { maxPromptChars: CROSSASK_MAX_PROMPT, maxTokens: OFFER_CONFIG.maxTokens, sqlRetries: CROSSASK_RETRIES, answerMaxRows: CROSSASK_ROWS });
+        quote = quoteOffer(basis, PAID_JOBS.prices, PAID_JOBS.fees, OFFER_CONFIG.costModel, PAID_JOBS.priceRound);
+      } catch (e) { return dataJson(res, 422, { error: `no price for this job, so nothing can be paid: ${(e as Error).message}` }); }
+      const offerId = JOBS.newJobId();
+      const expiresAt = JOBS.expiryFromNow();
+      let offer;
+      try { offer = await registerJob(PAYWALL, PAID_JOBS.key, { jobId: offerId, amount: quote.amount, expiresAt, run: true }); }
+      catch (e) { return dataJson(res, 502, { error: (e as Error).message }); }
+      let ap2Hold: Ap2Hold | undefined;
+      if (AP2_CONFIG) {
+        try { ap2Hold = signJobCheckout(AP2_CONFIG, { jobId: offerId, route: routeOf(model, answerModel), amount: quote.amount, expiresAt, offer, datasetId: datasetIdOf(b.datasetId, folder), mode: "estimate-first" }); }
+        catch (e) { return dataJson(res, 500, { error: `the estimate could not be signed, so nothing can be paid: ${(e as Error).message}` }); }
+      }
+      const attested = attestedRoute(basis, PAID_JOBS.attestable);
+      OFFERS.hold({ offerId, request, basis, quote, amount: quote.amount, expiresAt, network: offer.network, attested, ...(ap2Hold ? { ap2: ap2Hold } : {}) });
+      // Ids, amounts and sizes only: never the question, folder or model reply.
+      console.log(JSON.stringify({ ts: new Date().toISOString(), route: "offer", event: "offer_estimated", offerId, amount: quote.amount, files: size.files, bytes: size.totalBytes, calls: quote.breakdown.calls.length }));
+      return dataJson(res, 200, {
+        jobId: offerId, offerId, mode: "estimate-first", totalUsd: quote.totalUsd, amount: quote.amount, network: offer.network, asset: offer.asset, payTo: offer.payTo, expiresAt,
+        route: routeOf(model, answerModel), attested,
+        basis: { files: size.files, totalBytes: size.totalBytes, modelCalls: quote.breakdown.calls.length, maxPromptChars: CROSSASK_MAX_PROMPT, maxTokens: OFFER_CONFIG.maxTokens, sqlRetries: CROSSASK_RETRIES },
+        ...(ap2Hold ? { ap2: ap2Answer(ap2Hold) } : {}),
+      });
+    }
     if (PAID_JOBS && JOBS && api === "jobs" && name === "crossask" && req.method === "POST") {
       if (!hostOk(req)) return dataJson(res, 403, { error: `open the console as http://127.0.0.1:${PORT}` });
       let b: Record<string, unknown>;
@@ -892,7 +1015,8 @@ createServer(async (req, res) => {
       const started = Date.now();
       let r: Response;
       try {
-        r = await fetch(`${PAYWALL}/v1/jobs/${jobId}/release`, { method: "POST", headers: { ...(signature ? { "payment-signature": signature } : {}) }, signal: AbortSignal.timeout(PAID_TIMEOUT_MS) });
+        // An estimate-first offer runs inside its release (ARCH-637): the run's time on top of the payment's.
+        r = await fetch(`${PAYWALL}/v1/jobs/${jobId}/release`, { method: "POST", headers: { ...(signature ? { "payment-signature": signature } : {}) }, signal: AbortSignal.timeout(PAID_TIMEOUT_MS + (OFFERS ? CROSSASK_TIMEOUT_MS : 0)) });
       } catch {
         return json(res, 502, { error: { message: signature ? "The connection to the paywall failed after your payment was sent. Check your wallet's recent transactions before trying again." : "Could not reach the paywall. You were not charged." } });
       }
@@ -1042,7 +1166,7 @@ createServer(async (req, res) => {
   console.log(`[test-console] http://127.0.0.1:${PORT}  default model: ${DEFAULT_MODEL}${NEAR_WALLET ? `  NEAR wallet: ${NEAR_WALLET}` : ""}`);
   // The internal listener for the paywall (ARCH-105), only with --paid-jobs on; the key is never shown.
   if (PAID_JOBS && JOBS) {
-    createServer(internalHandler(JOBS, PAID_JOBS.key, onJobReleased)).listen(PAID_JOBS.internalPort, PAID_JOBS.internalHost, () => {
+    createServer(internalHandler(JOBS, PAID_JOBS.key, onJobReleased, OFFERS ? runOffer : undefined)).listen(PAID_JOBS.internalPort, PAID_JOBS.internalHost, () => {
       console.log(`[test-console] paid jobs on: internal listener http://${PAID_JOBS.internalHost}:${PAID_JOBS.internalPort}  key from ${PAID_JOBS.keyEnv}  ttl ${PAID_JOBS.ttlMs / 60_000} min  max ${PAID_JOBS.max}`);
       if (AP2_CONFIG) console.log(`[test-console] ap2 on: signing key id ${AP2_CONFIG.signer.kid} (${AP2_CONFIG.alg}) from ${AP2_CONFIG.keyEnv}  price round ${PAID_JOBS.priceRound}  (GET /.well-known/ucp)`);
       if (RECEIPT_CONFIG) console.log(`[test-console] receipts on: signing key id ${RECEIPT_CONFIG.signer.keyId}  -> ${RECEIPT_CONFIG.dir}  (GET /jobs/<id>/receipt)${JOB_FEED_CONFIG?.receipts ? "  job_receipt sent to near-watch" : ""}`);

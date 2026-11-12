@@ -133,7 +133,7 @@ const ROOT_PAGE = `<!doctype html>
 </html>
 `;
 
-function errorBody(c: Context, status: 400 | 401 | 404 | 409 | 410 | 413 | 502 | 503, message: string, headers: Record<string, string> = {}): Response {
+function errorBody(c: Context, status: 400 | 401 | 404 | 409 | 410 | 413 | 422 | 502 | 503, message: string, headers: Record<string, string> = {}): Response {
   return c.json({ error: { message, type: status >= 500 ? "gateway_error" : "invalid_request_error", code: status } }, status, headers);
 }
 
@@ -266,10 +266,16 @@ export function createPaywall(config: PaywallConfig, deps: PaywallDeps = {}): Ho
     return given.length === want.length && timingSafeEqual(given, want);
   };
 
-  /** The paid release handler: read the held result from the console. Only a 200 is settled, and only a settled one is sent (S0-b). */
+  /**
+   * The paid release handler: read the held result from the console, or for an estimate-first offer (privateAI-design-34
+   * ARCH-637) have the console run it now. The payment middleware verified the payment before this handler and settles only
+   * a 2xx after it, so a run that fails, is refused or goes over its estimate settles nothing (design-32 ARCH-611 void rule).
+   * Only a 200 is settled, and only a settled one is sent (S0-b).
+   */
   async function release(c: Context): Promise<Response> {
     const jobId = jobIdOfPath(c.req.path)!;
     if (!jobs!.beginPaying(jobId)) return errorBody(c, 409, "this job is already being paid or was released; you were not charged");
+    if (jobs!.isRun(jobId)) return runOffer(c, jobId);
     let held: { jobId?: unknown; result?: unknown };
     try {
       const r = await fetch(`${paidJobs!.resultUrl}/internal/jobs/${jobId}`, { headers: { "x-jobs-key": paidJobs!.key }, signal: AbortSignal.timeout(10_000) });
@@ -284,6 +290,30 @@ export function createPaywall(config: PaywallConfig, deps: PaywallDeps = {}): Ho
       return errorBody(c, 502, "the job's result could not be read; you were not charged");
     }
     return c.json(held.result as object, 200);
+  }
+
+  /** ARCH-637: POST console /internal/jobs/:id/run; its refusal (409 over the estimate, 422 no result) passes on unsettled. */
+  async function runOffer(c: Context, jobId: string): Promise<Response> {
+    const timeoutMs = (paidJobs!.runTimeoutSec ?? 300) * 1000;
+    let r: Response;
+    try {
+      r = await fetch(`${paidJobs!.resultUrl}/internal/jobs/${jobId}/run`, { method: "POST", headers: { "x-jobs-key": paidJobs!.key }, signal: AbortSignal.timeout(timeoutMs) });
+    } catch (e) {
+      jobs!.endPaying(jobId);
+      return errorBody(c, 502, (e as Error).name === "TimeoutError" ? `the job did not finish within ${timeoutMs / 1000} s; you were not charged` : "the console could not be reached to run the job; you were not charged");
+    }
+    let body: { jobId?: unknown; result?: unknown; error?: unknown } | null;
+    try { body = (await r.json()) as typeof body; } catch { body = null; }
+    if (r.status === 409 || r.status === 422) {
+      jobs!.endPaying(jobId);
+      const why = typeof body?.error === "string" ? body.error : "the job could not be run as estimated";
+      return errorBody(c, r.status as 409 | 422, `${why}; you were not charged`);
+    }
+    if (r.status !== 200 || body?.jobId !== jobId || body.result === undefined) {
+      jobs!.endPaying(jobId);
+      return errorBody(c, 502, "the job's result could not be read; you were not charged");
+    }
+    return c.json(body.result as object, 200);
   }
 
   /**

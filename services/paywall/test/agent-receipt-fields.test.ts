@@ -35,7 +35,9 @@ test("ARCH-613 parseRunRequest refuses a datasetId or templateLabel the console 
 
 test("ARCH-613 runAndPay posts datasetId and templateLabel to the console's /jobs/crossask with the run's other fields", () => {
   const src = readFileSync(new URL("../scripts/agent-jobs-core.ts", import.meta.url), "utf8");
-  const call = src.slice(src.indexOf("fetch(`${deps.console}/jobs/crossask`"), src.indexOf("signal,", src.indexOf("fetch(`${deps.console}/jobs/crossask`")));
+  // privateAI-design-34 ARCH-642: one fetch for both modes (POST /offers or /jobs/crossask), so both carry the fields.
+  const at = src.indexOf('fetch(`${deps.console}${estimateFirst ? "/offers" : "/jobs/crossask"}`');
+  const call = at < 0 ? "" : src.slice(at, src.indexOf("signal,", at));
   assert.ok(call.length > 0);
   assert.match(call, /datasetId: req\.datasetId, templateLabel: req\.templateLabel/);
   assert.match(call, /folder: req\.folder, question: req\.question/);

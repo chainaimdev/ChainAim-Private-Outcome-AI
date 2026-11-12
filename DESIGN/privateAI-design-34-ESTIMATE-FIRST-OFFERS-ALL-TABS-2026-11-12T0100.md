@@ -148,3 +148,14 @@ Hackathon deadline 2026-11-14 23:59 UTC: steps 1-2 are the realistic part before
   - Operator control kept: `--offer-modes LIST` = the modes buyers may pick (default `estimate-first,run-hold` per D5;
     `estimate-first` alone hides the choice = option A later, no code change). `--offer-mode` = the default (estimate-first).
   - The receipt and the admin Jobs tab record which mode each job ran in.
+
+## 10. Built (chat near-ai-impl-9, 2026-11-12) and one deviation to confirm
+
+Built for tab 03 (crossask), Me and AI agent: ARCH-636 (POST /offers), ARCH-637 (paywall release = verify -> run -> settle),
+ARCH-638 (run within the basis), ARCH-642 (pricing choice in the pay box, agent offerMode, -AgentAsk -OfferMode),
+up.ps1 -OfferMode auto. Not yet: ARCH-639/640/641 (tabs 01/02), 643-645, design-33 Phase 2 (AP2 checkout mandate).
+
+Deviation (AI choice, owner to confirm): §1 sends only sizes in step 1 and the question in step 3. Built: the question is
+sent with the estimate and HELD by the console with the offer; it is never sent to a model, the analyst or the gateway, and
+nothing is run, before payment. Reason: the paid release carries no body today (services/web payNearRelease and the agent
+post it empty), so the stricter form needs a wallet-bundle change; it can follow without changing the paywall.

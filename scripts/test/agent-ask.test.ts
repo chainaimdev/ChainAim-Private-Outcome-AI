@@ -147,7 +147,8 @@ describe("step C -AgentAsk: the real CLI against the console API", () => {
     consoleState.posted = [];
     const r = await ask("--tenant", "t01", "--dataset", "smb-fin-1", "--template", "1");
     assert.equal(r.code, 0, r.out + r.err);
-    assert.deepEqual(consoleState.posted[0], { tenant: "t01", folder: "/app/sample-data/smb-fin/statements", question: "By month, how much cash came in?", phrase: "llm", datasetId: "smb-fin-1", answerModel: "nearai/deepseek-v4.1-flash", sql: "SELECT 1", templateLabel: "Cash flow vs installment" });
+    // offerMode (privateAI-design-34 D5): -AgentAsk's default, estimate-first.
+    assert.deepEqual(consoleState.posted[0], { offerMode: "estimate-first", tenant: "t01", folder: "/app/sample-data/smb-fin/statements", question: "By month, how much cash came in?", phrase: "llm", datasetId: "smb-fin-1", answerModel: "nearai/deepseek-v4.1-flash", sql: "SELECT 1", templateLabel: "Cash flow vs installment" });
     assert.match(r.out, /^RUN +AI agent for Northwind \(synthetic\) \(t01\) pays from chainaim-buyer-seller\.testnet; dataset Small Biz Financials - 1, template "Cash flow vs installment"; query none \(exact query\); answer nearai\/deepseek-v4\.1-flash$/m);
     assert.match(r.out, / 4\. \[ChainAim\] Quoted 0\.01 USDC/);
     assert.match(r.out, / 8\. \[ChainAim\] Result released: 1 row\(s\)\n +9\. \[Agent t01\] Agent verified the receipt OK/);

@@ -27,7 +27,22 @@ export type PaidJobsConfig = {
   prices: Map<string, ModelPrice>; fees: Fees;
   /** How quoteJob rounds the total (ARCH-629). */
   priceRound: PriceRound;
+  /**
+   * privateAI-design-34 ARCH-636: the catalog's models whose every deployment is NEAR AI attested ("attest": "nearai"), so an
+   * estimate can say before the run whether its route is attested (the agent policy's attested_route check).
+   */
+  attestable: Set<string>;
 };
+
+/** Model ids in a catalog whose deployments are all marked attest (the gateway may serve any of a model's deployments). */
+export function attestableModels(catalog: unknown): Set<string> {
+  const models = (catalog as { models?: { id?: unknown; deployments?: { attest?: unknown }[] }[] } | null)?.models;
+  const out = new Set<string>();
+  for (const m of Array.isArray(models) ? models : []) {
+    if (typeof m?.id === "string" && Array.isArray(m.deployments) && m.deployments.length > 0 && m.deployments.every((d) => typeof d?.attest === "string" && d.attest !== "")) out.add(m.id);
+  }
+  return out;
+}
 
 /**
  * --price-round (ARCH-629, design-33 D2 option A): micro unless --ap2 on, where it is cent (a UCP checkout's totals are
@@ -83,6 +98,7 @@ export function paidJobsConfig(flags: PaidJobsFlags, env: Record<string, string 
     prices: pricesFromCatalog(catalog),
     fees,
     priceRound,
+    attestable: attestableModels(catalog),
   };
 }
 
@@ -155,15 +171,32 @@ function readSmallJson(req: IncomingMessage, max: number): Promise<unknown> {
  * onReleased: called after a released job is dropped (the job feed, adminUI ARCH-205), with the job as it was held and the
  * paywall's release notice body (the settlement's ids, privateAI-design-32 ARCH-616; undefined when it sent none).
  */
-export function internalHandler(store: JobStore, key: string, onReleased?: (jobId: string, job: HeldJob, notice: unknown) => void): (req: IncomingMessage, res: ServerResponse) => void {
+/**
+ * run (privateAI-design-34 ARCH-637/638): POST /internal/jobs/:id/run, the paywall's paid release of an estimate-first
+ * offer. A job already held under that id (a release whose settlement failed and is retried) answers its held result and
+ * is not run again; otherwise run() runs the offer and answers {status, body} (200 {jobId, result} after holding it).
+ */
+export type RunOffer = (jobId: string) => Promise<{ status: number; body: unknown }>;
+export function internalHandler(store: JobStore, key: string, onReleased?: (jobId: string, job: HeldJob, notice: unknown) => void, run?: RunOffer): (req: IncomingMessage, res: ServerResponse) => void {
   const want = Buffer.from(key, "utf8");
   return (req, res) => {
     const given = Buffer.from(String(req.headers["x-jobs-key"] ?? ""), "utf8");
     if (given.length !== want.length || !timingSafeEqual(given, want)) { req.resume(); return send(res, 401, { error: "x-jobs-key is missing or wrong" }); }
-    const m = /^\/internal\/jobs\/([^/]+)(\/released)?$/.exec(new URL(req.url ?? "/", "http://internal").pathname);
+    const m = /^\/internal\/jobs\/([^/]+)(\/released|\/run)?$/.exec(new URL(req.url ?? "/", "http://internal").pathname);
     if (!m) { req.resume(); return send(res, 404, { error: "not found" }); }
     const jobId = m[1];
-    if (m[2] && req.method === "POST") {
+    if (m[2] === "/run") {
+      req.resume();
+      if (req.method !== "POST" || !run || !JOB_ID.test(jobId)) return send(res, 404, { error: "not found" });
+      const held = store.get(jobId);
+      if (held) return send(res, 200, { jobId, result: held.result });
+      void run(jobId).then((r) => send(res, r.status, r.body), (e) => {
+        console.error(JSON.stringify({ ts: new Date().toISOString(), event: "offer_run_failed", jobId, reason: String((e as Error).message ?? e).slice(0, 200) }));
+        send(res, 500, { error: "the job could not be run" });
+      });
+      return;
+    }
+    if (m[2] === "/released" && req.method === "POST") {
       void readSmallJson(req, RELEASE_NOTICE_MAX_BYTES).then((notice) => {
         const job = JOB_ID.test(jobId) ? store.get(jobId) : undefined;
         if (!job || !store.drop(jobId)) return send(res, 404, { error: "no such job" });
@@ -194,7 +227,7 @@ export type JobOffer = { network: string; asset: string; payTo: string; amount: 
  * Registers a quoted job with the paywall and reads back its 402 offer, which must name the same amount.
  * Throws (and the caller holds nothing) when either step fails. Messages carry status codes, never a body or key.
  */
-export async function registerJob(paywall: string, key: string, job: { jobId: string; amount: string; expiresAt: number }): Promise<JobOffer> {
+export async function registerJob(paywall: string, key: string, job: { jobId: string; amount: string; expiresAt: number; run?: true }): Promise<JobOffer> {
   let r: Response;
   try {
     r = await fetch(`${paywall}/internal/jobs`, { method: "POST", headers: { "content-type": "application/json", "x-jobs-key": key }, body: JSON.stringify(job), signal: AbortSignal.timeout(10_000) });

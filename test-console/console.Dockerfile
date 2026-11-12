@@ -16,6 +16,9 @@ COPY packages/receipt/package.json packages/receipt/package.json
 COPY packages/receipt/src packages/receipt/src
 COPY packages/ap2/package.json packages/ap2/package.json
 COPY packages/ap2/src packages/ap2/src
+# privateAI-design-34 ARCH-636: estimate-first offers price with packages/offer (and config/cost-model.json, under config).
+COPY packages/offer/package.json packages/offer/package.json
+COPY packages/offer/src packages/offer/src
 COPY services/web/src/balance.ts services/web/src/near-wallets.ts services/web/src/
 COPY config config
 COPY test-console/console test-console/console

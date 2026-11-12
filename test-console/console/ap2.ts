@@ -84,6 +84,8 @@ export type JobCheckoutInput = {
   /** With --receipts on: the dataset id and the hash of its files, as the receipt will carry them. */
   datasetId?: string;
   filesRoot?: string;
+  /** privateAI-design-34 ARCH-636: estimate-first offers say so in dev.chainaim.job (absent = run-hold, as before). */
+  mode?: "estimate-first";
 };
 
 /** The paid job as a UCP checkout (design-33 section 2). Throws when the amount is not whole cents or the offer differs. */
@@ -110,6 +112,7 @@ export function jobCheckout(i: JobCheckoutInput): Record<string, unknown> {
       network: i.offer.network, asset: i.offer.asset, payTo: i.offer.payTo, amountUnits: i.amount, usdcDecimals: USDC_DECIMALS,
       ...(i.datasetId !== undefined ? { datasetId: i.datasetId } : {}),
       ...(i.filesRoot !== undefined ? { filesRoot: i.filesRoot } : {}),
+      ...(i.mode !== undefined ? { mode: i.mode } : {}),
     },
   };
 }

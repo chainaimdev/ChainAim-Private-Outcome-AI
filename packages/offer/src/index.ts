@@ -59,7 +59,8 @@ export function parseCostModel(raw: unknown): CostModel {
 
 /** What each kind is priced on: sizes and limits only, never the text. */
 export type OfferBasis =
-  | { kind: "scan" | "mask"; textBytes: number }
+  | { kind: "scan"; textBytes: number }
+  | { kind: "mask"; textBytes: number }
   | { kind: "chat"; model: string; promptBytes: number; maxTokens: number }
   | { kind: "crossask"; model: string; answerModel?: string; phrase: "llm" | "none"; userSql: boolean; totalBytes: number; files: number; maxPromptChars: number; maxTokens: number; sqlRetries: number; answerMaxRows: number };
 

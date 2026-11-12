@@ -137,12 +137,26 @@ class ScriptedModel extends Model<BaseModelConfig> {
 }
 
 /** How the console stand-in answers: signer, and what it claims (and signs) as the payee. */
-const state: { signer: Ap2Signer; payTo?: string; noAp2: boolean; held: Map<string, unknown> } = { signer: pinned, noAp2: false, held: new Map() };
+const state: { signer: Ap2Signer; payTo?: string; noAp2: boolean; held: Map<string, unknown>; offers: Map<string, unknown>; runs: string[]; paths: string[] } = { signer: pinned, noAp2: false, held: new Map(), offers: new Map(), runs: [], paths: [] };
 let paywallUrl = "";
 const consoleServer: Server = createServer(async (req, res) => {
   for await (const _ of req) { /* drain */ }
   const path = new URL(req.url ?? "/", "http://console").pathname;
   const send = (status: number, j: unknown) => { res.writeHead(status, { "content-type": "application/json" }); res.end(JSON.stringify(j)); };
+  state.paths.push(`${req.method} ${path}`);
+  // privateAI-design-34 ARCH-636 stand-in: an estimate, registered run: true; nothing runs until the paid release asks.
+  if (req.method === "POST" && path === "/offers") {
+    const jobId = randomBytes(16).toString("hex");
+    const expiresAt = Date.now() + 600_000;
+    state.offers.set(jobId, RESULT);
+    const reg = await fetch(`${paywallUrl}/internal/jobs`, { method: "POST", headers: { "content-type": "application/json", "x-jobs-key": JOBS_KEY }, body: JSON.stringify({ jobId, amount: "20000", expiresAt, run: true }) });
+    await reg.body?.cancel();
+    const q = await fetch(`${paywallUrl}/v1/jobs/${jobId}/release`, { method: "POST" });
+    await q.body?.cancel();
+    const offer = (JSON.parse(Buffer.from(q.headers.get("payment-required")!, "base64").toString("utf8")) as { accepts: Record<string, string>[] }).accepts[0];
+    const j: QuotedJob = { jobId, amount: "20000", network: offer.network, asset: offer.asset, payTo: offer.payTo, expiresAt };
+    return send(200, { ...j, offerId: jobId, mode: "estimate-first", totalUsd: "0.020000", route: "nearai/standin", attested: false, ap2: signed(j, state.signer) });
+  }
   if (req.method === "POST" && path === "/jobs/crossask") {
     const jobId = randomBytes(16).toString("hex");
     const expiresAt = Date.now() + 600_000;
@@ -156,6 +170,8 @@ const consoleServer: Server = createServer(async (req, res) => {
     return send(200, { ...j, totalUsd: "0.020000", route: "nearai/standin", attested: true, ...(state.noAp2 ? {} : { ap2: signed(j, state.signer) }) });
   }
   if (req.headers["x-jobs-key"] !== JOBS_KEY) return send(401, { error: "key" });
+  const run = /^\/internal\/jobs\/([0-9a-f]{32})\/run$/.exec(path);
+  if (run && req.method === "POST" && state.offers.has(run[1])) { state.runs.push(run[1]); state.held.set(run[1], state.offers.get(run[1])); state.offers.delete(run[1]); return send(200, { jobId: run[1], result: RESULT }); }
   const m = /^\/internal\/jobs\/([0-9a-f]{32})(\/released)?$/.exec(path);
   if (m && req.method === "GET" && state.held.has(m[1])) return send(200, { jobId: m[1], result: state.held.get(m[1]) });
   if (m && req.method === "POST" && m[2]) return send(200, {});
@@ -202,6 +218,8 @@ describe("ARCH-630 in the agent run: quoted -> quote_signed -> signed, or refuse
     state.signer = pinned;
     state.payTo = undefined;
     state.noAp2 = false;
+    state.runs.length = 0;
+    state.paths.length = 0;
   });
 
   const deps = (over: Partial<RunDeps> = {}): RunDeps => ({
@@ -214,6 +232,24 @@ describe("ARCH-630 in the agent run: quoted -> quote_signed -> signed, or refuse
     await runAgentJob(req, d, (e) => events.push(e), new AbortController().signal);
     return events;
   }
+
+  it("privateAI-design-34 ARCH-642: offerMode estimate-first: POST /offers, estimated (nothing run), signed quote, paid, and the job runs once inside the paid release", async () => {
+    const events: AgentEvent[] = [];
+    await runAgentJob({ ...req, offerMode: "estimate-first" }, deps(), (e) => events.push(e), new AbortController().signal);
+    assert.deepEqual(events.map((e) => e.type), ["masked", "tool_called", "estimated", "quoted", "quote_signed", "signed", "settled", "released", "done"], JSON.stringify(events));
+    assert.ok(state.paths.includes("POST /offers") && !state.paths.includes("POST /jobs/crossask"));
+    assert.equal(state.runs.length, 1, "run once, by the paywall's paid release");
+    assert.ok(state.paths.indexOf(`POST /internal/jobs/${state.runs[0]}/run`) > state.paths.indexOf("POST /offers"));
+    assert.deepEqual(double.state.transfers.map((t) => [t.sender, t.amount]), [[T01, 20000n]]);
+  });
+
+  it("privateAI-design-34 ARCH-642: estimate-first refused before signing (agent ceiling) runs nothing; the service default applies when the run names no mode", async () => {
+    const events: AgentEvent[] = [];
+    await runAgentJob(req, deps({ maxAmount: "0.001", defaultOfferMode: "estimate-first" }), (e) => events.push(e), new AbortController().signal);
+    assert.deepEqual(events.map((e) => e.type), ["masked", "tool_called", "estimated", "quoted", "quote_signed", "refused"]);
+    assert.equal(state.runs.length, 0, "no work before the go-ahead");
+    assert.equal(double.state.transfers.length, 0);
+  });
 
   it("ARCH-630: a signed quote that holds: quote_signed between quoted and signed, then paid once", async () => {
     const events = await run(deps());

@@ -158,6 +158,8 @@ export type AgentEvent =
   | { type: "masked"; counts: Record<string, number> }
   | { type: "tool_called"; tool: string }
   | { type: "job_ran"; jobId: string; expiresAt: number }
+  /** privateAI-design-34 ARCH-642: an estimate-first offer: priced from sizes, nothing run yet (it runs inside the paid release). */
+  | { type: "estimated"; jobId: string; expiresAt: number }
   | { type: "quoted"; jobId: string; amount: string; totalUsd: string; network: string; asset: string; payTo: string }
   /** ARCH-630: ChainAim's signed quote verified with the pinned key and bound to the quote; after quoted, before policy. */
   | QuoteSignedEvent
@@ -183,7 +185,10 @@ export type JobsToolReply =
  * ARCH-613) are passed on to the console's /jobs/crossask for the job's receipt; the console checks them again
  * (test-console/console/receipt.ts datasetIdOf, templateLabelOf).
  */
-export type RunRequest = { tenant: string; folder: string; question: string; model?: string; answerModel?: string; phrase: "llm" | "none"; sql?: string; datasetId?: string; templateLabel?: string };
+export type RunRequest = { tenant: string; folder: string; question: string; model?: string; answerModel?: string; phrase: "llm" | "none"; sql?: string; datasetId?: string; templateLabel?: string; offerMode?: OfferMode };
+/** privateAI-design-34 owner D4/D5: estimate-first = POST /offers (no work before payment); run-hold = POST /jobs/crossask (as before). */
+export type OfferMode = "estimate-first" | "run-hold";
+export const OFFER_MODES: readonly OfferMode[] = ["estimate-first", "run-hold"];
 
 const MODEL_ID = /^[\w.-]+\/[\w.:-]+$/;
 /** The same shapes the console accepts for a receipt (receipt.ts DATASET_ID, TEMPLATE_LABEL). */
@@ -204,6 +209,7 @@ export function parseRunRequest(body: unknown, tenants: ReadonlySet<string>): Ru
   if (b.sql !== undefined && typeof b.sql !== "string") return { error: "sql must be a string" };
   if (b.datasetId !== undefined && (typeof b.datasetId !== "string" || !DATASET_ID.test(b.datasetId))) return { error: "datasetId must be 1-64 letters, digits, dot, dash or underscore" };
   if (b.templateLabel !== undefined && (typeof b.templateLabel !== "string" || !TEMPLATE_LABEL.test(b.templateLabel.trim()))) return { error: "templateLabel must be 1-120 printable ASCII characters" };
+  if (b.offerMode !== undefined && !(OFFER_MODES as readonly unknown[]).includes(b.offerMode)) return { error: `offerMode must be ${OFFER_MODES.join(" or ")}` };
   return {
     tenant: b.tenant,
     folder: b.folder,
@@ -214,6 +220,7 @@ export function parseRunRequest(body: unknown, tenants: ReadonlySet<string>): Ru
     ...(typeof b.sql === "string" && b.sql.trim() ? { sql: b.sql } : {}),
     ...(typeof b.datasetId === "string" ? { datasetId: b.datasetId } : {}),
     ...(typeof b.templateLabel === "string" ? { templateLabel: b.templateLabel.trim() } : {}),
+    ...(b.offerMode !== undefined ? { offerMode: b.offerMode as OfferMode } : {}),
   };
 }
 
@@ -238,6 +245,8 @@ export type RunDeps = {
   /** The signed-quote check before the policy (ARCH-630); unset = no quote_signed step (--ap2-verify off). */
   ap2Check?: Ap2Check;
   queue: AccountQueue;
+  /** The mode for a run that names none (agent-jobs.ts --offer-mode, default estimate-first); unset = run-hold. */
+  defaultOfferMode?: OfferMode;
   /** How the agent's instructions name the tenant; the tenant's real name is never sent unless given here. */
   tenantLabel: string;
   /** One JSON line per run: tenant, job id, status, milliseconds. */
@@ -336,17 +345,21 @@ async function runAndPay(
   const refuse = (reason: string) => ({ reply: { status: "refused" as const, reason }, terminal: { type: "refused" as const, reason } });
   if (signal.aborted) return refuse("the request was cancelled before anything was run or paid");
 
-  // Run, meter, quote, hold, register: the console answers the cost and the job id only.
+  // estimate-first (ARCH-642): POST /offers prices from sizes and runs nothing; run-hold: POST /jobs/crossask runs, meters,
+  // quotes, holds and registers. Either way the console answers the cost and the job id only.
+  const mode: OfferMode = req.offerMode ?? deps.defaultOfferMode ?? "run-hold";
+  const estimateFirst = mode === "estimate-first";
   let job: { jobId: string; totalUsd: string; amount: string; network: string; asset: string; payTo: string; expiresAt: number; route?: string; attested: boolean; ap2?: unknown };
   try {
-    const r = await fetch(`${deps.console}/jobs/crossask`, {
+    const r = await fetch(`${deps.console}${estimateFirst ? "/offers" : "/jobs/crossask"}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ folder: req.folder, question: req.question, model: req.model, answerModel: req.answerModel, phrase: req.phrase, sql: req.sql, datasetId: req.datasetId, templateLabel: req.templateLabel }),
       signal,
     });
     const j = (await r.json().catch(() => null)) as Record<string, unknown> | null;
-    if (!r.ok) return refuse(`the job did not run, so nothing was paid: ${typeof j?.error === "string" ? j.error : `HTTP ${r.status} from the console`}`);
+    if (estimateFirst && r.status === 404) return refuse("this console does not offer estimate-first pricing (no config/cost-model.json: run desk.ps1 -Calibrate), so nothing was run or paid; ask again with offerMode run-hold");
+    if (!r.ok) return refuse(`${estimateFirst ? "the job could not be estimated" : "the job did not run"}, so nothing was paid: ${typeof j?.error === "string" ? j.error : `HTTP ${r.status} from the console`}`);
     if (
       typeof j?.jobId !== "string" || !/^[0-9a-f]{32}$/.test(j.jobId) || typeof j.totalUsd !== "string" || typeof j.amount !== "string" ||
       typeof j.network !== "string" || typeof j.asset !== "string" || typeof j.payTo !== "string" || typeof j.expiresAt !== "number"
@@ -358,7 +371,7 @@ async function runAndPay(
     return refuse(signal.aborted ? "the request was cancelled before anything was paid" : `the console could not be reached at ${deps.console}, so nothing was run or paid (${(e as Error).name})`);
   }
   setJobId(job.jobId);
-  emit({ type: "job_ran", jobId: job.jobId, expiresAt: job.expiresAt });
+  emit({ type: estimateFirst ? "estimated" : "job_ran", jobId: job.jobId, expiresAt: job.expiresAt });
   if (job.network !== tenant.buyer.network) return refuse(`the job is quoted on ${job.network}, but this agent pays on ${tenant.buyer.network}; nothing was paid`);
   emit({ type: "quoted", jobId: job.jobId, amount: job.amount, totalUsd: job.totalUsd, network: job.network, asset: job.asset, payTo: job.payTo });
   // ARCH-630: the signed quote, before the policy and before anything is signed.

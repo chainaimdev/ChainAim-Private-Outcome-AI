@@ -284,7 +284,8 @@ describe("ARCH-620 the agent's spending policy, relayed read-only", () => {
 
 // ---- the page fragment's script in a stand-in DOM -----------------------------------------------------------------
 type Node0 = { id?: string; tagName?: string; children: unknown[]; hidden: boolean; disabled: boolean; checked: boolean; value: string; textContent: string; className: string; [k: string]: any };
-function runFragment(agentConfigStatus: number, initiallyTicked = false, policy?: { answer: unknown; frame: string }, stream?: (text: string) => string) {
+function runFragment(agentConfigStatus: number, initiallyTicked = false, policy?: { answer: unknown; frame: string }, stream?: (text: string) => string, offers?: { mode: string; modes: string[] }) {
+  const agentBodies: Record<string, unknown>[] = [];
   const all: Node0[] = [];
   const el = (tag: string): Node0 => {
     const n: Node0 = {
@@ -309,10 +310,11 @@ function runFragment(agentConfigStatus: number, initiallyTicked = false, policy?
     posted.push(url);
     const jsonRes = (status: number, j: unknown) => ({ ok: status < 300, status, headers: { get: () => "application/json" }, json: async () => j });
     if (url === "/agent/config") return agentConfigStatus === 200 ? jsonRes(200, { network: "near:testnet", tenants: TENANTS }) : jsonRes(agentConfigStatus, { error: "not found" });
-    if (url === "/jobs/config") return jsonRes(200, { wallet: "intear-wallet", walletName: "Intear Wallet", ttlMin: 15 });
+    if (url === "/jobs/config") return jsonRes(200, { wallet: "intear-wallet", walletName: "Intear Wallet", ttlMin: 15, ...(offers ? { offers } : {}) });
     if (url === "/agent/policy") return policy ? jsonRes(200, policy.answer) : jsonRes(404, { error: "not found" });
     if (url === "/agent/crossask") {
       const sentBody = JSON.parse(init!.body!);
+      agentBodies.push(sentBody);
       posted.push(`tenant=${sentBody.tenant}`);
       const withPolicy = policy ? settledFrame.replace("event: signed", policy.frame + "event: signed") : settledFrame;
       const full = FRAMES.join("").replace("event: released", withPolicy + "event: released");
@@ -326,7 +328,7 @@ function runFragment(agentConfigStatus: number, initiallyTicked = false, policy?
     document: { getElementById: (id: string) => all.find((n) => n.id === id) ?? null, createElement: el },
     window: { addEventListener: () => undefined },
     fetch: fetchStub, console, TextDecoder, TextEncoder, Promise, JSON, Number, String, Object, Array, Error, Date,
-    postData: async (url: string) => { freeCalls.push(url); return url === "/jobs/crossask" ? { jobId: JOB_ID, totalUsd: "0.003", expiresAt: Date.now() + 60_000, network: "near:testnet", payTo: "m.testnet", asset: "usdc", amount: "3000" } : { free: true }; },
+    postData: async (url: string) => { freeCalls.push(url); return url === "/jobs/crossask" || url === "/offers" ? { ...(url === "/offers" ? { mode: "estimate-first", basis: { files: 3, modelCalls: 3 } } : {}), jobId: JOB_ID, totalUsd: "0.003", expiresAt: Date.now() + 60_000, network: "near:testnet", payTo: "m.testnet", asset: "usdc", amount: "3000" } : { free: true }; },
   };
   const fragment = readFileSync(FRAGMENT, "utf8");
   const script = fragment.slice(fragment.indexOf("<script>") + 8, fragment.lastIndexOf("</script>"));
@@ -339,7 +341,7 @@ function runFragment(agentConfigStatus: number, initiallyTicked = false, policy?
   vm.runInContext(script, ctx);
   return {
     byId: (id: string) => all.find((n) => n.id === id)!,
-    posted, freeCalls,
+    posted, freeCalls, agentBodies,
     postData: ctx.postData as (url: string, body: unknown) => Promise<unknown>,
     settle: () => new Promise((ok) => setTimeout(ok, 20)),
   };
@@ -485,3 +487,70 @@ describe("step B tab 03: the agent's own receipt check, and the status line afte
     assert.match(line, /^On, AI agent: Ask runs the job/);
   });
 });
+
+describe("privateAI-design-34 ARCH-642 tab 03 pricing: estimate first or run first", () => {
+  const BOTH = { mode: "estimate-first", modes: ["estimate-first", "run-hold"] };
+  test("ARCH-642: with both modes the Pricing choice shows, estimate first picked; Me posts /offers and the button is Pay and run", async () => {
+    const dom = runFragment(200, false, undefined, undefined, BOTH);
+    await dom.settle();
+    dom.byId("xpayNear").checked = true;
+    await dom.byId("xpayNear").onchange();
+    assert.equal(dom.byId("xpayMode").hidden, false);
+    assert.equal(dom.byId("xpayModeEstimate").checked, true, "the console's default");
+    assert.equal(dom.byId("xpayModeRun").checked, false);
+    assert.match(dom.byId("xpayInfo").textContent, /estimate first: Ask shows a firm price from the job's sizes; nothing has run yet/);
+    void dom.postData("/crossask", { folder: data, question: "q" });
+    await dom.settle();
+    assert.deepEqual(dom.freeCalls, ["/offers"], "no work: an estimate, not /jobs/crossask");
+    assert.equal(dom.byId("xpayGo").textContent, "Pay and run");
+    assert.match(dom.byId("xpayTotal").textContent, /estimated before any work \(3 file\(s\), at most 3 model call\(s\);[\s\S]*Nothing has run yet/);
+  });
+
+  test("ARCH-642: Run first still posts /jobs/crossask with Pay", async () => {
+    const dom = runFragment(200, false, undefined, undefined, BOTH);
+    await dom.settle();
+    dom.byId("xpayNear").checked = true;
+    await dom.byId("xpayNear").onchange();
+    dom.byId("xpayModeRun").checked = true; dom.byId("xpayModeEstimate").checked = false;
+    dom.byId("xpayModeRun").onchange();
+    void dom.postData("/crossask", { folder: data, question: "q" });
+    await dom.settle();
+    assert.deepEqual(dom.freeCalls, ["/jobs/crossask"]);
+    assert.equal(dom.byId("xpayGo").textContent, "Pay");
+  });
+
+  test("ARCH-642: estimate-first only hides the choice; a console without offers is run first, as before", async () => {
+    const only = runFragment(200, false, undefined, undefined, { mode: "estimate-first", modes: ["estimate-first"] });
+    await only.settle();
+    only.byId("xpayNear").checked = true;
+    await only.byId("xpayNear").onchange();
+    assert.equal(only.byId("xpayMode").hidden, true);
+    void only.postData("/crossask", { folder: data, question: "q" });
+    await only.settle();
+    assert.deepEqual(only.freeCalls, ["/offers"]);
+    const old = runFragment(200);
+    await old.settle();
+    old.byId("xpayNear").checked = true;
+    await old.byId("xpayNear").onchange();
+    assert.equal(old.byId("xpayMode").hidden, true);
+    void old.postData("/crossask", { folder: data, question: "q" });
+    await old.settle();
+    assert.deepEqual(old.freeCalls, ["/jobs/crossask"]);
+  });
+
+  test("ARCH-642: the AI agent gets offerMode with its run, and its estimated step is shown", async () => {
+    const dom = runFragment(200, false, undefined, (t) => t.replace("event: quoted", 'event: estimated\ndata: {"jobId":"' + "c".repeat(32) + '"}\n\nevent: quoted'), BOTH);
+    await dom.settle();
+    dom.byId("xpayNear").checked = true;
+    await dom.byId("xpayNear").onchange();
+    dom.byId("xpayWhoAgent").checked = true; dom.byId("xpayWhoMe").checked = false;
+    dom.byId("xpayWhoAgent").onchange();
+    await dom.postData("/crossask", { folder: data, question: "q" }).catch(() => undefined);
+    await dom.settle();
+    assert.equal(dom.agentBodies[0].offerMode, "estimate-first");
+    const steps = dom.byId("xagentSteps");
+    const text = JSON.stringify(steps.children.map((li: { children: { textContent?: string }[]; textContent?: string }) => li.children.map((c) => (typeof c === "string" ? c : c.textContent)).join("")));
+    assert.match(text, /Estimated from the job's sizes \(id cccccccc…\): nothing has run yet; it runs only after the payment/);
+  });
+});
+
