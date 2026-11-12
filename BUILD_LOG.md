@@ -1393,3 +1393,14 @@ Built in the AI's workspace on a snapshot of the owner's repo (main = e8626e8, v
   0.000005222223 USD/KB (worst 47 ms/KB, scan 1 KB), analyst 0.013993970714 USD/MB (648 ms over 5395 B), gateway
   0.000185123580 USD/KB prompt, safety 47 % (Presidio scan 4 KB 152 vs 104 ms), tokensPerByte 1 (observed max 0.3890: V-P4
   holds for bedrock/nemotron-nano-3-30b), bytesPerChar 1. ARCH-635 VERIFIED on the PC.
+
+## desk.ps1 -Ship -ShipRepo admin (chat near-ai-impl-9, 2026-11-12 ~02:20Z) - written, guard-tested; NOT run on the PC
+- Owner rule 8 (commits through desk.ps1, never a list of git commands): -ShipRepo private|admin (default private). admin =
+  the chainaim-adminUI-NEAR checkout found by AdminRoot (NEAR_WATCH_DIR, config\local\repos.json nearWatchDir, sibling);
+  same fetch / behind / tag / file list / commit -- paths / push / checks; its tests = services\near-watch and
+  apps\admin-console `npm run test` + `npm run typecheck` instead of check-deps + Invoke-Suites. Back to this repo after a
+  dry run or a push. function AdminRoot moved above -Ship (one finder; the -ReceiptKey / -Ap2Key guards now end their
+  slices at the next marker). desk.test.ts 29/29 (+1 guard); ASCII.
+- Admin suites run here (PC Linux shell) on the current admin tree: near-watch 72 pass / 0 fail (1 skipped of 73),
+  typecheck OK; admin-console 64/64, typecheck OK.
+- 2026-11-12 ~02:15Z owner: -ShipRepo admin dry run (all admin suites OK) and real ship: admin 123bb3f pushed. VERIFIED.

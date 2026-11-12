@@ -114,7 +114,10 @@ one READY table across both. Neither launcher is changed or renamed; each team k
                    a result check: the stack keeps running and both UIs stay open. Exit 0 only when every step passed.
   -Windows NAME[,NAME]  also usable with a plain start: open these log windows after READY (names as for -Logs).
   -Ship -ShipMessage "TEXT"  [-ShipFiles a,b] [-ShipBranch NAME] [-ShipRemote origin] [-ShipTrailer "TEXT"]
-         [-ShipTag vX.Y.Z [-ShipTagMessage "TEXT"]] [-ShipSkipTests] [-ShipNoPush] [-ShipDryRun]
+         [-ShipTag vX.Y.Z [-ShipTagMessage "TEXT"]] [-ShipSkipTests] [-ShipNoPush] [-ShipDryRun] [-ShipRepo private|admin]
+                -ShipRepo admin (2026-11-12): the same for the chainaim-adminUI-NEAR checkout (found as for the start:
+                NEAR_WATCH_DIR, config\local\repos.json nearWatchDir, sibling); its tests are near-watch and admin-console
+                npm test + typecheck instead of the private suites.
                 -ShipTag (owner 2026-11-07): an annotated tag on the new commit (message -ShipTagMessage, else -ShipMessage),
                 pushed after the branch and checked on the remote. Refused before any test when the tag already exists
                 here or on the remote; never moves or deletes a tag. With -ShipNoPush the tag is made here only.
@@ -187,6 +190,7 @@ param(
   [string[]]$ShipFiles = @(),
   [string]$ShipBranch = "",
   [string]$ShipRemote = "origin",
+  [string]$ShipRepo = "private",
   [string]$ShipTrailer = "",
   [string]$ShipTag = "",
   [string]$ShipTagMessage = "",
@@ -236,6 +240,17 @@ function HttpJson([string]$url) {
     return $null
   }
 }
+function AdminRoot {
+  $nw = $null
+  if ($env:NEAR_WATCH_DIR) { $nw = $env:NEAR_WATCH_DIR }
+  else {
+    $f = Join-Path $repo "config\local\repos.json"
+    if (Test-Path $f) { $j = Get-Content -Raw $f | ConvertFrom-Json; if ($j.nearWatchDir) { $nw = [string]$j.nearWatchDir } }
+  }
+  if (-not $nw) { $nw = "..\chainaim-adminUI-NEAR\services\near-watch" }
+  if (-not [IO.Path]::IsPathRooted($nw)) { $nw = Join-Path $repo $nw }
+  return [IO.Path]::GetFullPath((Join-Path $nw "..\.."))
+}
 function Quiet([scriptblock]$block) { $prev = $ErrorActionPreference; $ErrorActionPreference = "Continue"; try { & $block } finally { $ErrorActionPreference = $prev } }
 # Service name -> container, shared by -Logs and -Windows.
 $LogContainers = [ordered]@{ "gateway" = "ca-gateway"; "paywall" = "ca-paywall"; "presidio" = "ca-presidio"; "analyst" = "ca-analyst"; "chain-query" = "ca-chain-query"; "console-api" = "ca-console-api"; "agent" = "ca-agent"; "attest" = "ca-attest"; "near-watch" = "ca-near-watch" }
@@ -269,6 +284,9 @@ if ($Ship -and ($Check -or $Stop -or $Test -or $Build -or $WithStub -or $Agent -
 if ($All -and ($Check -or $Stop -or $Test -or $Ship -or $Logs.Count -or $Memory -or $Smoke -or $SmbSample -or $ChiroSample)) { Stop-Here "-All runs the tests, the start and the smoke check itself: leave out -Check, -Stop, -Test, -Ship, -Logs, -Memory, -Smoke, -SmbSample and -ChiroSample" }
 if (-not $All -and ($AllSkipTests -or $AllSkipSmoke -or $AllSmbSample)) { Stop-Here "-AllSkipTests, -AllSkipSmoke and -AllSmbSample need -All" }
 # -AgentAsk / -VerifyReceipt (privateAI-design-32 steps C and D) each run on their own; checked before anything runs.
+# -ShipRepo (2026-11-12): which checkout -Ship commits; admin = the chainaim-adminUI-NEAR checkout (found like AdminRoot).
+if (@("private", "admin") -notcontains $ShipRepo) { Stop-Here "-ShipRepo must be private or admin" }
+if ($ShipRepo -ne "private" -and -not $Ship) { Stop-Here "-ShipRepo needs -Ship" }
 $otherModes = $Check -or $Stop -or $Test -or $Build -or $WithStub -or $Agent -or $Attest -or $Receipts -or $ReceiptKey -or $Ap2Key -or $All -or $Ship -or $Logs.Count -or $Memory -or $Smoke -or $SmbSample -or $ChiroSample -or $RejudgeReceiver -or $Calibrate -or $VerifyJob
 # -Calibrate (privateAI-design-34 ARCH-635) runs on its own too; its options are only valid with it.
 if ($Calibrate -and ($Check -or $Stop -or $Test -or $Build -or $WithStub -or $Agent -or $Attest -or $Receipts -or $ReceiptKey -or $Ap2Key -or $All -or $Ship -or $Logs.Count -or $Memory -or $Smoke -or $SmbSample -or $ChiroSample -or $RejudgeReceiver -or $AgentAsk -or $VerifyReceipt)) { Stop-Here "-Calibrate runs on its own: leave out the other mode switches" }
@@ -513,6 +531,12 @@ if ($All) {
 if ($Ship) {
   if (-not $ShipMessage.Trim()) { Stop-Here "-Ship needs -ShipMessage with the commit message" }
   if (-not (Get-Command git -ErrorAction SilentlyContinue)) { Stop-Here "git is not on PATH" }
+  if ($ShipRepo -eq "admin") {
+    $shipRoot = AdminRoot
+    if (-not (Test-Path (Join-Path $shipRoot ".git"))) { Stop-Here "-ShipRepo admin: no git repository at $shipRoot (set nearWatchDir in config\local\repos.json to its services\near-watch)" }
+    Set-Location $shipRoot
+    Say "REPO" "admin repository $shipRoot (this window stays there if a step stops)"
+  }
   $branch = "$(Quiet { & git rev-parse --abbrev-ref HEAD 2>$null })".Trim()
   if (-not $branch -or $branch -eq "HEAD") { Stop-Here "not on a branch (detached HEAD): check out a branch first" }
   if ($ShipBranch -and $branch -ne $ShipBranch) { Stop-Here "on branch $branch, but -ShipBranch is $ShipBranch" }
@@ -543,6 +567,19 @@ if ($Ship) {
   Say "GIT" "branch $branch, $($want.Count) file(s) to commit:"
   foreach ($f in $want) { Write-Host "  $f" }
   if ($ShipSkipTests) { Say "NOTE" "tests skipped (-ShipSkipTests)" }
+  elseif ($ShipRepo -eq "admin") {
+    # The admin repository's own suites: near-watch (with packages/chain-core) and the admin console, tests and typecheck.
+    $aFail = @()
+    foreach ($d in @("services\near-watch", "apps\admin-console")) {
+      foreach ($task in @("test", "typecheck")) {
+        Say "TEST" "$d npm run $task"
+        & npm --prefix $d run $task | Out-Host
+        if ($LASTEXITCODE) { $aFail += "$d $task (exit $LASTEXITCODE)" }
+      }
+    }
+    if ($aFail.Count) { Stop-Here ("an admin suite failed: " + ($aFail -join ", ") + "; nothing committed") }
+    Say "OK" "all admin suites passed"
+  }
   else {
     Say "TEST" "scripts\check-deps.ts"
     & node scripts\check-deps.ts | Out-Host
@@ -551,7 +588,7 @@ if ($Ship) {
     if ($r[0] -or $r[1] -or $r[2]) { Stop-Here "a suite failed (root suites exit $($r[0]), analyst exit $($r[1]), paywall exit $($r[2])): nothing committed" }
     Say "OK" "all terminal suites passed"
   }
-  if ($ShipDryRun) { Say "OK" "-ShipDryRun: nothing staged, committed or pushed"; exit 0 }
+  if ($ShipDryRun) { Say "OK" "-ShipDryRun: nothing staged, committed or pushed"; Set-Location $repo; exit 0 }
   $addArgs = @("add", "--") + $want
   Quiet { & git @addArgs }
   if ($LASTEXITCODE) { Stop-Here "git add failed (exit $LASTEXITCODE): nothing committed" }
@@ -580,7 +617,8 @@ if ($Ship) {
     $pushedTag = "$(Quiet { & git ls-remote --tags $ShipRemote "refs/tags/$ShipTag" 2>$null })".Trim()
     if (-not $pushedTag) { Stop-Here "push reported success but $ShipRemote does not list tag $ShipTag" }
   }
-  Say "OK" "committed and pushed to $ShipRemote/$branch$(if ($ShipTag) { ", tag $ShipTag" })"
+  Say "OK" "committed and pushed to $ShipRemote/$branch$(if ($ShipTag) { ", tag $ShipTag" })$(if ($ShipRepo -eq 'admin') { ' (admin repository)' })"
+  if ($ShipRepo -eq "admin") { Set-Location $repo }
   exit 0
 }
 
@@ -649,17 +687,6 @@ if ($Ap2Key) {
   exit 0
 }
 
-function AdminRoot {
-  $nw = $null
-  if ($env:NEAR_WATCH_DIR) { $nw = $env:NEAR_WATCH_DIR }
-  else {
-    $f = Join-Path $repo "config\local\repos.json"
-    if (Test-Path $f) { $j = Get-Content -Raw $f | ConvertFrom-Json; if ($j.nearWatchDir) { $nw = [string]$j.nearWatchDir } }
-  }
-  if (-not $nw) { $nw = "..\chainaim-adminUI-NEAR\services\near-watch" }
-  if (-not [IO.Path]::IsPathRooted($nw)) { $nw = Join-Path $repo $nw }
-  return [IO.Path]::GetFullPath((Join-Path $nw "..\.."))
-}
 $adminRoot = AdminRoot
 $adminUp = Join-Path $adminRoot "nearadminup.ps1"
 $adminDown = Join-Path $adminRoot "down.ps1"

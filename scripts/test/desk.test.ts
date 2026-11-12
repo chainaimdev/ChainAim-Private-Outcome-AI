@@ -230,7 +230,7 @@ test("ARCH-614 ARCH-615 -ReceiptKey runs scripts\\receipt-key.ts on <secretsDir>
   assert.match(code, /\[switch\]\$Receipts,/); assert.match(code, /\[switch\]\$ReceiptKey,/); assert.match(code, /\[switch\]\$ReceiptKeyRotate,/);
   assert.match(code, /\[string\]\$ReceiptKeyName = "RECEIPT_SIGNING_KEY",/);
   assert.ok(code.indexOf("-ReceiptKey runs on its own") < code.indexOf("if ($Logs.Count)"), "options checked before anything runs");
-  const k = code.slice(code.indexOf("if ($ReceiptKey) {"), code.indexOf("function AdminRoot"));
+  const k = code.slice(code.indexOf("if ($ReceiptKey) {"), code.indexOf("# ---------------------------------------------------------------- -Ap2Key")); // AdminRoot moved above -Ship (2026-11-12)
   assert.ok(k.length > 0 && code.indexOf("if ($ReceiptKey) {") < code.indexOf("# 1. pre-flight"), "no start");
   assert.match(k, /\$keyArgs = @\("scripts\\receipt-key\.ts", "--secrets-file", \(Join-Path \$secrets "chainaim\.env"\), "--var", \$ReceiptKeyName\)/);
   assert.ok(!/"--env-file"/.test(k), "never --env-file: Node takes it as its own option even after the script name (owner run 2026-11-10)");
@@ -327,7 +327,7 @@ test("ARCH-627 -Ap2Key runs scripts\\receipt-key.ts --alg ES256 on <secretsDir>\
     assert.ok(code.indexOf(m) > 0 && code.indexOf(m) < code.indexOf("if ($Logs.Count)"), `${m}: checked before anything runs`);
   }
   assert.match(code, /\$otherModes = [^\n]*-or \$Ap2Key -or/, "-AgentAsk / -VerifyReceipt refuse it beside them");
-  const k = code.slice(code.indexOf("if ($Ap2Key) {"), code.indexOf("function AdminRoot"));
+  const k = code.slice(code.indexOf("if ($Ap2Key) {"), code.indexOf("$adminRoot = AdminRoot")); // AdminRoot moved above -Ship (2026-11-12)
   assert.ok(k.length > 0 && code.indexOf("if ($Ap2Key) {") < code.indexOf("# 1. pre-flight"), "no start");
   assert.match(k, /\$ap2Args = @\("scripts\\receipt-key\.ts", "--secrets-file", \(Join-Path \$secrets "chainaim\.env"\), "--alg", "ES256", "--var", \$Ap2KeyName\)/);
   assert.match(k, /\$ap2Args \+= @\("--public-out", "config\\ap2-public-key\.jwk\.json"\)/);
@@ -384,4 +384,18 @@ test("ARCH-615 ARCH-631 -VerifyJob JOBID fetches the job's receipt from the cons
   assert.match(j, /UTF8Encoding\(\$false\)/, "written as UTF-8 without a BOM, byte for byte what the console sent");
   assert.ok(!/docker|Get-Content|RECEIPT_SIGNING_KEY/.test(j), "no service started, no secret read");
   assert.ok(code.indexOf("if ($VerifyJob) {") < code.indexOf("# 1. pre-flight"), "no start");
+});
+
+test("-Ship -ShipRepo admin (2026-11-12): the same test, commit and push for the chainaim-adminUI-NEAR checkout, found by AdminRoot; its own suites", () => {
+  assert.match(code, /\[string\]\$ShipRepo = "private",/);
+  assert.match(code, /if \(@\("private", "admin"\) -notcontains \$ShipRepo\)/); assert.match(code, /if \(\$ShipRepo -ne "private" -and -not \$Ship\) \{ Stop-Here "-ShipRepo needs -Ship" \}/);
+  assert.ok(code.indexOf("function AdminRoot {") < code.indexOf("if ($Ship) {"), "defined before -Ship uses it");
+  assert.equal((code.match(/function AdminRoot \{/g) ?? []).length, 1, "one finder, shared with the start");
+  const s = code.slice(code.indexOf("if ($Ship) {"), code.indexOf("# ---------------------------------------------------------------- settings and paths"));
+  assert.ok(s.indexOf("$shipRoot = AdminRoot") < s.indexOf("git fetch") || s.indexOf("$shipRoot = AdminRoot") < s.indexOf("& git fetch"), "in the admin checkout before any git command");
+  assert.match(s, /Set-Location \$shipRoot/);
+  assert.match(s, /foreach \(\$d in @\("services\\near-watch", "apps\\admin-console"\)\)/); assert.match(s, /foreach \(\$task in @\("test", "typecheck"\)\)/);
+  assert.match(s, /& npm --prefix \$d run \$task/);
+  assert.ok(s.indexOf("all admin suites passed") < s.indexOf('@("add"'), "admin tests before anything is staged");
+  assert.ok(!/add -A|add \.|"-A"|--force|push -f|reset|checkout|pull|stash/.test(s), "never force, pull, reset, checkout or stash");
 });
