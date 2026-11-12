@@ -14,7 +14,8 @@
  * varianceAmount; "watch" when over half the band AND the amount; "n/a" for the warm-up period in ratio mode.
  */
 import { type Settings } from "./config.ts";
-import { type Db, amountExpr, dateExpr, ident, loadText, lockFiles, rows } from "./db.ts";
+import { type Db, amountExpr, dateExpr, ident, lockFiles, rows } from "./db.ts";
+import { dropBundleWork, loadSource } from "./erpnext-bundle.ts";
 import { type FileProfile, type Measure, type Recipe } from "./profile.ts";
 
 export type PeriodRow = { period: string; rows: number; total: number };
@@ -46,7 +47,7 @@ export async function analyze(db: Db, recipe: Recipe, profiles: FileProfile[], s
   const byName = new Map(profiles.map((p) => [p.name, p]));
   // 1. Load as text, normalize, then lock file access before any analysis runs.
   for (const [i, [name, f]] of included.entries()) {
-    await loadText(db, `raw${i}`, byName.get(name)!.path);
+    await loadSource(db, `raw${i}`, byName.get(name)!);
     const amt = f.roles.amount ? amountExpr(f.roles.amount) : `coalesce(${amountExpr(f.roles.credit!)}, 0) - coalesce(${amountExpr(f.roles.debit!)}, 0)`;
     await db.conn.run(`CREATE TABLE ${ident("n_" + name)} AS
       SELECT __row AS rid, ${dateExpr(f.roles.date!, f.dateFormat)} AS d, amt AS amount, ${MEASURE_SQL[f.measure]("amt")} AS value,
@@ -54,6 +55,7 @@ export async function analyze(db: Db, recipe: Recipe, profiles: FileProfile[], s
       FROM (SELECT *, ${amt} AS amt FROM ${ident(`raw${i}`)})`);
     await db.conn.run(`DROP TABLE ${ident(`raw${i}`)}`);
   }
+  await dropBundleWork(db);
   await lockFiles(db);
   const unit = s.period;
   const per = (d: string) => `strftime(date_trunc('${unit}', ${d}), '%Y-%m-%d')`;

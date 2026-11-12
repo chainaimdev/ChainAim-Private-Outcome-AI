@@ -10,6 +10,7 @@ import { realpath, stat } from "node:fs/promises";
 import { basename, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
+import { type BundleOptions, DEFAULT_ERPNEXT_DOCTYPES, bundleOptionsFrom } from "./erpnext-bundle.ts";
 
 export type Period = "week" | "month" | "quarter";
 export type MatchMode = "auto" | "one-to-one" | "many-to-one" | "none";
@@ -66,6 +67,9 @@ export type Flags = Settings & {
   schemaCodeValues: number;
   sqlMaxRows: number;
   sqlTimeoutMs: number;
+  /** ERPNext JSON bundles read directly (erpnext-bundle.ts): --erpnext-bundles, --erpnext-suffix, --erpnext-doctypes,
+   * --erpnext-include-drafts, --erpnext-children, --erpnext-max-tables. */
+  bundles: BundleOptions;
 };
 
 const positive = (name: string, v: string | undefined, integer = true): number => {
@@ -117,6 +121,12 @@ export function parseFlags(argv: string[]): Flags {
       "reconcile-trail-rows": { type: "string" },
       "patient-name-format": { type: "string", default: "last_first" },
       "row-filters": { type: "string", default: "" },
+      "erpnext-bundles": { type: "string", default: "on" },
+      "erpnext-suffix": { type: "string", default: ".erpnext-data.json" },
+      "erpnext-doctypes": { type: "string", default: DEFAULT_ERPNEXT_DOCTYPES.join(",") },
+      "erpnext-include-drafts": { type: "boolean", default: false },
+      "erpnext-children": { type: "string", default: "on" },
+      "erpnext-max-tables": { type: "string", default: "40" },
     },
   });
   const period = f.period as Period;
@@ -133,6 +143,8 @@ export function parseFlags(argv: string[]): Flags {
   const allowedHosts = f["allowed-hosts"] === undefined ? [`127.0.0.1:${port}`, `localhost:${port}`] : f["allowed-hosts"].split(",").map((h) => h.trim().toLowerCase()).filter(Boolean);
   for (const h of allowedHosts) if (!/^[a-z0-9.-]+:\d{1,5}$|^\[[0-9a-f:]+\]:\d{1,5}$/.test(h)) throw new Error(`--allowed-hosts entries must be host:port, got ${h}`);
   if (!allowedHosts.length) throw new Error("--allowed-hosts must list at least one host:port");
+  const bundles = bundleOptionsFrom({ bundles: f["erpnext-bundles"]!, suffix: f["erpnext-suffix"]!, doctypes: f["erpnext-doctypes"]!,
+    includeDrafts: f["erpnext-include-drafts"]!, children: f["erpnext-children"]!, maxTables: f["erpnext-max-tables"]! });
   return {
     port,
     bind,
@@ -170,6 +182,7 @@ export function parseFlags(argv: string[]): Flags {
     schemaCodeValues: positive("schema-code-values", f["schema-code-values"]),
     sqlMaxRows: Math.max(1, positive("sql-max-rows", f["sql-max-rows"])),
     sqlTimeoutMs: Math.max(100, positive("sql-timeout-ms", f["sql-timeout-ms"])),
+    bundles,
   };
 }
 

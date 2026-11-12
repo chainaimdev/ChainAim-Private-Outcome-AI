@@ -8,6 +8,8 @@ COPY services/analyst/package.json services/analyst/package-lock.json services/a
 RUN npm --prefix services/analyst ci --omit=dev --no-audit --no-fund
 COPY packages/crossask/src packages/crossask/src
 COPY packages/crossask/package.json packages/crossask/package.json
+COPY packages/erpnext-split/src packages/erpnext-split/src
+COPY packages/erpnext-split/package.json packages/erpnext-split/package.json
 COPY config config
 COPY services/analyst/src services/analyst/src
 # Data is mounted read-only at run time; recipes and run manifests go to the /work volume.

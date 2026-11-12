@@ -1,0 +1,9 @@
+{
+  "name": "@chainaim/erpnext-split",
+  "version": "0.1.0",
+  "private": true,
+  "description": "ERPNext bundle splitting rules (record types, child tables, column order, CSV field quoting) shared by tools/erpnext-split and services/analyst. Pure; no runtime dependencies. Tested through tools/erpnext-split/test and services/analyst/test/erpnext-bundle.test.ts.",
+  "type": "module",
+  "engines": { "node": ">=22.22" },
+  "exports": { ".": "./src/index.ts" }
+}

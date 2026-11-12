@@ -10,10 +10,12 @@
     ".csv",
     ".tsv",
     ".txt",
-    ".pdf"
+    ".pdf",
+    ".json"
   ],
   "maxBytes": {
     ".pdf": 20000000,
+    ".json": 50000000,
     "*": 2000000
   },
   "exclude": [

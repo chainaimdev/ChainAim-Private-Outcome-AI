@@ -3,6 +3,12 @@
 Turns CreditSeal ERPNext v16 bundles (`<borrower>.erpnext-data.json`) into one CSV per record type, so tab 03 can ask
 questions across a borrower's books (dataset `smb-erp-fin` in `config/datasets.json`). Node built-ins only.
 
+**Optional since the analyst reads bundles directly.** Put `<borrower>.erpnext-data.json` itself in the set folder
+(instead of the CSVs) and the analyst builds the same tables, with the same rules and defaults as this tool
+(`services/analyst/src/erpnext-bundle.ts`, flags `--erpnext-*`; parity checked by `services/analyst/test/erpnext-bundle.test.ts`).
+One bundle per folder; a bundle next to CSVs of the same record types is refused (409).
+If this tool's rules change, change the analyst's loader the same way.
+
 ```
 node tools/erpnext-split/split.ts --in sample-data/smb-2-erp-fin/erpnext/_source --out sample-data/smb-2-erp-fin/erpnext
 ```

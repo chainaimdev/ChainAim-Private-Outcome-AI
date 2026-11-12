@@ -37,7 +37,7 @@
       "engine": "crossask",
       "subfolders": true,
       "defaultSubfolder": "orion",
-      "description": "ERPNext v16 books of three demo borrowers (sales orders, invoices, receipts, supplier bills, bank transactions), one CSV per record type made by tools/erpnext-split from the CreditSeal bundles. Each template runs an exact SQL query that rebuilds totals as tools/erpnext-split/README.md defines them, so its table is the same every run (a typed question still gets a model-written query).",
+      "description": "ERPNext v16 books of three demo borrowers (sales orders, invoices, receipts, supplier bills, bank transactions), one CSV per record type made by tools/erpnext-split from the CreditSeal bundles, or the bundle itself (<set>.erpnext-data.json in the set folder, instead of the CSVs): the analyst reads it directly into the same tables (services/analyst/src/erpnext-bundle.ts). Each template runs an exact SQL query that rebuilds totals as tools/erpnext-split/README.md defines them, so its table is the same every run (a typed question still gets a model-written query).",
       "templates": [
         {
           "label": "Cash flow vs installment",

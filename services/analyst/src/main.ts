@@ -40,6 +40,16 @@
  *                                <config-root>/row-filters.json; off = keep every row). Checked at start-up.
  *   --sql-max-rows N             most rows a /sql query returns (default 200; truncated is then true)
  *   --sql-timeout-ms N           a /sql query is stopped after this long (default 15000)
+ *   --erpnext-bundles on|off     a <borrower>.erpnext-data.json in a folder is read directly as one table per ERPNext
+ *                                DocType and child list, the tables tools/erpnext-split writes as CSVs (default on;
+ *                                off = loaded like any JSON file, one table). One bundle per folder; a bundle and a CSV
+ *                                that would be the same table are refused (409). See src/erpnext-bundle.ts.
+ *   --erpnext-suffix S           the file name ending that marks a bundle (default .erpnext-data.json)
+ *   --erpnext-doctypes LIST|all  parent DocTypes kept, comma-separated (default: the splitter's: Customer, Supplier,
+ *                                Item, Sales Order, Sales Invoice, Purchase Invoice, Payment Entry, Bank Transaction)
+ *   --erpnext-include-drafts     also documents whose docstatus is not 1 (default: submitted only, as the splitter)
+ *   --erpnext-children on|off    child lists (items, references, taxes, credit limits) become tables (default on)
+ *   --erpnext-max-tables N       most tables one bundle may give (default 40)
  *
  * A folder's recipe may override period, baselinePeriods, variancePct, varianceAmount, dateWindowDays,
  * amountTolerance, match, pairMode, agingDays and expectedRatio (pins the ratio for ratio pairs) in "settings".
@@ -70,6 +80,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { join } from "node:path";
 import { type Analysis, analyze } from "./analyze.ts";
 import { type DataConfig, type Flags, HttpError, insideRoots, isFolder, parseFlags, readDataConfig, settingsOf } from "./config.ts";
+import { isBundleFile } from "./erpnext-bundle.ts";
 import { type Db, lockFiles, openDb } from "./db.ts";
 import { type Relation, type RowFilter, type TableSchema, loadAndRelate, readRowFilters, schemaText } from "./relate.ts";
 import { SqlRefused, runSelect } from "./sqlrun.ts";
@@ -156,7 +167,7 @@ async function folderOf(b: Record<string, any>, cfg: DataConfig): Promise<string
   if (!(await isFolder(folder))) throw new HttpError(400, "not a folder");
   return folder;
 }
-const profiles = (folder: string, cfg: DataConfig): Promise<FileProfile[]> => profileFolder(folder, cfg, flags.maxFiles, flags.maxBytes, openDb);
+const profiles = (folder: string, cfg: DataConfig): Promise<FileProfile[]> => profileFolder(folder, cfg, flags.maxFiles, flags.maxBytes, openDb, flags.bundles);
 
 async function runAnalysis(folder: string, cfg: DataConfig) {
   const recipe = await readRecipe(cfg.workDir, folder);
@@ -191,10 +202,12 @@ async function status(folder: string, cfg: DataConfig) {
   const recipe = await readRecipe(cfg.workDir, folder);
   if (!last) return { analyzed: false, recipe: Boolean(recipe), changed: true, differences: ["never analyzed"] };
   const now = await listDataFiles(folder, cfg, flags.maxFiles);
+  // A bundle's tables are recorded under their own names (sales-invoice ...); they change exactly when the bundle file does.
+  const bundle = now.find((f) => isBundleFile(f.name, flags.bundles));
   const included = recipe ? Object.entries(recipe.files).filter(([, f]) => f.include).map(([n]) => n) : last.files.map((f) => f.name);
   const differences: string[] = [];
   for (const name of included) {
-    const a = last.files.find((f) => f.name === name), b = now.find((f) => f.name === name);
+    const a = last.files.find((f) => f.name === name), b = now.find((f) => f.name === name) ?? bundle;
     if (!b) differences.push(`${name} is gone`);
     else if (!a) differences.push(`${name} is new`);
     else if (a.bytes !== b.bytes || a.modified !== b.modified) differences.push(`${name} changed`);

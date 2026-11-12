@@ -9,6 +9,8 @@ import { mkdir, readdir, readFile, rename, stat, writeFile } from "node:fs/promi
 import { join } from "node:path";
 import { type DataConfig, HttpError, type Settings, isDataFile } from "./config.ts";
 import { type Db, amountExpr, dateExpr, ident, loadText, rows } from "./db.ts";
+import { type BundleOptions, type BundlePart, DEFAULT_BUNDLE_OPTIONS, bundleParts, isBundleFile, loadBundlePart } from "./erpnext-bundle.ts";
+import { tableBase } from "./relate.ts";
 import type { ResolvedPack } from "./core/ports.ts";
 
 export const ROLES = ["date", "amount", "debit", "credit", "party", "reference", "category"] as const;
@@ -22,7 +24,9 @@ export type FileRecipe = { kind: Kind; roles: Partial<Record<Role, string>>; mea
 export type Recipe = { version: 1; folder: string; /** Domain pack id; absent = the analyst's --pack default (finance-generic). Never stamped in. */ pack?: string; files: Record<string, FileRecipe>; flow: string[]; settings?: Partial<Settings>; confirmedAt?: string };
 
 export type ColumnProfile = { name: string; type: "date" | "number" | "text"; filled: number; samples: string[] };
-export type FileProfile = { name: string; path: string; bytes: number; modified: string; rows: number; columns: ColumnProfile[]; dateRange: { from: string; to: string } | null; tooBig: boolean };
+export type FileProfile = { name: string; path: string; bytes: number; modified: string; rows: number; columns: ColumnProfile[]; dateRange: { from: string; to: string } | null; tooBig: boolean;
+  /** Set when this entry is one table of an ERPNext bundle (erpnext-bundle.ts): name is the table's, path the bundle's. */
+  part?: BundlePart };
 
 export async function listDataFiles(folder: string, cfg: DataConfig, maxFiles: number, extra: readonly string[] = []): Promise<{ name: string; path: string; bytes: number; modified: string }[]> {
   const entries = (await readdir(folder, { withFileTypes: true })).filter((e) => e.isFile() && !e.isSymbolicLink() && isDataFile(e.name, cfg, extra)).sort((a, b) => a.name.localeCompare(b.name));
@@ -147,17 +151,47 @@ export function sha256File(path: string): Promise<string> {
   });
 }
 
-/** Profiles every data file in the folder (loading each into a throwaway DuckDB). */
-export async function profileFolder(folder: string, cfg: DataConfig, maxFiles: number, maxBytes: number, open: () => Promise<Db>): Promise<FileProfile[]> {
+/**
+ * A bundle table and another table of this folder that would get the same table name: relate.ts would rename one to _2
+ * and a template would read the wrong one, so the folder is refused instead (409). Files without a bundle keep the old
+ * behaviour.
+ */
+function bundleClash(profiles: FileProfile[]): string | null {
+  const by = new Map<string, FileProfile>();
+  const label = (p: FileProfile): string => (p.part ? `${p.part.bundle} (${p.part.doctype})` : p.name);
+  for (const p of profiles) {
+    const base = tableBase(p.name), other = by.get(base);
+    if (other && (other.part || p.part)) return `${label(other)} and ${label(p)} would both be table ${base}: keep either the ERPNext bundle or those files in this folder, not both`;
+    by.set(base, p);
+  }
+  return null;
+}
+
+/**
+ * Profiles every data file in the folder (loading each into a throwaway DuckDB). An ERPNext bundle (erpnext-bundle.ts)
+ * gives one entry per table it holds (each DocType and child list); at most one bundle per folder.
+ */
+export async function profileFolder(folder: string, cfg: DataConfig, maxFiles: number, maxBytes: number, open: () => Promise<Db>, bundles: BundleOptions = DEFAULT_BUNDLE_OPTIONS): Promise<FileProfile[]> {
   const files = await listDataFiles(folder, cfg, maxFiles);
+  const found = files.filter((f) => isBundleFile(f.name, bundles));
+  if (found.length > 1) throw new HttpError(409, `${found.map((f) => f.name).join(", ")}: one ERPNext bundle per folder, so each table name is used once`);
   const db = await open();
   try {
     const out: FileProfile[] = [];
     for (const [i, f] of files.entries()) {
       if (f.bytes > maxBytes) { out.push({ ...f, rows: 0, columns: [], dateRange: null, tooBig: true }); continue; }
+      if (isBundleFile(f.name, bundles)) {
+        for (const [k, part] of (await bundleParts(db, f.path, f.name, f.bytes, bundles)).entries()) {
+          await loadBundlePart(db, `p${i}_${k}`, f.path, f.bytes, part);
+          out.push({ ...(await profileTable(db, `p${i}_${k}`, { ...f, name: part.name })), part });
+        }
+        continue;
+      }
       await loadText(db, `p${i}`, f.path);
       out.push(await profileTable(db, `p${i}`, f));
     }
+    const clash = bundleClash(out);
+    if (clash) throw new HttpError(409, clash);
     return out;
   } finally { db.close(); }
 }

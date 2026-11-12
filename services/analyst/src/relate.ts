@@ -14,7 +14,8 @@
  *   confidence = 0.8 x overlap + 0.2 x nameScore
  */
 import { readFileSync } from "node:fs";
-import { type Db, amountExpr, dateExpr, ident, literal, loadText, rows } from "./db.ts";
+import { type Db, amountExpr, dateExpr, ident, literal, rows } from "./db.ts";
+import { dropBundleWork, loadSource } from "./erpnext-bundle.ts";
 import { type FileProfile } from "./profile.ts";
 
 export type RelateOptions = {
@@ -61,12 +62,17 @@ export type Relation = {
   cardinality: "one-to-one" | "one-to-many" | "many-to-one" | "many-to-many";
 };
 
+/** A file's table name before any _2, _3 for a clash (see tableNames). */
+export function tableBase(file: string): string {
+  const base = file.replace(/\.[^.]+$/, "").toLowerCase().replace(/[^a-z0-9_]+/g, "_").replace(/^_+|_+$/g, "") || "file";
+  return /^\d/.test(base) ? "t_" + base : base;
+}
+
 /** The SQL table name for a file: its name without the extension, lower case, letters, digits and _ only; t_ in front when it would start with a digit; _2, _3 ... on a clash. */
 export function tableNames(files: string[]): Map<string, string> {
   const out = new Map<string, string>(), used = new Set<string>(["__row"]);
   for (const f of files) {
-    let base = f.replace(/\.[^.]+$/, "").toLowerCase().replace(/[^a-z0-9_]+/g, "_").replace(/^_+|_+$/g, "") || "file";
-    if (/^\d/.test(base)) base = "t_" + base;
+    const base = tableBase(f);
     let name = base, n = 2;
     while (used.has(name)) name = `${base}_${n++}`;
     used.add(name); out.set(f, name);
@@ -105,7 +111,7 @@ export async function loadAndRelate(db: Db, profiles: FileProfile[], opt: Relate
   const tables: TableSchema[] = [];
   for (const [i, p] of usable.entries()) {
     const raw = `__raw${i}`, t = names.get(p.name)!;
-    await loadText(db, raw, p.path);
+    await loadSource(db, raw, p);
     const rule = opt.rowFilters?.find((f) => f.columns.length === p.columns.length && f.columns.every((c, k) => c === p.columns[k].name));
     let left: TableSchema["left"];
     if (rule) {
@@ -162,6 +168,8 @@ export async function loadAndRelate(db: Db, profiles: FileProfile[], opt: Relate
   for (const c of cands) await db.conn.run(`DROP TABLE ${ident(`__v${c.i}_${c.j}`)}`);
   // Drop any temp value tables of candidates that had too few values.
   for (const t of await rows<{ name: string }>(db, "SELECT table_name AS name FROM duckdb_tables() WHERE starts_with(table_name, '__v')")) await db.conn.run(`DROP TABLE ${ident(t.name)}`);
+  // An ERPNext bundle's working tables (all of its documents, drafts included) are not left for a question to read.
+  await dropBundleWork(db);
   relations.sort((p, q) => Number(q.link === "key") - Number(p.link === "key") || q.confidence - p.confidence || q.shared - p.shared);
   return { tables, relations: relations.slice(0, opt.maxRelations) };
 }

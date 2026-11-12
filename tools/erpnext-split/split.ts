@@ -14,77 +14,11 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSy
 import { basename, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
+import { BUNDLE_SUFFIX, DEFAULT_DOCTYPES, type Doc, type SplitOptions, splitDocuments, toCsv } from "../../packages/erpnext-split/src/index.ts";
 
-export const BUNDLE_SUFFIX = ".erpnext-data.json";
-
-/** Record types written by default: the books (masters a question needs plus every submitted transaction). */
-export const DEFAULT_DOCTYPES = [
-  "Customer", "Supplier", "Item",
-  "Sales Order", "Sales Invoice", "Purchase Invoice", "Payment Entry", "Bank Transaction",
-];
-
-export type Doc = Record<string, unknown> & { doctype: string };
-export type SplitOptions = { doctypes: string[]; children: boolean; submittedOnly: boolean };
-export type Table = { file: string; columns: string[]; rows: Record<string, unknown>[] };
-
-/** "Sales Invoice Item" -> "sales-invoice-item.csv" */
-export const fileFor = (doctype: string): string => doctype.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") + ".csv";
-
-const isScalar = (v: unknown): boolean => v === null || ["string", "number", "boolean"].includes(typeof v);
-
-/** One CSV field: quoted when it holds a comma, quote, line break or leading/trailing space; null and undefined are empty. */
-export function csvField(v: unknown): string {
-  if (v === null || v === undefined) return "";
-  const s = typeof v === "boolean" ? (v ? "1" : "0") : String(v);
-  return /[",\r\n]|^\s|\s$/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-}
-
-export function toCsv(t: Table): string {
-  const lines = [t.columns.map(csvField).join(",")];
-  for (const r of t.rows) lines.push(t.columns.map((c) => csvField(r[c])).join(","));
-  return lines.join("\n") + "\n";
-}
-
-/** Splits one bundle's documents into tables. Column order: name first, then fields in the order first seen. */
-export function splitDocuments(docs: Doc[], opts: SplitOptions): Table[] {
-  const want = new Set(opts.doctypes);
-  const tables = new Map<string, Table>();
-  const add = (doctype: string, row: Record<string, unknown>, lead: string[]): void => {
-    const file = fileFor(doctype);
-    let t = tables.get(file);
-    if (!t) { t = { file, columns: [...lead], rows: [] }; tables.set(file, t); }
-    for (const k of Object.keys(row)) if (!t.columns.includes(k)) t.columns.push(k);
-    t.rows.push(row);
-  };
-  for (const d of docs) {
-    if (typeof d?.doctype !== "string") throw new Error(`a document has no doctype: ${JSON.stringify(d).slice(0, 120)}`);
-    if (!want.has(d.doctype)) continue;
-    if (opts.submittedOnly && "docstatus" in d && d.docstatus !== 1) continue;
-    const row: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(d)) {
-      if (k === "doctype") continue;
-      if (Array.isArray(v)) {
-        if (!opts.children) continue;
-        v.forEach((c, i) => {
-          if (!c || typeof c !== "object") throw new Error(`${d.doctype} ${String(d.name ?? "")}: ${k}[${i}] is not a child row`);
-          const child = c as Record<string, unknown>;
-          const childType = typeof child.doctype === "string" ? child.doctype : `${d.doctype} ${k}`;
-          const crow: Record<string, unknown> = { parent: d.name ?? null, parenttype: d.doctype, parentfield: k, idx: i + 1 };
-          for (const [ck, cv] of Object.entries(child)) {
-            if (ck === "doctype") continue;
-            if (!isScalar(cv)) throw new Error(`${d.doctype} ${String(d.name ?? "")}: ${k}[${i}].${ck} is nested; only one level of child rows is supported`);
-            crow[ck] = cv;
-          }
-          add(childType, crow, ["parent", "parenttype", "parentfield", "idx"]);
-        });
-      } else if (isScalar(v)) row[k] = v;
-      else throw new Error(`${d.doctype} ${String(d.name ?? "")}: field ${k} is an object; not an ERPNext document field`);
-    }
-    add(d.doctype, row, "name" in d ? ["name"] : []);
-  }
-  for (const dt of want) if (![...tables.values()].some((t) => t.file === fileFor(dt))) throw new Error(`no ${dt} documents in the bundle (check --doctypes)`);
-  return [...tables.values()].sort((a, b) => a.file.localeCompare(b.file));
-}
+// The splitting rules live in packages/erpnext-split (shared with services/analyst); re-exported so existing imports keep working.
+export { BUNDLE_SUFFIX, DEFAULT_DOCTYPES, csvField, fileFor, splitDocuments, toCsv } from "../../packages/erpnext-split/src/index.ts";
+export type { Doc, SplitOptions, Table } from "../../packages/erpnext-split/src/index.ts";
 
 export function readBundle(path: string): Doc[] {
   const text = readFileSync(path, "utf8");
