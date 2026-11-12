@@ -17,7 +17,15 @@
      Spending policy (privateAI-design-32 ARCH-620): when GET /agent/policy answers {on: true}, a read-only line under
      "Who pays?" shows the picked tenant's limits (its tenant.json "policy" block) and today's spend; the agent's "policy"
      step shows each check with its limit and the decision. Each agent step is tagged with who did it: the agent (on this
-     PC, with the tenant's key), ChainAim (the console and the paywall) or NEAR (the chain). -->
+     PC, with the tenant's key), ChainAim (the console and the paywall) or NEAR (the chain).
+     AP2 signed quote (privateAI-design-33 section 7, ARCH-628/630/631; only when the console runs with --ap2 on): the agent's
+     step "quote_signed" (its check with the PINNED key config/ap2-public-key.jwk.json) shows between the quote and the
+     policy, and a refusal shows its AP2 error code. On the Me path the page checks ap2.merchant_authorization itself
+     (WebCrypto ECDSA P-256 / SHA-256, the same r||s form) with the key from this console's own /.well-known/ucp, and binds
+     it to the quote shown (job, cents, amount, payee, asset, network). That proves the quote was not changed after it was
+     signed, not who signed it (a page and a key from the same server), and the label says so. Pay stays disabled when the
+     check fails. The receipt panel shows the quote hash the receipt carries (merchantAuthSha256), and the download adds
+     the signed quote as ap2 {checkout, merchant_authorization}, so desk.ps1 -VerifyReceipt checks both. -->
 <script>
 (() => {
   const ask = document.getElementById("xaskGo");
@@ -170,12 +178,14 @@
       const settled = r.settlement ? `settled on ${r.settlement.network}, transaction ${String(r.settlement.transaction).slice(0, 8)}…` : "settlement not attached yet";
       // Step B: what the paying agent found with its pinned key (agent mode only; the Me path passes nothing).
       const byAgent = !agentCheck ? "" : agentCheck.ok ? ` · verified by ${agentCheck.who} ✓` : ` · ${agentCheck.who}'s check failed ✗`;
-      head.textContent = `Signed receipt ✓ · ${r.body.datasetId}${r.body.templateLabel ? ` · "${r.body.templateLabel}"` : ""} · ${settled} · key id ${r.sig.keyId}${byAgent}`;
+      // ARCH-631: the signed quote the receipt points at (--ap2 on only).
+      const quoteHash = typeof r.body.merchantAuthSha256 === "string" ? ` · quote ${r.body.merchantAuthSha256.slice(0, 8)}…` : "";
+      head.textContent = `Signed receipt ✓ · ${r.body.datasetId}${r.body.templateLabel ? ` · "${r.body.templateLabel}"` : ""} · ${settled} · key id ${r.sig.keyId}${quoteHash}${byAgent}`;
       head.title = "Signed by this console. It holds hashes of the files, query, result and model calls, never the question, rows or answer.";
       const dl = document.createElement("button");
       dl.type = "button"; dl.className = "ghost"; dl.id = "xreceiptGo"; dl.textContent = "Download receipt";
       dl.onclick = () => {
-        const blob = new Blob([JSON.stringify({ receipt: r, publicKeyPem: j.publicKeyPem }, null, 2)], { type: "application/json" });
+        const blob = new Blob([JSON.stringify({ receipt: r, publicKeyPem: j.publicKeyPem, ...(j.ap2 ? { ap2: j.ap2 } : {}) }, null, 2)], { type: "application/json" });
         const a = document.createElement("a");
         a.href = URL.createObjectURL(blob); a.download = `chainaim-receipt-${jobId}.json`;
         document.body.append(a); a.click(); a.remove();
@@ -193,6 +203,45 @@
     link.textContent = `${transaction.slice(0, 8)}…${transaction.slice(-6)} ↗`;
     return link;
   };
+
+  // ---- AP2 signed quote, Me path (design-33 section 7): checked in the browser before Pay is enabled ----
+  const b64uBytes = (s) => Uint8Array.from(atob(String(s).replace(/-/g, "+").replace(/_/g, "/") + "===".slice((String(s).length + 3) % 4)), (c) => c.charCodeAt(0));
+  const b64uOf = (str) => { let bin = ""; for (const b of new TextEncoder().encode(str)) bin += String.fromCharCode(b); return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, ""); };
+  /** JCS (RFC 8785) for the JSON values a checkout holds: keys sorted by UTF-16 code units, ECMAScript number and string form (packages/ap2 jcs). */
+  const jcs = (v) => v === null || typeof v !== "object" ? JSON.stringify(v)
+    : Array.isArray(v) ? `[${v.map(jcs).join(",")}]`
+    : `{${Object.keys(v).filter((k) => v[k] !== undefined).sort().map((k) => `${JSON.stringify(k)}:${jcs(v[k])}`).join(",")}}`;
+  /**
+   * The quote's AP2 merchant authorization, verified with the key of this console's /.well-known/ucp and bound to the quote
+   * shown. null when the quote carries no ap2 (the console runs with --ap2 off); else {ok, kid} or {ok: false, reason}.
+   */
+  async function checkSignedQuote(job) {
+    const a = job.ap2;
+    if (!a) return null;
+    const no = (reason) => ({ ok: false, reason });
+    try {
+      if (typeof crypto === "undefined" || !crypto.subtle) return no("this browser offers no WebCrypto here (open the console as http://127.0.0.1)");
+      const m = /^([A-Za-z0-9_-]+)\.\.([A-Za-z0-9_-]+)$/.exec(String(a.merchant_authorization ?? ""));
+      if (!m || !a.checkout || typeof a.checkout !== "object") return no("the quote has no detached JWS merchant_authorization");
+      const header = JSON.parse(new TextDecoder().decode(b64uBytes(m[1])));
+      if (header.alg !== "ES256" || typeof header.kid !== "string" || Object.keys(header).length !== 2) return no("the JWS header must be exactly {alg: ES256, kid}");
+      const r = await fetch("/.well-known/ucp");
+      const prof = r.ok ? await r.json() : null;
+      const jwk = Array.isArray(prof?.keys) ? prof.keys.find((k) => k && k.kid === header.kid) : undefined;
+      if (!jwk) return no(`this console's /.well-known/ucp has no key ${header.kid}`);
+      const key = await crypto.subtle.importKey("jwk", { kty: jwk.kty, crv: jwk.crv, x: jwk.x, y: jwk.y }, { name: "ECDSA", namedCurve: "P-256" }, false, ["verify"]);
+      const { ap2: _ap2, ...payload } = a.checkout;
+      const signedBytes = new TextEncoder().encode(`${m[1]}.${b64uOf(jcs(payload))}`);
+      if (!(await crypto.subtle.verify({ name: "ECDSA", hash: "SHA-256" }, key, b64uBytes(m[2]), signedBytes))) return no("the signature does not verify over this quote");
+      const ck = a.checkout, ext = ck["dev.chainaim.job"] ?? {};
+      const total = Array.isArray(ck.totals) ? ck.totals.filter((t) => t && t.type === "total") : [];
+      if (ck.id !== job.jobId) return no("the signed quote is for another job");
+      if (ck.currency !== "USD" || total.length !== 1 || !Number.isInteger(total[0].amount) || !Number.isInteger(ext.usdcDecimals) || ext.usdcDecimals < 2) return no("the signed quote has no single whole-cent USD total");
+      if (BigInt(total[0].amount) * 10n ** BigInt(ext.usdcDecimals - 2) !== BigInt(job.amount) || ext.amountUnits !== job.amount) return no("the signed price is not the price shown");
+      if (ext.payTo !== job.payTo || ext.asset !== job.asset || ext.network !== job.network) return no("the signed payee, asset or network is not the one shown");
+      return { ok: true, kid: header.kid };
+    } catch (e) { return no(e && e.message ? e.message : String(e)); }
+  }
 
   /** Agent mode: one run (agentRun), then the policy line is read again, since today's spend may have changed (ARCH-620). */
   async function agentStep(body) {
@@ -239,6 +288,7 @@
         } else if (type === "tool_called") step(by(AGENT), "The agent asked ChainAim to run the job");
         else if (type === "job_ran" && (ranJob = /^[0-9a-f]{32}$/.test(String(d.jobId)) ? String(d.jobId) : null, true)) step(by("ChainAim"), `Job run and held (id ${String(d.jobId).slice(0, 8)}…); the result stays hidden until paid`);
         else if (type === "quoted") { quoted = d; step(by("ChainAim"), `Quoted ${Number(d.totalUsd)} USDC on ${d.network} to ${d.payTo}`); }
+        else if (type === "quote_signed") step(by(AGENT), `Quote signed by ChainAim ✓ · key id ${String(d.kid).slice(0, 8)}… · price, payee and network match`);
         else if (type === "policy") {
           const checks = Array.isArray(d.checks) ? d.checks.filter((c) => CHECK[c.check]).map((c) => `${CHECK[c.check](c)} ${c.ok ? "✓" : "✗"}`) : [];
           step(by(AGENT), `Spending policy: ${d.decision === "pay" ? "pay ✓" : d.decision === "refuse" ? "refused ✗" : `${d.decision} ✗`} · ${checks.join(" · ")}`);
@@ -255,7 +305,7 @@
           step(by(AGENT), `Receipt check failed ✗: ${d.reason} (the payment stands)`);
         }
         else if (type === "done") step("Done");
-        else if (type === "refused") throw new Error(`Not paid: ${d.reason}`);
+        else if (type === "refused") throw new Error(`Not paid${typeof d.code === "string" ? ` [${d.code}]` : ""}: ${d.reason}`);
         else if (type === "error") throw new Error(`${d.reason}${d.transaction ? ` (transaction ${d.transaction})` : ""}`);
       }
     }
@@ -351,6 +401,23 @@
       const cancel = document.createElement("button");
       cancel.type = "button"; cancel.className = "ghost"; cancel.textContent = "Don't pay";
       pay.replaceChildren(total, button, cancel);
+      // AP2 (design-33 section 7): with a signed quote, Pay waits for the browser's check and stays disabled if it fails.
+      if (job.ap2) {
+        const signedLine = document.createElement("p");
+        signedLine.id = "xpaySigned"; signedLine.className = "muted";
+        signedLine.textContent = "Signed quote: checking…";
+        total.after(signedLine);
+        button.disabled = true;
+        void checkSignedQuote(job).then((v) => {
+          if (v && v.ok) {
+            signedLine.textContent = `Signed quote ✓ (key id ${v.kid.slice(0, 8)}…) · checked in this browser with this console's own /.well-known/ucp key: the price, payee and network were not changed after signing (it does not prove who runs this console; the AI agent checks against its own pinned key)`;
+            if (!cancel.disabled) button.disabled = false;
+          } else {
+            signedLine.className = "err";
+            signedLine.textContent = `Signed quote ✗: ${v ? v.reason : "no signed quote"}. Pay is disabled.`;
+          }
+        });
+      }
       cancel.onclick = () => { pay.replaceChildren(); reject(new Error("Not paid: the result stays hidden and the quote expires on its own.")); };
       button.onclick = async () => {
         button.disabled = true; cancel.disabled = true;

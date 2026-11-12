@@ -5,7 +5,7 @@
  * and/or a file. No ARCH-ID yet: named LW2-SINK.
  */
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -114,7 +114,8 @@ describe("payment log sink", () => {
       await until(() => stub.got.length === 1);
       assert.equal(stub.got[0].key, KEY);
       assert.equal((JSON.parse(stub.got[0].body) as { event: string }).event, "payment_settled");
-      await until(() => readFileSync(file, "utf8").endsWith("\n"));
+      // The post can reach the stub before the append is on disk (seen on Windows, 2026-11-11): wait for the file too.
+      await until(() => existsSync(file) && readFileSync(file, "utf8").endsWith("\n"));
       assert.equal(readFileSync(file, "utf8").trim(), stub.got[0].body);
 
       stub.hang.on = true;

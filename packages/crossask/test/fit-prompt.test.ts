@@ -68,3 +68,18 @@ test("crossAsk: a table list + question over maxPromptChars is refused before an
   assert.equal(sizes.length, 0, "no model call");
   assert.match(r.error!, /characters, over the 10000 a query request may have: pick fewer files or a smaller folder/);
 });
+
+test("ARCH-635 sentToModel carries the UTF-8 bytes of exactly what was sent, beside chars (calibration of bytesPerChar / tokensPerByte)", async () => {
+  const sent: { role: string; content: string }[][] = [];
+  const r = await crossAsk({ folder: "/x", question: "Combien d'été ? 💶", model: "m/x", phrase: "llm", sqlRetries: 0, answerMaxRows: 10 }, {
+    analyst: async (route) => route === "relations" ? { schema: "TABLE t (n BIGINT)", relations: [], tables: ["t"] } : { columns: ["n"], rows: [{ n: 1 }], truncated: false },
+    chat: async (messages) => { sent.push(messages.map((m) => ({ ...m }))); return { text: sent.length === 1 ? "```sql\nSELECT 1 AS n\n```" : "One." }; },
+  });
+  assert.equal(r.error, undefined, r.error);
+  assert.equal(r.sentToModel.length, 2);
+  r.sentToModel.forEach((s, i) => {
+    assert.equal(s.bytes, sent[i].reduce((n, m) => n + Buffer.byteLength(m.content, "utf8"), 0), s.step);
+    assert.equal(s.chars, sent[i].reduce((n, m) => n + m.content.length, 0), s.step);
+    assert.ok(s.bytes > s.chars, "the accents and the emoji take more bytes than UTF-16 units");
+  });
+});

@@ -11,6 +11,9 @@
  *   3. the tool posts the job to the console (POST <console>/jobs/crossask: run, meter, quote, hold, register) with
  *      the user's question as typed, exactly as the manual Intear flow does; the console's job pipeline masks what
  *      its models see, as it does for every job
+ *   3a. with the signed-quote check (privateAI-design-33 ARCH-630; --ap2-verify on), the console's ap2 checkout is verified
+ *      with the PINNED AP2 public key and bound to the quote (agent-ap2.ts): step `quote_signed`, or `refused` carrying
+ *      the AP2 error code; the paywall's 402 offer is then bound to the same payee, asset and amount before signing
  *   3b. with a spending policy (privateAI-design-32 ARCH-620; --agent-policy on), the quote goes through the tenant's
  *      policy (packages/agent-policy decide(), the "policy" block of tenant.json) and today's spend from the ledger;
  *      the `policy` step carries each check and the decision. Anything but "pay" ends the run: nothing is signed or paid.
@@ -40,6 +43,8 @@ import { NEAR_NETWORKS } from "../src/config.ts";
 import { nearBuyer, nearNetworkName, payAndFetchNear, SetupError, type NearBuyer } from "./near.ts";
 import { AskRefused } from "./private-ask-core.ts";
 import { verifyPaidReceipt, type PaidJob, type ReceiptCheck, type ReceiptEvent } from "./agent-receipt.ts";
+import { checkSignedQuote, type Ap2Check, type QuoteSignedEvent } from "./agent-ap2.ts";
+import type { Ap2ErrorCode } from "../../../packages/ap2/src/index.ts";
 import type { PromptScan } from "./prompt-scan.ts";
 import { loadTenants } from "./rig-core.ts";
 
@@ -154,6 +159,8 @@ export type AgentEvent =
   | { type: "tool_called"; tool: string }
   | { type: "job_ran"; jobId: string; expiresAt: number }
   | { type: "quoted"; jobId: string; amount: string; totalUsd: string; network: string; asset: string; payTo: string }
+  /** ARCH-630: ChainAim's signed quote verified with the pinned key and bound to the quote; after quoted, before policy. */
+  | QuoteSignedEvent
   /** ARCH-620: the tenant's policy applied to the quote; every check with its limit and value, the decision and why. */
   | { type: "policy"; tenant: string; decision: "pay" | "approve" | "counter" | "refuse"; reason: string; checks: PolicyCheck[]; spentTodayUsd: string }
   | { type: "signed"; account: string }
@@ -162,7 +169,8 @@ export type AgentEvent =
   /** Step B: the job's signed receipt checked against the pinned key (agent-receipt.ts); after released, before done. */
   | ReceiptEvent
   | { type: "done" }
-  | { type: "refused"; reason: string }
+  /** code: the UCP AP2 error code when the signed-quote check refused (ARCH-630). */
+  | { type: "refused"; reason: string; code?: Ap2ErrorCode }
   | { type: "error"; reason: string; transaction?: string };
 
 /** What the agent's model receives from the tool: never the result's rows, table or worded answer (ARCH-305). */
@@ -227,6 +235,8 @@ export type RunDeps = {
   policy?: AgentPolicy;
   /** The receipt check after a paid release (step B); unset = no receipt step (--receipt-verify off). */
   receiptCheck?: ReceiptCheck;
+  /** The signed-quote check before the policy (ARCH-630); unset = no quote_signed step (--ap2-verify off). */
+  ap2Check?: Ap2Check;
   queue: AccountQueue;
   /** How the agent's instructions name the tenant; the tenant's real name is never sent unless given here. */
   tenantLabel: string;
@@ -327,7 +337,7 @@ async function runAndPay(
   if (signal.aborted) return refuse("the request was cancelled before anything was run or paid");
 
   // Run, meter, quote, hold, register: the console answers the cost and the job id only.
-  let job: { jobId: string; totalUsd: string; amount: string; network: string; asset: string; payTo: string; expiresAt: number; route?: string; attested: boolean };
+  let job: { jobId: string; totalUsd: string; amount: string; network: string; asset: string; payTo: string; expiresAt: number; route?: string; attested: boolean; ap2?: unknown };
   try {
     const r = await fetch(`${deps.console}/jobs/crossask`, {
       method: "POST",
@@ -343,7 +353,7 @@ async function runAndPay(
     ) return refuse("the console's quote could not be read, so nothing was paid");
     // route / attested (ARCH-620): what the console says the job ran on; a console that does not say counts as not attested.
     job = { jobId: j.jobId, totalUsd: j.totalUsd, amount: j.amount, network: j.network, asset: j.asset, payTo: j.payTo, expiresAt: j.expiresAt,
-      ...(typeof j.route === "string" ? { route: j.route } : {}), attested: j.attested === true };
+      ...(typeof j.route === "string" ? { route: j.route } : {}), attested: j.attested === true, ...(j.ap2 !== undefined ? { ap2: j.ap2 } : {}) };
   } catch (e) {
     return refuse(signal.aborted ? "the request was cancelled before anything was paid" : `the console could not be reached at ${deps.console}, so nothing was run or paid (${(e as Error).name})`);
   }
@@ -351,6 +361,15 @@ async function runAndPay(
   emit({ type: "job_ran", jobId: job.jobId, expiresAt: job.expiresAt });
   if (job.network !== tenant.buyer.network) return refuse(`the job is quoted on ${job.network}, but this agent pays on ${tenant.buyer.network}; nothing was paid`);
   emit({ type: "quoted", jobId: job.jobId, amount: job.amount, totalUsd: job.totalUsd, network: job.network, asset: job.asset, payTo: job.payTo });
+  // ARCH-630: the signed quote, before the policy and before anything is signed.
+  if (deps.ap2Check) {
+    const v = checkSignedQuote(deps.ap2Check, job.ap2, job);
+    if (!v.ok) {
+      const reason = `ChainAim's signed quote was refused (${v.code}): ${v.reason}; nothing was signed or paid`;
+      return { reply: { status: "refused" as const, reason }, terminal: { type: "refused" as const, reason, code: v.code } };
+    }
+    emit(v.event);
+  }
 
   // The payer, with the hang-up checked right before signing and the `signed` step reported right after.
   let signed = false;
@@ -385,7 +404,10 @@ async function runAndPay(
     }
     let paid;
     try {
-      paid = await payAndFetchNear(`${deps.paywall}/v1/jobs/${job.jobId}/release`, { method: "POST", headers: {}, body: "" }, payer, maxAmount ? { maxAmount } : {});
+      paid = await payAndFetchNear(`${deps.paywall}/v1/jobs/${job.jobId}/release`, { method: "POST", headers: {}, body: "" }, payer, {
+        ...(maxAmount ? { maxAmount } : {}),
+        ...(deps.ap2Check ? { requireOffer: { payTo: job.payTo, asset: job.asset, amount: job.amount } } : {}),
+      });
     } catch (e) {
       const reason = e instanceof Error ? e.message : String(e);
       return fail(signed ? `${reason}; the payment was signed, check ${tenant.accountId}'s recent transactions` : reason);

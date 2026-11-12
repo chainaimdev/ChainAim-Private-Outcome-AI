@@ -145,3 +145,36 @@ desk.ps1 -Ap2Key = `--alg ES256 --var AP2_SIGNING_KEY --public-out config/ap2-pu
   (lesson 1; console-docker.test.ts walks the imports). agent.Dockerfile + its .dockerignore: same, plus
   `config/ap2-public-key.jwk.json`.
 - New: cost.ts `--price-round` (D2 A) is not in the handoff list.
+
+## 7. UI changes (pages read 2026-11-11 ~19:10Z, chat nearao-impl-7; owner 19:02Z: do BOTH the private UI and the NEAR admin UI)
+
+Private AI console (test-console/console/index.html sections t1 Scan and mask, t2 Private chat, t5 "Private Chat and AI
+(Across Files)" which holds the paid-jobs.html box, t3 Payment, t4 Decision ledger):
+- t1, t2, t4: no change (no paid job there).
+- paid-jobs.html, AI agent path (agentRun event switch): new `quote_signed` -> step `[Agent tNN] Quote signed by ChainAim ✓ ·
+  key id 83816e6f… · price, payee and network match` between `quoted` and `policy`; a `refused` carrying an AP2 code shows
+  it. The `quoted` step line under --price-round cent shows whole cents (it already prints Number(totalUsd)).
+- paid-jobs.html, Me path (payStep): the total line adds "Signed quote ✓ (key id …)" after the page verifies
+  ap2.merchant_authorization in the browser (WebCrypto ECDSA P-256 / SHA-256 takes the same r||s form). The key comes from
+  the console's own /.well-known/ucp, so this proves the quote is consistent, not who signed it: the label says so. Pay
+  stays disabled when the check fails.
+- receiptPanel: adds "quote <first 8 of merchantAuthSha256>…" and the download JSON adds {checkout, merchant_authorization}
+  so -VerifyReceipt can check quote and receipt together.
+- t3 Payment: a "Show the UCP profile" button (GET /.well-known/ucp: capabilities incl. dev.ucp.common.payment.ap2_mandate,
+  keys[]) beside "Try scan/mask/chat"; a visible place for the demo.
+- Phase 2: steps `[Agent tNN] Checkout mandate signed` and `[ChainAim] Mandate verified, settling` / refusal code.
+- Lesson 11: paid-jobs-receipt.test.ts pins page lines; update it with the new lines.
+
+NEAR admin UI (chainaim-adminUI-NEAR; apps/admin-console tabs jobs, feeds, ledger, live-ops, reconcile; near-watch
+src/jobs.ts):
+- Found: near-watch JOB_EVENTS = job_quoted, job_released, job_expired, job_attested. It does NOT accept job_receipt, which
+  the console sends only with --job-feed-receipts on (default off). So the admin UI shows no receipts today; that gap
+  exists before AP2.
+- Jobs tab (components/tabs/jobs.tsx table: time, job, payer, network, amount, state, ..., attested): add a "signed quote"
+  column (✓ key id / ✗ / – when AP2 off) and a "receipt" column (✓ settled / pending / –); the job detail adds rows key id,
+  quote hash, receipt id, result hash.
+- near-watch: accept job_receipt (fields already defined by the console's job-feed.ts) and an optional `ap2 {kid,
+  merchantAuthSha256}` on job_quoted (console job-feed.ts quoted()); then switch --job-feed-receipts on in up.ps1.
+- Phase 2: a `job_mandate {jobId, verdict, code?, mandateSha256}` event from the paywall (new feed sender there) and a
+  "mandate" column. Feeds, ledger, live-ops, reconcile tabs: no change needed (they are about payments/claims, which AP2 does
+  not change); not read line by line.

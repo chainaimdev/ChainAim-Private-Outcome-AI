@@ -110,3 +110,15 @@ test("ARCH-614 the signing key comes from the named variable and its value never
   const s = signerFromEnv({ K: ed.replace(/\n/g, "\\n") }, "K");
   assert.match(s.keyId, /^[0-9a-f]{32}$/);
 });
+
+test("ARCH-631 merchantAuthSha256 is optional, signed with the body, and must be a SHA-256 hex", () => {
+  const signer = signerFromKey(generateKeyPairSync("ed25519").privateKey);
+  const result = { x: 1 };
+  const withHash = signReceipt({ ...body(result), merchantAuthSha256: h("eyJhbGciOiJFUzI1NiJ9..sig") }, signer);
+  assert.deepEqual(verifyReceipt(withHash, signer.publicKeyPem, result), { ok: true, settled: false });
+  const changed = { ...withHash, body: { ...withHash.body, merchantAuthSha256: h("another quote") } };
+  assert.deepEqual(verifyReceipt(changed, signer.publicKeyPem), { ok: false, reason: "the receipt signature does not verify" });
+  // A receipt without it (--ap2 off, or made before design-33) still verifies.
+  assert.deepEqual(verifyReceipt(signReceipt(body(result), signer), signer.publicKeyPem, result), { ok: true, settled: false });
+  assert.throws(() => signReceipt({ ...body(result), merchantAuthSha256: "ABC" }, signer), /merchantAuthSha256 must be 64 lowercase hex characters/);
+});

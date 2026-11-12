@@ -18,6 +18,9 @@
 !packages/receipt/package.json
 !packages/receipt/src
 !config/receipt-public-key.pem
+!packages/ap2/package.json
+!packages/ap2/src
+!config/ap2-public-key.jwk.json
 **/node_modules
 **/.env
 **/*.env

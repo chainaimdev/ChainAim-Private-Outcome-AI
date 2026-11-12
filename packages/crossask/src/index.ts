@@ -204,7 +204,7 @@ export function fanOutJoins(sql: string, relations: readonly RelationLike[]): st
 export type CrossAskResult = {
   question: string; schema: string; relations: unknown[]; attempts: Attempt[];
   sql: string | null; result: { columns: string[]; rows: Record<string, unknown>[]; truncated: boolean } | null;
-  answer: string | null; unverified: string[]; served: ChatReply[]; sentToModel: { step: string; chars: number; hasData: boolean }[];
+  answer: string | null; unverified: string[]; served: ChatReply[]; sentToModel: { step: string; chars: number; bytes: number; hasData: boolean }[];
   /** For each figure in unverified that simple arithmetic on the result gives exactly: what it equals (deriveFigure). A hint, not a check. */
   derivations: Record<string, string>;
   /** Problems with the result that the number check cannot see (e.g. a join that multiplies rows). */
@@ -250,6 +250,11 @@ export function resultText(r: { columns: string[]; rows: Record<string, unknown>
   return lines.join("\n");
 }
 
+/** UTF-8 bytes of the messages' contents, what chars counts in UTF-16 units: the cost model's bytesPerChar and tokensPerByte
+ *  are calibrated from these two (privateAI-design-34 ARCH-635). Sizes only, never the text. */
+const ENC = new TextEncoder();
+const utf8Bytes = (ms: readonly Msg[]): number => ms.reduce((n, m) => n + ENC.encode(m.content).length, 0);
+
 export async function crossAsk(input: CrossAskInput, deps: CrossAskDeps): Promise<CrossAskResult> {
   if (typeof input.question !== "string" || !input.question.trim()) throw new Error("question is required");
   // Step timings (ARCH-204), only with deps.clock: whole ms, added up per step even when a call fails.
@@ -273,7 +278,7 @@ export async function crossAsk(input: CrossAskInput, deps: CrossAskDeps): Promis
         out.error = `the table list and the question are ${messages[0].content.length + messages[1].content.length} characters, over the ${input.maxPromptChars} a query request may have: pick fewer files or a smaller folder`;
         return out;
       }
-      out.sentToModel.push({ step: attempt ? "query (retry)" : "query", chars: send.reduce((n, m) => n + m.content.length, 0), hasData: false });
+      out.sentToModel.push({ step: attempt ? "query (retry)" : "query", chars: send.reduce((n, m) => n + m.content.length, 0), bytes: utf8Bytes(send), hasData: false });
       let reply: ChatReply;
       try { reply = await timed(() => deps.chat(send, input.model), (ms) => { t!.queryMs += ms; }); }
       catch (e) { out.error = `the model that writes the query (${input.model}) failed: ${(e as Error).message}`; return out; }
@@ -319,7 +324,7 @@ export async function crossAsk(input: CrossAskInput, deps: CrossAskDeps): Promis
   if (input.phrase === "llm") {
     const table = resultText(out.result, input.answerMaxRows);
     const ask: Msg[] = [{ role: "system", content: ANSWER_SYSTEM }, { role: "user", content: `Question: ${input.question.trim()}\n\nResult:\n${table}` }]; // no SQL: it led a small model to review the query instead of answering
-    out.sentToModel.push({ step: "answer", chars: ask.reduce((n, m) => n + m.content.length, 0), hasData: true });
+    out.sentToModel.push({ step: "answer", chars: ask.reduce((n, m) => n + m.content.length, 0), bytes: utf8Bytes(ask), hasData: true });
     // The result is already computed here; a failed answer step keeps it and says why, instead of losing it.
     let reply: ChatReply;
     try { reply = await timed(() => deps.chat(ask, input.answerModel || input.model), (ms) => { t!.answerMs = ms; }); }

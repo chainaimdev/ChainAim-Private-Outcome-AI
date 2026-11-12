@@ -76,6 +76,8 @@
  *   --pricing-catalog PATH     model prices (pricing.inputPerM / outputPerM), e.g. ../../config/catalog.bedrock.json
  *   --fee-per-model-call-usd D, --fee-analyst-usd D, --near-gas-fee-usd D, --margin-pct D, --min-price-usd D
  *                              required with --paid-jobs on, non-negative decimals, never defaulted (MANUAL_SETUP.md)
+ *   --price-round micro|cent   privateAI-design-33 ARCH-629: round the total UP to 6 decimals (micro, default) or to whole
+ *                              cents (cent; the default and the only value under --ap2 on, whose UCP totals are cents)
  *   Paid-job feed to near-watch (chainaim-adminUI-NEAR architecture-adminui-jobs.md ARCH-205; off unless --job-feed-url,
  *   which needs --paid-jobs on): job_quoted / job_released / job_expired, ids, times, amounts, models and counts only
  *   (job-feed.ts), never awaited by a request.
@@ -103,6 +105,15 @@
  *   --receipt-dir PATH          where receipts are kept as <jobId>.json (default ../../runtime/receipts)
  *   --receipt-max-files N       a dataset with more files is not sold (no receipt can cover it; default 500)
  *   --job-feed-receipts on|off  also send job_receipt to near-watch (default off: near-watch must accept the event first)
+ *   --job-feed-ap2 on|off       also send the signed quote's key id and hash on job_quoted (default off; near-watch ARCH-702)
+ *   AP2 signed quotes (privateAI-design-33 ARCH-628; off unless --ap2 on, which needs --paid-jobs on and implies
+ *   --price-round cent): each quoted job is written as a UCP checkout (2026-08-25) and signed as an AP2 merchant
+ *   authorization (detached JWS, ES256, packages/ap2); held with the job and answered as ap2 {checkout,
+ *   merchant_authorization}. GET /.well-known/ucp answers the business profile with the public key (keys[]).
+ *   --ap2 on|off                default off: the answer, the routes and the price are as before
+ *   --ap2-key-env NAME          environment variable holding the PKCS#8 PEM EC P-256 key (default AP2_SIGNING_KEY; desk.ps1 -Ap2Key)
+ *   --ap2-alg ES256             the JWS alg (only ES256; AP2 allows ECDSA only, design-33 D1)
+ *   --ap2-terms-url URL         the checkout's terms_of_service link, required with --ap2 on
  *
  *   Docker split (DOCKERIZE-PLAN 4.1, C1-C7; every default is today's single process on 127.0.0.1):
  *   --mode all|ui|api          all (default): page and backend in one process, as before. api: the same backend, meant to
@@ -149,12 +160,14 @@ import { NETWORKS } from "../../services/web/src/balance.ts";
 import { NEAR_WALLETS, isNearWalletId } from "../../services/web/src/near-wallets.ts";
 import { analystClient, crossAsk, gatewayChat } from "../../packages/crossask/src/index.ts";
 import { RUN_LOG_MODES, RunLog, type RunLogMode } from "./run-log.ts";
-import { quoteJob } from "../../packages/crossask/src/cost.ts";
+import { microsToUsd, quoteJob, USDC_DECIMALS } from "../../packages/crossask/src/cost.ts";
 import { JobStore, internalHandler, meterOf, paidJobsConfig, registerJob } from "./jobs.ts";
 import { JobFeed, jobFeedConfig } from "./job-feed.ts";
 import { AttestClient, attestConfig } from "./attest.ts";
 import { datasetFiles, datasetIdOf, receiptConfig, receiptOnRelease, ReceiptStore, routeOf, templateLabelOf } from "./receipt.ts";
 import type { HeldJob, ReceiptHold } from "./jobs.ts";
+import { ap2Answer, ap2Config, signJobCheckout, ucpProfile, type Ap2Hold } from "./ap2.ts";
+import { filesRoot } from "../../packages/receipt/src/index.ts";
 
 const { values: flags } = parseArgs({
   args: process.argv.slice(2),
@@ -202,6 +215,7 @@ const { values: flags } = parseArgs({
     "near-gas-fee-usd": { type: "string" },
     "margin-pct": { type: "string" },
     "min-price-usd": { type: "string" },
+    "price-round": { type: "string" },
     "job-feed-url": { type: "string" },
     "job-feed-key-env": { type: "string" },
     "job-feed-timeout-ms": { type: "string" },
@@ -218,6 +232,11 @@ const { values: flags } = parseArgs({
     "receipt-dir": { type: "string", default: fileURLToPath(new URL("../../runtime/receipts", import.meta.url)) },
     "receipt-max-files": { type: "string" },
     "job-feed-receipts": { type: "string" },
+    "job-feed-ap2": { type: "string" },
+    ap2: { type: "string" },
+    "ap2-key-env": { type: "string" },
+    "ap2-alg": { type: "string" },
+    "ap2-terms-url": { type: "string" },
     mode: { type: "string", default: "all" },
     bind: { type: "string", default: "127.0.0.1" },
     api: { type: "string" },
@@ -236,7 +255,7 @@ const MODE = flags.mode as "all" | "ui" | "api";
 if (!["all", "ui", "api"].includes(MODE)) throw new Error(`--mode must be all, ui or api, got ${flags.mode}`);
 if (MODE === "ui") {
   // The ui process runs nothing of the backend; a backend flag here would be silently unused, so it is refused.
-  for (const name of ["paid-jobs", "job-feed-url", "pricing-catalog", "dataset-root", "attest-url", "receipts"] as const) {
+  for (const name of ["paid-jobs", "job-feed-url", "pricing-catalog", "dataset-root", "attest-url", "receipts", "ap2", "price-round"] as const) {
     if (flags[name] !== undefined) throw new Error(`--${name} belongs to the api process, not --mode ui (use --paid-jobs-page on for the tab 03 pay box)`);
   }
   if (!flags.api) throw new Error("--mode ui needs --api URL: the console API, e.g. http://127.0.0.1:8735");
@@ -293,6 +312,8 @@ const JOBS = PAID_JOBS ? new JobStore(PAID_JOBS.max, PAID_JOBS.ttlMs, Date.now, 
 /** Job Evidence Receipts (ARCH-613..616): undefined unless --receipts on; start-up stops here when the key variable is missing or not Ed25519. */
 const RECEIPT_CONFIG = MODE === "ui" ? undefined : receiptConfig(flags, process.env, PAID_JOBS !== undefined);
 const RECEIPTS = RECEIPT_CONFIG ? new ReceiptStore(RECEIPT_CONFIG) : undefined;
+/** AP2 signed quotes (privateAI-design-33 ARCH-628): undefined unless --ap2 on; start-up stops here when the key is missing or not P-256. */
+const AP2_CONFIG = MODE === "ui" ? undefined : ap2Config(flags, process.env, PAID_JOBS !== undefined);
 /** The paywall's release notice (jobs.ts internalHandler): the job feed's job_released, then the receipt, which is never awaited. */
 function onJobReleased(jobId: string, job: HeldJob, notice: unknown): void {
   JOB_FEED?.released(jobId);
@@ -534,7 +555,18 @@ createServer(async (req, res) => {
       const required = header ? JSON.parse(Buffer.from(header, "base64").toString("utf8")) : null;
       json(res, 200, {
         status: r.status,
-        accepts: required?.accepts?.map((a: Record<string, any>) => ({ price: Number(a.amount), network: a.network, asset: a.asset, issuer: a.extra?.issuer, payTo: a.payTo, invoiceId: a.extra?.invoiceId })) ?? [],
+        // One entry per rail the paywall offers (PAY_RAILS). XRPL writes RLUSD as a decimal; NEAR writes USDC in base units
+        // (USDC_DECIMALS), so `price` is the decimal amount on both and `amountUnits` keeps NEAR's exact x402 amount.
+        accepts: required?.accepts?.map((a: Record<string, any>) => {
+          const near = typeof a.network === "string" && a.network.startsWith("near:");
+          const units = near && typeof a.amount === "string" && /^\d+$/.test(a.amount) ? a.amount : undefined;
+          return {
+            rail: near ? "near" : "xrpl",
+            price: near ? (units ? Number(microsToUsd(BigInt(units) * 10n ** BigInt(6 - USDC_DECIMALS))) : null) : Number(a.amount),
+            ...(units ? { amountUnits: units } : {}),
+            network: a.network, asset: a.asset, issuer: a.extra?.issuer, payTo: a.payTo, invoiceId: a.extra?.invoiceId,
+          };
+        }) ?? [],
         bazaar: Boolean(required?.extensions?.bazaar),
         body: header ? null : await r.json().catch(() => null),
       });
@@ -735,12 +767,20 @@ createServer(async (req, res) => {
       const runIn = { folder: b.folder, question: b.question, model, answerModel, phrase, userSql: userSql !== undefined };
       const started = Date.now();
       try {
+        // timings: true (privateAI-design-34 ARCH-635, desk.ps1 -Calibrate): the step timings in ms (ARCH-204) come back with the
+        // result. Whole milliseconds per step, no data; off unless asked, so the page's answer is as before.
         const out = await crossAsk({ folder: b.folder, question: b.question, model, answerModel, phrase, sqlRetries: CROSSASK_RETRIES, answerMaxRows: CROSSASK_ROWS, maxPromptChars: CROSSASK_MAX_PROMPT, retryErrorMaxChars: CROSSASK_ERROR_CHARS, sql: userSql, checkSmallNumbers: CHECK_SMALL },
-          { analyst: analystClient(ANALYST, CROSSASK_TIMEOUT_MS), chat: gatewayChat({ url: GATEWAY, key: KEY, timeoutMs: CROSSASK_TIMEOUT_MS }) });
+          { analyst: analystClient(ANALYST, CROSSASK_TIMEOUT_MS), chat: gatewayChat({ url: GATEWAY, key: KEY, timeoutMs: CROSSASK_TIMEOUT_MS }), ...(b.timings === true ? { clock: () => performance.now() } : {}) });
         return dataJson(res, 200, { ...out, runLog: RUN_LOG.write(runIn, out, undefined, Date.now() - started) });
       } catch (e) {
         return dataJson(res, 502, { error: (e as Error).message, runLog: RUN_LOG.write(runIn, null, (e as Error).message, Date.now() - started) });
       }
+    }
+    // ARCH-628: the UCP business profile (capabilities and the AP2 signing key); 404 with --ap2 off.
+    if (api === ".well-known" && name === "ucp" && req.method === "GET" && url.pathname === "/.well-known/ucp") {
+      if (!hostOk(req)) return dataJson(res, 403, { error: `open the console as http://127.0.0.1:${PORT}` });
+      if (!AP2_CONFIG) return dataJson(res, 404, { error: "AP2 is off: start the console with --ap2 on" });
+      return dataJson(res, 200, ucpProfile(AP2_CONFIG));
     }
     // ---- Paid jobs on tab 03 (ARCH-104, ARCH-112): only with --paid-jobs on -----------------------------------------
     // ARCH-411: one job's model attestation (ids, hashes, addresses, booleans, reasons); 404 when off or unknown.
@@ -761,7 +801,9 @@ createServer(async (req, res) => {
       if (!RECEIPTS) return dataJson(res, 404, { error: "receipts are off: start the console with --receipts on" });
       const receipt = RECEIPTS.get(url.pathname.split("/")[2]);
       if (!receipt) return dataJson(res, 404, { error: "no receipt for this job: it is made once the job is paid and released" });
-      return dataJson(res, 200, { receipt, publicKeyPem: RECEIPTS.publicKeyPem() });
+      // ARCH-631: with the signed quote the receipt points at (--ap2 on), so one download checks both.
+      const quote = RECEIPTS.getQuote(url.pathname.split("/")[2]);
+      return dataJson(res, 200, { receipt, publicKeyPem: RECEIPTS.publicKeyPem(), ...(quote ? { ap2: quote } : {}) });
     }
     // Run, meter, quote, hold, register: the page gets the cost and the job id, never the result.
     if (PAID_JOBS && JOBS && api === "jobs" && name === "crossask" && req.method === "POST") {
@@ -785,7 +827,7 @@ createServer(async (req, res) => {
       // A job that did not produce a result is not sold (the free /crossask shows why).
       if (out.error || !out.result) return dataJson(res, 422, { error: "the job did not produce a result, so nothing can be paid; run it unpaid to see why" });
       let quote;
-      try { quote = quoteJob(meterOf(out.served), PAID_JOBS.prices, PAID_JOBS.fees); }
+      try { quote = quoteJob(meterOf(out.served), PAID_JOBS.prices, PAID_JOBS.fees, { round: PAID_JOBS.priceRound }); }
       catch (e) { return dataJson(res, 422, { error: `no price for this job, so nothing can be paid: ${(e as Error).message}` }); }
       // ARCH-613: the files the job read, hashed now (before registering), so the receipt commits to the data as it was run.
       // A job no receipt can cover is not sold while receipts are on.
@@ -816,8 +858,18 @@ createServer(async (req, res) => {
         priceUsd: quote.totalUsd, actualUsd: quote.totalUsd,
         quoteBasis: { pricing: "after", phrase, userSql: typeof b.sql === "string" && b.sql.trim() !== "", sqlRetries: CROSSASK_RETRIES, answerMaxRows: CROSSASK_ROWS, maxPromptChars: CROSSASK_MAX_PROMPT, calls: out.served.length },
       } : undefined;
-      JOBS.hold({ jobId, result, amount: quote.amount, breakdown: quote.breakdown, expiresAt, ...(receiptHold ? { receipt: receiptHold } : {}) });
-      JOB_FEED?.quoted({ jobId, network: offer.network, expiresAt, out, quote });
+      // ARCH-628: the quote as a signed UCP checkout, only with --ap2 on. A quote that cannot be signed is not sold.
+      let ap2Hold: Ap2Hold | undefined;
+      if (AP2_CONFIG) {
+        try {
+          ap2Hold = signJobCheckout(AP2_CONFIG, { jobId, route: routeOf(model, answerModel), amount: quote.amount, expiresAt, offer,
+            ...(receiptHold ? { datasetId: receiptHold.datasetId, filesRoot: filesRoot(receiptHold.files) } : {}) });
+        } catch (e) {
+          return dataJson(res, 500, { error: `the quote could not be signed, so nothing can be paid: ${(e as Error).message}` });
+        }
+      }
+      JOBS.hold({ jobId, result, amount: quote.amount, breakdown: quote.breakdown, expiresAt, ...(receiptHold ? { receipt: receiptHold } : {}), ...(ap2Hold ? { ap2: ap2Hold } : {}) });
+      JOB_FEED?.quoted({ jobId, network: offer.network, expiresAt, out, quote, ...(ap2Hold ? { ap2: { kid: ap2Hold.kid, merchantAuthSha256: ap2Hold.merchantAuthSha256 } } : {}) });
       // ARCH-411: in the background; the quote below is returned without waiting for it.
       ATTEST?.start(jobId, out.served);
       // Ids and amounts only.
@@ -826,7 +878,7 @@ createServer(async (req, res) => {
       // call of the job came back with the gateway's attestation evidence (the calls ca-attest is asked about); a job with
       // no model call, or with one call on a route without evidence, is not attested. Model ids and a boolean only.
       const attested = out.served.length > 0 && out.served.every((s) => s.attest !== undefined);
-      return dataJson(res, 200, { jobId, totalUsd: quote.totalUsd, amount: quote.amount, network: offer.network, asset: offer.asset, payTo: offer.payTo, expiresAt, route: routeOf(model, answerModel), attested });
+      return dataJson(res, 200, { jobId, totalUsd: quote.totalUsd, amount: quote.amount, network: offer.network, asset: offer.asset, payTo: offer.payTo, expiresAt, route: routeOf(model, answerModel), attested, ...(ap2Hold ? { ap2: ap2Answer(ap2Hold) } : {}) });
     }
     // The NEAR payment for one job, relayed to the paywall (never the gateway, and without the gateway key).
     if (PAID_JOBS && api === "paid" && name === "jobs" && req.method === "POST") {
@@ -992,6 +1044,7 @@ createServer(async (req, res) => {
   if (PAID_JOBS && JOBS) {
     createServer(internalHandler(JOBS, PAID_JOBS.key, onJobReleased)).listen(PAID_JOBS.internalPort, PAID_JOBS.internalHost, () => {
       console.log(`[test-console] paid jobs on: internal listener http://${PAID_JOBS.internalHost}:${PAID_JOBS.internalPort}  key from ${PAID_JOBS.keyEnv}  ttl ${PAID_JOBS.ttlMs / 60_000} min  max ${PAID_JOBS.max}`);
+      if (AP2_CONFIG) console.log(`[test-console] ap2 on: signing key id ${AP2_CONFIG.signer.kid} (${AP2_CONFIG.alg}) from ${AP2_CONFIG.keyEnv}  price round ${PAID_JOBS.priceRound}  (GET /.well-known/ucp)`);
       if (RECEIPT_CONFIG) console.log(`[test-console] receipts on: signing key id ${RECEIPT_CONFIG.signer.keyId}  -> ${RECEIPT_CONFIG.dir}  (GET /jobs/<id>/receipt)${JOB_FEED_CONFIG?.receipts ? "  job_receipt sent to near-watch" : ""}`);
       if (JOB_FEED_CONFIG) {
         const u = new URL(JOB_FEED_CONFIG.url);

@@ -531,3 +531,52 @@ Still open: the Crossmark web page payment; Open Question 4 (Bazaar); `RUN-ON-AN
 - ~18:51Z owner -Ship -ShipDryRun -ShipSkipTests -ShipTag v1.5.6: 13 files listed, exactly the expected set (no secrets,
   no .env). Next (owner): the same command without -ShipDryRun -ShipSkipTests -> v1.5.6 checkpoint (AP2 groundwork,
   no runtime change). v1.6.0 stays for AP2 Phase 1 live.
+- 2026-11-11 18:52Z: SHIPPED v1.5.6 (commit 716aafc, 13 files, tests passed in -Ship; main d169ee1..716aafc and tag v1.5.6
+  pushed to origin). Next (AI, new chat): ARCH-629 --price-round, ARCH-628 console signs the checkout; then 630, 631; owner
+  -All + live t01 + ship v1.6.0.
+
+## RESUME POINT — 2026-11-11 ~19:05Z (chat nearao-impl-7): v1.5.6 shipped; AP2 Phase 1 UI scope decided (BOTH UIs)
+- Owner 19:02Z: build the private UI AND the NEAR admin UI changes of design-33 section 7 (read that section first).
+- Admin UI finding: near-watch JOB_EVENTS lacks job_receipt (console sends it only with --job-feed-receipts on, default off),
+  so receipts are not shown there today; fix that too.
+- Next (AI, new chat): ARCH-629, 628, 630, 631 + section 7 private UI; then admin UI (near-watch job_receipt + ap2 on
+  job_quoted, Jobs tab columns); owner -All + live t01; ship v1.6.0 (private) and the admin repo's own ship.
+
+## RESUME POINT — 2026-11-11 ~20:30Z (chat near-ai-impl-8): ARCH-629/628/630/631 + section 7 BOTH UIs written, workspace-tested, NOT run on the PC
+- Done in workspace: see BUILD_LOG "design-33 ARCH-629, 628, 630, 631 + section 7 UIs". Admin repo: near-watch ARCH-701
+  (job_receipt), ARCH-702 (job_quoted.ap2), admin-console ARCH-703 (Jobs tab "signed quote" and "receipt" columns +
+  detail rows); its BUILD_LOG has the entry.
+- AI choice to confirm: up.ps1 -Ap2TermsUrl default = the repo LICENSE URL (MANUAL_SETUP "AP2 signing key" step 4).
+- Next (owner, one at a time): desk.ps1 -Test; desk.ps1 -All; live t01 Me path and AI agent path; -VerifyReceipt on the
+  saved file; then -Ship v1.6.0 (dry run first, lesson 9) and the admin repo's commit.
+
+- 2026-11-12 ~00:32Z owner desk.ps1 -Test: OK all terminal suites passed (analyst 234, paywall 335, root exit 0). Next (owner): desk.ps1 -All; live t01 Me + AI agent; -VerifyReceipt; ship v1.6.0 + admin repo.
+- 2026-11-12 ~00:39Z owner desk.ps1 -All: ALL OK, AP2 on. Next (owner): live t01 AI agent run on tab 03, then Me path, then -VerifyReceipt, then ship.
+
+## RESUME POINT — 2026-11-12 ~01:00Z (chat near-ai-impl-8): design-34 estimate-first offers for tabs 01/02/03 written, 4 owner decisions OPEN, no code
+- DESIGN/privateAI-design-34-ESTIMATE-FIRST-OFFERS-ALL-TABS-2026-11-12T0100.md (ARCH-634..645). Open: D1 order, D2 tab 01 paid?, D3 XRPL rail for offers?, D4 keep --pricing after as free trial?
+- Live t01 test of design-33 still pending (owner).
+- 2026-11-12 ~01:02Z owner: D1 tab 03 first; D2 tab 01 paid only when ticked, no model call (Presidio only); D3 keep Crossmark as option (--offer-rails); D4 open (explained in chat).
+- 2026-11-12 ~01:05Z owner D4: both modes as options, --offer-mode estimate-first|run-hold, default estimate-first (mandate before run). OPEN D5: operator flag only or buyer-visible choice.
+- 2026-11-12 ~01:11Z owner D5 = B for now: buyer-visible choice in pay box + -AgentAsk -OfferMode, default estimate-first; --offer-modes lets the operator hide run-hold later. design-34 fully decided. Next: new chat (handoff).
+- 2026-11-12 ~01:35Z ARCH-634 packages/offer done in workspace (5/5); V-P2 passes by config (600 s). Next: ARCH-635 calibration, then tab 03 estimate-first.
+
+## RESUME POINT - 2026-11-12 ~02:15Z (chat near-ai-impl-9): ARCH-635 calibration written, tested in the PC's Linux shell, NOT run on the PC desk
+- BUILD_LOG "design-34 ARCH-635 cost-model calibration". Files: packages/crossask (sentToModel bytes), console server.ts
+  (/crossask timings: true), NEW packages/offer/src/calibrate.ts + test, NEW scripts/calibrate.ts + scripts/test/calibrate.test.ts,
+  desk.ps1 -Calibrate + desk.test.ts guard, console-paid-jobs.test.ts ARCH-635 test, MANUAL_SETUP.
+- OPEN owner number: COMPUTE_USD_PER_HOUR (USD per hour of this PC) - no default; -Calibrate stops without it.
+- Next (owner, one at a time): desk.ps1 -Test; desk.ps1 -All -AllSkipTests (console image with timings); desk.ps1 -Calibrate.
+  Still pending from design-33: tab 04 Try scan two rails, paid tab 03 agent run t01, -VerifyReceipt, ship v1.6.0.
+- Next (AI): ARCH-636 POST /offers (estimate only, AP2 offerCheckout), 637, 638, 642.
+
+- 2026-11-12 ~01:45Z owner desk.ps1 -Test: OK all terminal suites passed (root 698/698, analyst 234/234, paywall 335/335, 0 cancelled: the ARCH-635 console test ran on the PC). Next (owner): desk.ps1 -All -AllSkipTests, then -Calibrate (needs COMPUTE_USD_PER_HOUR).
+- 2026-11-12 ~01:49Z owner desk.ps1 -All -AllSkipTests: ALL OK (console image rebuilt with ARCH-635; smoke PASS 59 WARN 2 SKIP 5 FAIL 0). Next (owner): desk.ps1 -Calibrate once COMPUTE_USD_PER_HOUR is given (only smb-fin-1 has template questions; pers-fin has none).
+- 2026-11-12 ~02:00Z owner -Calibrate (0.40 USD/h): runs ok, nothing written (Presidio 4/16 KB: only 2,600 B of sample text). Fixed (repeat the sample text up to each size); calibrate.test.ts 6/6. Next (owner): same -Calibrate command again.
+- 2026-11-12 ~01:53Z owner -Calibrate 0.40 USD/h: config/cost-model.json WRITTEN (ARCH-635 verified; V-P4 holds, observed 0.389 tokens/byte). Commit it with the next ship. Next (AI): ARCH-636 POST /offers (new chat). Next (owner): design-33 live checks (tab 04 Try scan two rails, paid tab 03 t01 agent run, -VerifyReceipt), then ship v1.6.0.
+- 2026-11-12 ~01:56Z owner tab 04 Try scan: 402, "0.01 RLUSD · 0.01 USDC", per call XRPL TestNet or NEAR TestNet, both quotes in full, same invoice. Design-33 tab 04 two-rail fix VERIFIED.
+- 2026-11-12 ~01:59Z owner paid tab 03 AI agent t01 (smb-fin-1 "Cash flow vs installment"): job 16f9c201, 0.01 USDC, Quote signed by ChainAim ✓ key 83816e6f, policy all ✓, settled HqJfeuJK, receipt verified by Agent t01 ✓, receipt shows quote 32507e66. Design-33 tab 03 agent path VERIFIED live. Next: admin #jobs columns, -VerifyReceipt.
+- 2026-11-12 ~02:01Z owner admin #jobs: job 16f9c201 signed quote ✓ 83816e6f, receipt ✓ settled; detail rows quote hash 32507e66 (= page), receipt id 498a09cb, key d27d1e9f, settlement HqJfeuJK. ARCH-703 VERIFIED live. Next: -VerifyReceipt.
+- 2026-11-12 ~02:03Z owner -VerifyReceipt: no file in Downloads (receipt never downloaded, twice). ADDED desk.ps1 -VerifyJob JOBID: GET console /jobs/<id>/receipt -> runtime\agent-ask\chainaim-receipt-<id>.json -> the same verify-receipt run; desk.test.ts guard 28/28. Next (owner): -VerifyJob 16f9c201acc52d637b690179941710dc.
+- 2026-11-12 ~02:03Z owner -VerifyJob 16f9c201...: OK receipt valid (pinned d27d1e9f, settlement signed, signed quote 32507e66 by AP2 key 83816e6f matches job and amount). Design-33 Phase 1 fully VERIFIED live. Note: receipt route lists bedrock/nemotron (the query model) although the template ran exact SQL (1 call, nearai) - routeOf(model, answerModel) ignores userSql; fix with receipt v2 (ARCH-644). Next (owner): -Ship v1.6.0 dry run.
+- 2026-11-12 ~02:06Z main was 1 behind (Nisha 81cec5c v1.5.7: ERPNext templates, -AgentAsk -AgentQueryModel, check-dataset-sql, tools/erpnext-split). Owner stash -u / pull --ff-only / stash pop: clean auto-merge of the 5 shared files. Linux check: no markers, desk.ps1 ASCII, check-deps OK, 327 pass 0 fail (26 DuckDB-only cancelled). Next (owner): -Ship dry run WITH tests (re-test after the merge).

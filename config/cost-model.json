@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "calibratedAt": "2026-11-12T01:53:06.241Z",
+  "machine": "CHAINAIMMAIN",
+  "source": "desk.ps1 -Calibrate run of 2026-11-12 over sample datasets smb-fin-1; model bedrock/nemotron-nano-3-30b, answer bedrock/nemotron-nano-3-30b; 3 runs; compute 0.40 USD/h",
+  "tokensPerByte": "1",
+  "bytesPerChar": "1",
+  "units": {
+    "presidioPerKbUsd": "0.000005222223",
+    "analystPerMbUsd": "0.013993970714",
+    "gatewayPerKbPromptUsd": "0.000185123580"
+  },
+  "safetyPct": "47",
+  "observed": {
+    "samples": {
+      "presidio": 18,
+      "analyst": 6,
+      "call": 12
+    },
+    "presidioMsPerKbMax": "47.000",
+    "analystMsPerMbMax": "125945.737",
+    "gatewayMsPerKbMax": "1666.113",
+    "spreadMaxPct": "46.16",
+    "spreadGroup": "presidio|scan|4kb",
+    "tokensPerByteObservedMax": "0.3890",
+    "callsWithUsage": 12,
+    "bytesPerCharObservedMax": "1.0000"
+  }
+}

@@ -128,11 +128,12 @@ if (end !== "done" || released === undefined || !settled || !jobId) {
 say("PAID", `transaction ${settled.transaction} on ${settled.network}: ${nearblocks(settled.network, settled.transaction)}`);
 
 // The signed receipt, saved in the page's download format, with the released result beside it for -VerifyReceipt.
-let saved: { receipt: unknown; publicKeyPem: unknown } | null = null;
+let saved: { receipt: unknown; publicKeyPem: unknown; ap2?: unknown } | null = null;
 for (let i = 1; i <= pollMax && !saved; i++) {
   if (i > 1) await new Promise((ok) => setTimeout(ok, pollMs));
   const g = await getJson(`/jobs/${jobId}/receipt`);
-  if (g.status === 200 && g.body?.receipt) saved = { receipt: g.body.receipt, publicKeyPem: g.body.publicKeyPem };
+  // ap2 (privateAI-design-33 ARCH-631): the signed quote the receipt points at, when the console runs with --ap2 on.
+  if (g.status === 200 && g.body?.receipt) saved = { receipt: g.body.receipt, publicKeyPem: g.body.publicKeyPem, ...(g.body.ap2 !== undefined ? { ap2: g.body.ap2 } : {}) };
   else if (g.status === 404 && /receipts are off/.test(String(g.body?.error))) break;
 }
 mkdirSync(outDir, { recursive: true });

@@ -23,6 +23,7 @@ import { startTestGateway, type TestGateway } from "../../services/gateway/test/
 import { pricesFromCatalog, quoteJob, type Fees } from "../../packages/crossask/src/cost.ts";
 import { INGEST_KEY, nearWatchSkip, startNearWatch } from "./near-watch-server.ts";
 import { verifyReceipt, type SignedReceipt } from "../../packages/receipt/src/index.ts";
+import { merchantAuthSha256, verifyMerchantAuthorization } from "../../packages/ap2/src/index.ts";
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const SERVER = join(ROOT, "test-console/console/server.ts");
@@ -305,6 +306,56 @@ describe("ARCH-615 ARCH-616 Job Evidence Receipts on the real console", () => {
   });
 });
 
+describe("ARCH-628 ARCH-629 ARCH-631 AP2 signed quote on the real console", () => {
+  test("ARCH-628: --ap2 on: the quote is whole cents, signed as a UCP checkout that verifies with /.well-known/ucp; the receipt carries its hash", async () => {
+    const port = await freePort(), iport = await freePort();
+    const ap2Key = generateKeyPairSync("ec", { namedCurve: "P-256" }).privateKey.export({ type: "pkcs8", format: "pem" }).toString();
+    const receiptKey = generateKeyPairSync("ed25519").privateKey.export({ type: "pkcs8", format: "pem" }).toString();
+    const c = await start(consoleArgs(port, iport, { ap2: "on", "ap2-terms-url": "https://chainaim.example/terms", receipts: "on", "receipt-dir": join(dir, "receipts-ap2") }),
+      (o) => consoleReady(port)(o) && o.includes("ap2 on: signing key id") && o.includes("receipts on: signing key id"), { PAID_JOBS_KEY: JOBS_KEY, AP2_SIGNING_KEY: ap2Key, RECEIPT_SIGNING_KEY: receiptKey }, "the console");
+    try {
+      assert.equal(c.out().includes("PRIVATE KEY"), false, "the key is never printed");
+      assert.match(c.out(), /price round cent/);
+      const prof = await call(port, "GET", "/.well-known/ucp");
+      assert.equal(prof.status, 200, prof.text);
+      const profile = JSON.parse(prof.text) as { keys: unknown[]; ucp: { capabilities: Record<string, unknown> } };
+      assert.ok("dev.ucp.common.payment.ap2_mandate" in profile.ucp.capabilities);
+      const r = await ask({ folder: data, question: QUESTION, model: MODEL, phrase: "none", datasetId: "orders-demo" }, port);
+      assert.equal(r.status, 200, r.text);
+      const j = JSON.parse(r.text);
+      assert.deepEqual(Object.keys(j).sort(), ["amount", "ap2", "asset", "attested", "expiresAt", "jobId", "network", "payTo", "route", "totalUsd"]);
+      assert.equal(BigInt(j.amount) % 10_000n, 0n, "whole cents under --ap2 on");
+      const ck = j.ap2.checkout;
+      assert.deepEqual(verifyMerchantAuthorization(j.ap2.merchant_authorization, ck, profile.keys).ok, true);
+      assert.equal(ck.id, j.jobId);
+      assert.equal(ck.totals.find((t: { type: string }) => t.type === "total").amount * 10_000, Number(j.amount));
+      assert.deepEqual([ck["dev.chainaim.job"].network, ck["dev.chainaim.job"].asset, ck["dev.chainaim.job"].payTo, ck["dev.chainaim.job"].amountUnits], [j.network, j.asset, j.payTo, j.amount]);
+      assert.equal(ck["dev.chainaim.job"].datasetId, "orders-demo");
+      for (const leak of [MARKER, "count(*)", QUESTION, data]) assert.equal(r.text.includes(leak), false, leak);
+      const rel = await call(iport, "POST", `/internal/jobs/${j.jobId}/released`, { "x-jobs-key": JOBS_KEY, "content-type": "application/json" }, "{}");
+      assert.equal(rel.status, 200);
+      let got: { status: number; text: string } = { status: 0, text: "" };
+      for (let i = 0; i < 50 && got.status !== 200; i++) { got = await call(port, "GET", `/jobs/${j.jobId}/receipt`); if (got.status !== 200) await new Promise((ok) => setTimeout(ok, 100)); }
+      assert.equal(got.status, 200, got.text);
+      const { receipt } = JSON.parse(got.text) as { receipt: SignedReceipt };
+      assert.equal(receipt.body.merchantAuthSha256, merchantAuthSha256(j.ap2.merchant_authorization));
+      // ARCH-631: the receipt route also serves the signed quote it points at, for one download that checks both.
+      assert.deepEqual(JSON.parse(got.text).ap2, j.ap2);
+    } finally { await stop(c); }
+  });
+
+  test("ARCH-628: --ap2 off answers 404 on /.well-known/ucp; --ap2 on refuses to start without its key or with --price-round micro", async () => {
+    assert.equal((await call(consolePort, "GET", "/.well-known/ucp")).status, 404);
+    const env = { ...process.env, PAID_JOBS_KEY: JOBS_KEY, AP2_SIGNING_KEY: "" };
+    const nokey = spawnSync(process.execPath, consoleArgs(await freePort(), await freePort(), { ap2: "on", "ap2-terms-url": "https://chainaim.example/terms" }), { encoding: "utf8", timeout: 20_000, env });
+    assert.notEqual(nokey.status, 0);
+    assert.match(nokey.stderr, /AP2_SIGNING_KEY/);
+    const micro = spawnSync(process.execPath, consoleArgs(await freePort(), await freePort(), { ap2: "on", "ap2-terms-url": "https://chainaim.example/terms", "price-round": "micro" }), { encoding: "utf8", timeout: 20_000, env });
+    assert.notEqual(micro.status, 0);
+    assert.match(micro.stderr, /--ap2 on needs --price-round cent/);
+  });
+});
+
 describe("ARCH-101 / ARCH-112 the page and the relay", () => {
   test("ARCH-101: console page without --paid-jobs has no pay box in tab 03", async () => {
     const port = await freePort();
@@ -454,5 +505,24 @@ describe("ARCH-205 (chainaim-adminUI-NEAR architecture-adminui-jobs.md) the job 
     assert.notEqual(nokey.status, 0);
     assert.match(nokey.stderr, /needs the environment variable NEAR_WATCH_INGEST_KEY/);
     assert.equal(nokey.stderr.includes("short"), false);
+  });
+});
+
+describe("ARCH-635 the free /crossask returns step timings only when asked (desk.ps1 -Calibrate)", () => {
+  test("ARCH-635: timings true -> whole-ms timings, one callsMs per served call, sentToModel bytes; without it no timings", async () => {
+    const free = (extra: Record<string, unknown>) => call(consolePort, "POST", "/crossask", { "content-type": "application/json" }, JSON.stringify({ folder: data, question: QUESTION, model: MODEL, answerModel: MODEL, phrase: "llm", ...extra }));
+    const r = await free({ timings: true });
+    assert.equal(r.status, 200, r.text);
+    const j = JSON.parse(r.text);
+    assert.equal(j.error, undefined, j.error);
+    assert.equal(j.served.length, 2, "the query and the worded answer");
+    assert.equal(j.timings.callsMs.length, j.served.length);
+    for (const k of ["relationsMs", "queryMs", "sqlMs", "answerMs"]) assert.ok(Number.isInteger(j.timings[k]) && j.timings[k] >= 0, k);
+    assert.equal(j.timings.files, 1);
+    assert.deepEqual(j.served.map((s: { usage?: { promptTokens: number } }) => s.usage?.promptTokens), [USAGE.prompt_tokens, USAGE.prompt_tokens], "usage per call, for tokensPerByte");
+    for (const s of j.sentToModel) assert.ok(Number.isInteger(s.bytes) && s.bytes >= s.chars, JSON.stringify(s));
+    const plain = JSON.parse((await free({})).text);
+    assert.equal("timings" in plain, false, "the page's answer is as before");
+    assert.equal("timings" in JSON.parse((await free({ timings: "yes" })).text), false, "only the boolean true turns them on");
   });
 });

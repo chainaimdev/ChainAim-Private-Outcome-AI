@@ -115,6 +115,8 @@ export type ReceiptInput = {
   quoteBasis: Record<string, string | number | boolean>;
   actualUsd?: string;
   evidenceBundleSha256?: string;
+  /** ARCH-631: the signed quote's merchant_authorization hash (--ap2 on only). */
+  merchantAuthSha256?: string;
   createdAt: string;
 };
 
@@ -137,6 +139,7 @@ export async function buildReceipt(input: ReceiptInput, cfg: ReceiptConfig): Pro
       resultSha256: resultSha256(input.result),
       calls: receiptCalls(input.served, input.attestStatusOf),
       ...(input.evidenceBundleSha256 ? { evidenceBundleSha256: input.evidenceBundleSha256 } : {}),
+      ...(input.merchantAuthSha256 ? { merchantAuthSha256: input.merchantAuthSha256 } : {}),
       price: {
         amountUnits: input.amountUnits,
         usdcDecimals: input.usdcDecimals,
@@ -155,6 +158,7 @@ const JOB_ID = /^[0-9a-f]{32}$/;
 /** Signed receipts by job id: memory first, then <dir>/<jobId>.json. Written atomically (temp file, then rename). */
 export class ReceiptStore {
   private readonly mem = new Map<string, SignedReceipt>();
+  private readonly quotes = new Map<string, { checkout: Record<string, unknown>; merchant_authorization: string }>();
   private readonly cfg: ReceiptConfig;
 
   constructor(cfg: ReceiptConfig) {
@@ -191,6 +195,28 @@ export class ReceiptStore {
     const r = JSON.parse(readFileSync(p, "utf8")) as SignedReceipt;
     this.mem.set(jobId, r);
     return r;
+  }
+
+  /**
+   * privateAI-design-33 ARCH-631: the signed quote ({checkout, merchant_authorization}) the receipt's merchantAuthSha256
+   * points at, kept beside it as <dir>/<jobId>.ap2.json so a buyer can download and check both together
+   * (desk.ps1 -VerifyReceipt). Ids, hashes and amounts only, like the receipt.
+   */
+  putQuote(jobId: string, ap2: { checkout: Record<string, unknown>; merchant_authorization: string }): void {
+    const p = `${this.path(jobId).replace(/\.json$/, "")}.ap2.json`;
+    writeFileSync(`${p}.tmp`, JSON.stringify(ap2, null, 2));
+    renameSync(`${p}.tmp`, p);
+    this.quotes.set(jobId, ap2);
+  }
+
+  getQuote(jobId: string): { checkout: Record<string, unknown>; merchant_authorization: string } | undefined {
+    const m = this.quotes.get(jobId);
+    if (m) return m;
+    const p = `${this.path(jobId).replace(/\.json$/, "")}.ap2.json`;
+    if (!existsSync(p)) return undefined;
+    const q = JSON.parse(readFileSync(p, "utf8")) as { checkout: Record<string, unknown>; merchant_authorization: string };
+    this.quotes.set(jobId, q);
+    return q;
   }
 
   /** Appends the settlement (ARCH-616) once; a second settlement for the same job is refused. */
@@ -294,11 +320,13 @@ export async function receiptOnRelease(deps: ReleaseReceiptDeps, jobId: string, 
       priceUsd: hold.priceUsd,
       quoteBasis: hold.quoteBasis,
       ...(hold.actualUsd !== undefined ? { actualUsd: hold.actualUsd } : {}),
+      ...(job.ap2 ? { merchantAuthSha256: job.ap2.merchantAuthSha256 } : {}),
       createdAt: new Date(now()).toISOString(),
     },
     deps.cfg,
   );
   deps.store.put(receipt);
+  if (job.ap2) deps.store.putQuote(jobId, { checkout: job.ap2.checkout, merchant_authorization: job.ap2.merchantAuthorization });
   const settlement = parseSettlement(notice, now);
   return settlement ? deps.store.settle(jobId, settlement) : receipt;
 }

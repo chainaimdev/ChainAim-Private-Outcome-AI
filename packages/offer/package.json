@@ -1,0 +1,10 @@
+{
+  "name": "@chainaim/offer",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Offers (privateAI-design-34 ARCH-634): one firm price per paid request, estimated from sizes only before any work, for scan, mask, chat and crossask. Worst-case meter from the calibrated cost model through packages/crossask quoteJob. Pure, no runtime dependencies.",
+  "type": "module",
+  "engines": { "node": ">=22.22" },
+  "exports": { ".": "./src/index.ts" },
+  "scripts": { "test": "node --test \"test/*.test.ts\"" }
+}

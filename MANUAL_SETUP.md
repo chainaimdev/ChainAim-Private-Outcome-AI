@@ -445,4 +445,31 @@ key from `RECEIPT_SIGNING_KEY` (Ed25519, receipts).
 2. Commit `config\ap2-public-key.jwk.json` with the next ship: the agent pins it (design-33 ARCH-630). It is not secret.
 3. Replace the key: `.\test-console\desk.ps1 -Ap2Key -Ap2KeyRotate`, then commit the new public file; quotes signed
    before verify only with the old key. Another variable name: `-Ap2KeyName NAME` (must differ from `-ReceiptKeyName`).
-The console does not read the key yet: AP2 signing (`--ap2 on`) arrives with ARCH-628.
+Since ARCH-628 (2026-11-11, chat near-ai-impl-8) the console reads it with `--ap2 on --ap2-key-env AP2_SIGNING_KEY`:
+`test-console\up.ps1` passes it to compose by name (`AP2_SIGNING_KEY`, never written to commands.yml) and turns AP2 on by
+default when the key is found (`-Ap2 on|off` to require or skip). With AP2 on, quotes are whole cents (`--price-round cent`).
+4. Terms link: the checkout's `terms_of_service` link is `up.ps1 -Ap2TermsUrl URL`, default
+   `https://github.com/chainaimdev/chainaim-private-ai/blob/main/LICENSE` (an AI choice, not an owner decision: change it
+   when ChainAim has a terms page; a buyer's UCP platform may show it).
+5. Agent: with `-Agent on` the agent verifies each signed quote with the pinned `config\ap2-public-key.jwk.json`
+   (`--ap2-verify on`), so the public file in the agent image must match the console's key: after `-Ap2KeyRotate`, commit
+   the new public file and start again (the agent image is rebuilt by up.ps1).
+
+## Cost-model calibration: config/cost-model.json (privateAI-design-34 ARCH-635, 2026-11-12)
+
+The estimate-first offers (design-34, ARCH-636+) price every request from `config/cost-model.json`; without the file they
+stay off. The file is measured on this PC, never typed in.
+
+1. Owner number, once: the compute price of this PC in USD per hour. Either pass it each time
+   (`-CalibrateComputeUsdPerHour 0.50`) or add one line `COMPUTE_USD_PER_HOUR=<decimal>` to `config\paid-jobs-prices.conf`
+   (the committed team price file, not a secret). Neither = `-Calibrate` stops. There is no default.
+2. The desk running with a model whose provider reports token usage (default `bedrock/nemotron-nano-3-30b`):
+   `.\test-console\desk.ps1 -All` first. The console must be at least this build: it answers `/crossask` with
+   `timings: true` (a console older than ARCH-635 makes -Calibrate stop with "rebuild it").
+3. `.\test-console\desk.ps1 -Calibrate` (options: `-CalibrateRuns 3`, `-CalibrateModel`, `-CalibrateAnswerModel same|none|ID`,
+   `-CalibrateDatasets all|ID,ID`, `-CalibratePresidioKb 1,4,16`, `-CalibrateTokensPerByte bound|observed`,
+   `-CalibrateDryRun`). Sample data only. It sends the sample templates' questions to the model (several runs; the gateway's
+   free-rpm limit is waited out) and the start of the sample files to Presidio. Any failed run writes nothing.
+4. Commit `config/cost-model.json` with the next ship if it should be the team default (it holds sizes and prices, no data);
+   the report of every sample is in `test-console\runs\calibrate-<time>.json` (git-ignored).
+5. Re-run after a change of machine, model or compute price; the file records `calibratedAt`, `machine` and `source`.

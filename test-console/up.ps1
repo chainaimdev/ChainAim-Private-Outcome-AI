@@ -34,6 +34,14 @@ this PC (server.ts --mode ui, which forwards every call to the console API in Do
                                                 one); -Receipts on stops instead, -Receipts off turns it off.
                                                 -ReceiptKeyName NAME: the key's name in -SecretsFile (default
                                                 RECEIPT_SIGNING_KEY); inside the container it is always RECEIPT_SIGNING_KEY.
+  .\test-console\up.ps1 -Ap2 on                 AP2 signed quotes (privateAI-design-33 ARCH-628/630): the console API runs with
+                                                --ap2 on (quotes in whole cents, each signed as a UCP checkout, ES256, key
+                                                passed by name as AP2_SIGNING_KEY; GET /.well-known/ucp) and, with -Agent on,
+                                                the agent verifies each signed quote with the pinned config\ap2-public-key.jwk.json
+                                                (--ap2-verify on). Default on: without -Ap2 it is switched off, with an INFO
+                                                line, when -PaidJobs is off or no key is found (desk.ps1 -Ap2Key makes one);
+                                                -Ap2 on stops instead, -Ap2 off turns it off. -Ap2KeyName NAME (default
+                                                AP2_SIGNING_KEY), -Ap2TermsUrl URL: the checkout's terms_of_service link.
   .\test-console\down.ps1                       stop the UI and the compose stack (volumes kept)
 
 What it takes, from files outside the repository (NAME=value; values are never printed or written anywhere):
@@ -107,6 +115,9 @@ param(
   [ValidateSet("on", "off")][string]$AttestGpuCheck = "on",
   [ValidateSet("on", "off")][string]$Receipts = "on",
   [string]$ReceiptKeyName = "RECEIPT_SIGNING_KEY",
+  [ValidateSet("on", "off")][string]$Ap2 = "on",
+  [string]$Ap2KeyName = "AP2_SIGNING_KEY",
+  [string]$Ap2TermsUrl = "https://github.com/chainaimdev/chainaim-private-ai/blob/main/LICENSE",
   [int]$AttestPort = 8770,
   [string]$AttestCatalog = "config\generated\catalog.local.json",
   [string]$StateFile = "runtime\compose\last-start.json"
@@ -207,6 +218,11 @@ try {
   $receiptKey = if (Test-Path $SecretsFile) { (Read-EnvFile $SecretsFile ('^' + $ReceiptKeyName + '$')).Values[$ReceiptKeyName] } else { $null }
   $receiptKeyFrom = $SecretsFile
   if (-not $receiptKey) { $receiptKey = (Get-ContainerEnv "ca-console-api")["RECEIPT_SIGNING_KEY"]; $receiptKeyFrom = "the running ca-console-api" }
+  # AP2 signing key (design-33 ARCH-628): same pattern as the receipt key; set by name for compose only with -Ap2 on.
+  if ($Ap2KeyName -notmatch '^[A-Z_][A-Z0-9_]*$') { Stop-Here "-Ap2KeyName must be an environment variable name such as AP2_SIGNING_KEY" }
+  $ap2Key = if (Test-Path $SecretsFile) { (Read-EnvFile $SecretsFile ('^' + $Ap2KeyName + '$')).Values[$Ap2KeyName] } else { $null }
+  $ap2KeyFrom = $SecretsFile
+  if (-not $ap2Key) { $ap2Key = (Get-ContainerEnv "ca-console-api")["AP2_SIGNING_KEY"]; $ap2KeyFrom = "the running ca-console-api" }
   $keyFile = Join-Path $PSScriptRoot "local-gateway-key.txt"
   if (-not (Test-Path $keyFile)) { Stop-Here "Missing $keyFile (the gateway key the console, gateway and paywall share)." }
   Set-Secret "CHAINAIM_GATEWAY_KEY" ((Get-Content -Raw $keyFile).Trim())
@@ -338,9 +354,29 @@ try {
     if (-not $receiptKey) { Stop-Here "-Receipts on needs $ReceiptKeyName in ${SecretsFile}: run .\test-console\desk.ps1 -ReceiptKey once" }
     Set-Secret "RECEIPT_SIGNING_KEY" $receiptKey
     $consoleCmd += @("--receipts=on", "--receipt-key-env=RECEIPT_SIGNING_KEY", "--receipt-dir=/receipts")
+    # near-watch accepts job_receipt since adminUI ARCH-701 (design-33 section 7): the admin Jobs tab shows each receipt.
+    if ($consoleCmd -contains "--job-feed-url=$JobFeedUrl") { $consoleCmd += "--job-feed-receipts=on" }
     Say "OK" "receipts on: the console signs one after each paid job; key from $receiptKeyFrom (not printed), kept on volume chainaim-console-receipts"
   }
   $receiptKey = $null
+  # AP2 signed quotes (design-33 ARCH-628 console, ARCH-630 agent): only with paid jobs; key to compose by name, never into
+  # commands.yml. Default on: without -Ap2, a PC with no key yet runs without AP2 (desk.ps1 -Ap2Key makes one).
+  if ($Ap2 -eq "on" -and -not $PSBoundParameters.ContainsKey("Ap2")) {
+    $why = if ($PaidJobs -ne "on") { "-PaidJobs off" } elseif (-not $ap2Key) { "no $Ap2KeyName in $SecretsFile (run .\test-console\desk.ps1 -Ap2Key once)" } else { $null }
+    if ($why) { Say "INFO" "AP2 signed quotes off: $why (pass -Ap2 on to require them, -Ap2 off to skip this check)"; $Ap2 = "off" }
+  }
+  if ($Ap2 -eq "on") {
+    if ($PaidJobs -ne "on") { Stop-Here "-Ap2 on needs -PaidJobs on: the signed quote is a paid job's quote" }
+    if (-not $ap2Key) { Stop-Here "-Ap2 on needs $Ap2KeyName in ${SecretsFile}: run .\test-console\desk.ps1 -Ap2Key once" }
+    if ($Ap2TermsUrl -notmatch '^https?://') { Stop-Here "-Ap2TermsUrl must be an http(s) URL" }
+    Set-Secret "AP2_SIGNING_KEY" $ap2Key
+    $consoleCmd += @("--ap2=on", "--ap2-key-env=AP2_SIGNING_KEY", "--ap2-alg=ES256", "--ap2-terms-url=$Ap2TermsUrl", "--price-round=cent")
+    # near-watch accepts job_quoted.ap2 since adminUI ARCH-702: the admin Jobs tab shows the signed quote's key id.
+    if ($consoleCmd -contains "--job-feed-url=$JobFeedUrl") { $consoleCmd += "--job-feed-ap2=on" }
+    if ($agentCmd) { $agentCmd += @("--ap2-verify=on", "--ap2-public-key=/app/config/ap2-public-key.jwk.json") }
+    Say "OK" "AP2 signed quotes on: whole-cent quotes signed ES256; key from $ap2KeyFrom (not printed)$(if ($agentCmd) { '; the agent verifies them with the pinned key' } else { '' })"
+  }
+  $ap2Key = $null
   $port = "127.0.0.1:${ApiPort}:${ApiPort}"
   $override = [ordered]@{ services = [ordered]@{ gateway = [ordered]@{ command = @($gwCmd) }; "console-api" = [ordered]@{ command = $consoleCmd; ports = @($port) } } }
   if ($agentCmd) { $override.services["agent"] = [ordered]@{ command = $agentCmd; ports = @("127.0.0.1:${AgentPort}:${AgentPort}") } }

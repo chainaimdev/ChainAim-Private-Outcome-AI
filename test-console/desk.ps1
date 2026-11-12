@@ -65,6 +65,24 @@ one READY table across both. Neither launcher is changed or renamed; each team k
                 settlement signature and, when the released result is at hand (-VerifyResult; auto = the
                 chainaim-result-<jobId>.json beside it), the result's hash. No service needed. Runs on its own.
                 Exit 0 = valid; 1 = not valid (reason printed); 2 = usage or unreadable file.
+  -VerifyJob JOBID  [-VerifyResult auto|none|FILE]
+                the same offline check for a paid job's receipt fetched from the running console API
+                (GET 127.0.0.1:8735/jobs/<JOBID>/receipt, the exact file tab 03's Download receipt saves), written to
+                runtime\agent-ask\chainaim-receipt-<JOBID>.json first. JOBID = the job's 32 hex characters (tab 03 shows
+                "id 16f9c201..."; the NEAR admin UI's Jobs detail shows it whole). Runs on its own.
+  -Calibrate [-CalibrateComputeUsdPerHour DEC] [-CalibrateModel bedrock/nemotron-nano-3-30b] [-CalibrateAnswerModel same|none|ID]
+             [-CalibrateRuns 3] [-CalibrateDatasets all|ID,ID] [-CalibratePresidioKb 1,4,16] [-CalibrateTokensPerByte bound|observed]
+             [-CalibrateDryRun]
+                measure this PC and write config\cost-model.json, the cost model the estimate-first offers price with
+                (privateAI-design-34 ARCH-635, design-32 ARCH-602..604; scripts\calibrate.ts): each crossask sample template
+                question (a model writes the query) -CalibrateRuns times through the running console API with step timings,
+                and Presidio scan + mask on the start of those datasets' own sample files at each -CalibratePresidioKb size.
+                Units = the worst ms per KB / MB seen x the compute price; safety = the widest run-to-run spread;
+                tokensPerByte bound (1, checked against every call: V-P4) or observed. Compute price (USD per hour of this
+                PC, an owner number): -CalibrateComputeUsdPerHour, else COMPUTE_USD_PER_HOUR in config\paid-jobs-prices.conf;
+                neither = stop. Any failed run writes nothing. A report of every sample (sizes, ms, token counts; no data)
+                goes to test-console\runs. Needs the desk running (desk.ps1 -All). Sample data only. Runs on its own.
+                Exit 0 = written; 1 = a run failed or the measurements could not make a model; 2 = usage / not reachable.
   -Smoke  [-SmokeModel bedrock/nemotron-nano-3-30b] [-SmokeSets default|all] [-SmokeDatasets all|ID,ID]
          [-SmokeAnswerModel none|ID] [-SmokeCheckAnswers on|off] [-SmokeDryRun]
          -SmokeCheckAnswers on (default): results with a rule in config\answer-checks.json are compared with the
@@ -185,6 +203,16 @@ param(
   [string]$AgentQueryModel = "default",
   [string]$VerifyReceipt = "",
   [string]$VerifyResult = "auto",
+  [string]$VerifyJob = "",
+  [switch]$Calibrate,
+  [string]$CalibrateComputeUsdPerHour = "",
+  [string]$CalibrateModel = "bedrock/nemotron-nano-3-30b",
+  [string]$CalibrateAnswerModel = "same",
+  [int]$CalibrateRuns = 3,
+  [string[]]$CalibrateDatasets = @("all"),
+  [string]$CalibratePresidioKb = "1,4,16",
+  [string]$CalibrateTokensPerByte = "bound",
+  [switch]$CalibrateDryRun,
   [string[]]$RequireModels = @("local", "bedrock", "nearai"),
   [string]$Settings = "config\local\desk.json"
 )
@@ -241,9 +269,13 @@ if ($Ship -and ($Check -or $Stop -or $Test -or $Build -or $WithStub -or $Agent -
 if ($All -and ($Check -or $Stop -or $Test -or $Ship -or $Logs.Count -or $Memory -or $Smoke -or $SmbSample -or $ChiroSample)) { Stop-Here "-All runs the tests, the start and the smoke check itself: leave out -Check, -Stop, -Test, -Ship, -Logs, -Memory, -Smoke, -SmbSample and -ChiroSample" }
 if (-not $All -and ($AllSkipTests -or $AllSkipSmoke -or $AllSmbSample)) { Stop-Here "-AllSkipTests, -AllSkipSmoke and -AllSmbSample need -All" }
 # -AgentAsk / -VerifyReceipt (privateAI-design-32 steps C and D) each run on their own; checked before anything runs.
-$otherModes = $Check -or $Stop -or $Test -or $Build -or $WithStub -or $Agent -or $Attest -or $Receipts -or $ReceiptKey -or $Ap2Key -or $All -or $Ship -or $Logs.Count -or $Memory -or $Smoke -or $SmbSample -or $ChiroSample -or $RejudgeReceiver
+$otherModes = $Check -or $Stop -or $Test -or $Build -or $WithStub -or $Agent -or $Attest -or $Receipts -or $ReceiptKey -or $Ap2Key -or $All -or $Ship -or $Logs.Count -or $Memory -or $Smoke -or $SmbSample -or $ChiroSample -or $RejudgeReceiver -or $Calibrate -or $VerifyJob
+# -Calibrate (privateAI-design-34 ARCH-635) runs on its own too; its options are only valid with it.
+if ($Calibrate -and ($Check -or $Stop -or $Test -or $Build -or $WithStub -or $Agent -or $Attest -or $Receipts -or $ReceiptKey -or $Ap2Key -or $All -or $Ship -or $Logs.Count -or $Memory -or $Smoke -or $SmbSample -or $ChiroSample -or $RejudgeReceiver -or $AgentAsk -or $VerifyReceipt)) { Stop-Here "-Calibrate runs on its own: leave out the other mode switches" }
+if (-not $Calibrate -and ($CalibrateComputeUsdPerHour -or $CalibrateDryRun)) { Stop-Here "-CalibrateComputeUsdPerHour and -CalibrateDryRun need -Calibrate" }
 if ($AgentAsk -and ($otherModes -or $VerifyReceipt)) { Stop-Here "-AgentAsk runs on its own: leave out the other mode switches" }
 if ($VerifyReceipt -and $otherModes) { Stop-Here "-VerifyReceipt runs on its own: leave out the other mode switches" }
+if ($VerifyJob -and ($AgentAsk -or $VerifyReceipt -or $Calibrate -or $Check -or $Stop -or $Test -or $Build -or $All -or $Ship -or $Logs.Count -or $Memory -or $Smoke -or $SmbSample -or $ChiroSample -or $RejudgeReceiver -or $ReceiptKey -or $Ap2Key)) { Stop-Here "-VerifyJob runs on its own: leave out the other mode switches" }
 $WindowNames = @($Windows | ForEach-Object { $_ -split "," } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
 if ($All -and -not $WindowNames.Count) { $WindowNames = @("analyst") }
 foreach ($n in $WindowNames) { if (-not $LogContainers.Contains($n)) { Stop-Here "-Windows $n is not a service here; use one of: $($LogContainers.Keys -join ', ')" } }
@@ -370,6 +402,19 @@ if ($AgentAsk) {
   exit $LASTEXITCODE
 }
 
+# ---------------------------------------------------------------- -VerifyJob: fetch a job's receipt from the console, then -VerifyReceipt
+if ($VerifyJob) {
+  if ($VerifyJob -notmatch '^[0-9a-f]{32}$') { Stop-Here "-VerifyJob must be the job id: 32 lowercase hex characters (the NEAR admin UI's Jobs detail shows it whole)" }
+  if ((HttpStatus "http://127.0.0.1:8735/") -eq 0) { Stop-Here "the console API (127.0.0.1:8735) is not running: start the desk (.\test-console\desk.ps1 -All), then run -VerifyJob" }
+  $rcptUrl = "http://127.0.0.1:8735/jobs/$VerifyJob/receipt"
+  try { $rcptBody = (Invoke-WebRequest -Uri $rcptUrl -UseBasicParsing -TimeoutSec 15).Content }
+  catch { $st = HttpStatus $rcptUrl; Stop-Here "the console has no receipt for job $VerifyJob (HTTP $st): receipts are made once a paid job is released, and kept on the volume chainaim-console-receipts" }
+  $rcptDir = Join-Path $repo "runtime\agent-ask"
+  New-Item -ItemType Directory -Force -Path $rcptDir | Out-Null
+  $VerifyReceipt = Join-Path $rcptDir "chainaim-receipt-$VerifyJob.json"
+  [IO.File]::WriteAllText($VerifyReceipt, [string]$rcptBody, (New-Object System.Text.UTF8Encoding($false)))
+  Say "SAVED" "receipt of job $VerifyJob from the console API -> $VerifyReceipt"
+}
 # ---------------------------------------------------------------- -VerifyReceipt: offline receipt check, pinned key (step D)
 if ($VerifyReceipt) {
   if (-not (Test-Path -LiteralPath $VerifyReceipt -PathType Leaf)) { Stop-Here "-VerifyReceipt: no file $VerifyReceipt (tab 03's Download receipt saves chainaim-receipt-<jobId>.json; -AgentAsk saves it in runtime\agent-ask)" }
@@ -396,12 +441,40 @@ if ($Smoke) {
   exit $LASTEXITCODE
 }
 
+# ---------------------------------------------------------------- -Calibrate: measure this PC, write config\cost-model.json (ARCH-635)
+if ($Calibrate) {
+  if ($CalibrateModel -notmatch '^[\w.-]+/[\w.:-]+$') { Stop-Here "-CalibrateModel must look like provider/name, e.g. bedrock/nemotron-nano-3-30b" }
+  if ($CalibrateAnswerModel -ne "same" -and $CalibrateAnswerModel -ne "none" -and $CalibrateAnswerModel -notmatch '^[\w.-]+/[\w.:-]+$') { Stop-Here "-CalibrateAnswerModel must be same, none or provider/name" }
+  if ($CalibrateRuns -lt 2 -or $CalibrateRuns -gt 20) { Stop-Here "-CalibrateRuns must be 2-20 (the safety margin is the run-to-run spread, so each measurement runs at least twice)" }
+  if (@("bound", "observed") -notcontains $CalibrateTokensPerByte) { Stop-Here "-CalibrateTokensPerByte must be bound or observed" }
+  if ($CalibratePresidioKb -notmatch '^[0-9]{1,2}(,[0-9]{1,2})*$') { Stop-Here "-CalibratePresidioKb must be KB sizes separated by commas, e.g. 1,4,16" }
+  [string]$calDs = @($CalibrateDatasets) -join ","   # PowerShell splits a,b into an array; calibrate.ts wants one comma list
+  if ($calDs -notmatch '^[A-Za-z0-9_.,-]+$') { Stop-Here "-CalibrateDatasets must be all or dataset ids separated by commas" }
+  # The compute price is an owner number, never defaulted: the switch, else COMPUTE_USD_PER_HOUR in the team price file.
+  $cuh = $CalibrateComputeUsdPerHour
+  $cuhFrom = "-CalibrateComputeUsdPerHour"
+  if (-not $cuh) {
+    $priceFile = "config\paid-jobs-prices.conf"
+    $line = @(Get-Content -LiteralPath $priceFile | Where-Object { $_ -match '^\s*COMPUTE_USD_PER_HOUR\s*=' }) | Select-Object -Last 1
+    if ($line) { $cuh = ($line -split '=', 2)[1].Trim(); $cuhFrom = "COMPUTE_USD_PER_HOUR in $priceFile" }
+  }
+  if (-not $cuh -and -not $CalibrateDryRun) { Stop-Here "no compute price: pass -CalibrateComputeUsdPerHour DEC (USD per hour of this PC's compute) or add COMPUTE_USD_PER_HOUR=DEC to config\paid-jobs-prices.conf" }
+  if ($cuh -and $cuh -notmatch '^[0-9]+(\.[0-9]+)?$') { Stop-Here "the compute price must be a decimal such as 0.50 (from $cuhFrom, got $cuh)" }
+  if ((HttpStatus "http://127.0.0.1:8735/") -eq 0) { Stop-Here "the console API (127.0.0.1:8735) is not running: start the desk first (.\test-console\desk.ps1 -All), then run -Calibrate" }
+  $calArgs = @("scripts\calibrate.ts", "--api", "http://127.0.0.1:8735", "--root", "samples", "--model", $CalibrateModel, "--answer-model", $CalibrateAnswerModel, "--runs", "$CalibrateRuns", "--datasets", $calDs, "--presidio-kb", $CalibratePresidioKb, "--tokens-per-byte", $CalibrateTokensPerByte, "--machine", $env:COMPUTERNAME, "--out", "config\cost-model.json")
+  if ($cuh) { $calArgs += @("--compute-usd-per-hour", $cuh) }
+  if ($CalibrateDryRun) { $calArgs += "--dry-run" }
+  Say "RUN" "calibration: model $CalibrateModel, answer $CalibrateAnswerModel, $CalibrateRuns runs, datasets $calDs, Presidio $CalibratePresidioKb KB, tokens-per-byte $CalibrateTokensPerByte, compute $(if ($cuh) { "$cuh USD/h ($cuhFrom)" } else { 'not set (dry run)' }) -> config\cost-model.json"
+  & node @calArgs
+  exit $LASTEXITCODE
+}
+
 # ---------------------------------------------------------------- -Test needs nothing else
 # The terminal suites, shared by -Test and -Ship. Output goes to the screen; the exit codes are returned.
 function Invoke-Suites {
   Say "TEST" "terminal suites (each starts its own servers; near-watch path from config\local\repos.json)"
-  # packages/receipt and packages/agent-policy: privateAI-design-32 ARCH-613..616 and ARCH-620..624; packages/ap2: design-33 ARCH-626 (pure, no servers).
-  & node --test "packages/crossask/test/*.test.ts" "packages/receipt/test/*.test.ts" "packages/agent-policy/test/*.test.ts" "packages/ap2/test/*.test.ts" "scripts/test/*.test.ts" "services/gateway/test/*.test.ts" "test-console/test/*.test.ts" | Out-Host
+  # packages/receipt and packages/agent-policy: privateAI-design-32 ARCH-613..616 and ARCH-620..624; packages/ap2: design-33 ARCH-626; packages/offer: design-34 ARCH-634 (pure, no servers).
+  & node --test "packages/crossask/test/*.test.ts" "packages/receipt/test/*.test.ts" "packages/agent-policy/test/*.test.ts" "packages/ap2/test/*.test.ts" "packages/offer/test/*.test.ts" "scripts/test/*.test.ts" "services/gateway/test/*.test.ts" "test-console/test/*.test.ts" | Out-Host
   $a = $LASTEXITCODE
   & npm --prefix services\analyst test | Out-Host
   $b = $LASTEXITCODE

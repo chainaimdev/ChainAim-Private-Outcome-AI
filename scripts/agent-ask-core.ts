@@ -82,6 +82,8 @@ export function stepLine(tenant: string, type: string, d: Record<string, unknown
     case "tool_called": return `${A} The agent asked ChainAim to run the job`;
     case "job_ran": return `[ChainAim] Job run and held (id ${String(d.jobId).slice(0, 8)}…); the result stays hidden until paid`;
     case "quoted": return `[ChainAim] Quoted ${Number(d.totalUsd)} USDC on ${String(d.network)} to ${String(d.payTo)}`;
+    // privateAI-design-33 ARCH-630: ChainAim's signed quote, checked by the agent with the pinned AP2 key.
+    case "quote_signed": return `${A} Quote signed by ChainAim OK · key id ${String(d.kid).slice(0, 8)}… · price, payee and network match`;
     case "policy": {
       const checks = Array.isArray(d.checks) ? (d.checks as { check: string; limit: string; value: string; ok: boolean }[]).filter((c) => CHECK[c.check]).map((c) => `${CHECK[c.check](c)} ${c.ok ? "OK" : "NO"}`) : [];
       const dec = d.decision === "pay" ? "pay OK" : d.decision === "refuse" ? "refused" : `${String(d.decision)} (not paid)`;
@@ -93,7 +95,7 @@ export function stepLine(tenant: string, type: string, d: Record<string, unknown
     case "receipt_verified": return `${A} Agent verified the receipt OK · signed by the pinned key ${String(d.keyId).slice(0, 8)}… · result, job and amount${d.settled ? " and transaction" : ""} match${d.settled ? "" : " (settlement not attached yet)"}`;
     case "receipt_failed": return `${A} Receipt check FAILED: ${String(d.reason)} (the payment stands)`;
     case "done": return "Done";
-    case "refused": return `Not paid: ${String(d.reason)}`;
+    case "refused": return `Not paid${typeof d.code === "string" ? ` [${d.code}]` : ""}: ${String(d.reason)}`;
     case "error": return `Error: ${String(d.reason)}${d.transaction ? ` (transaction ${String(d.transaction)})` : ""}`;
     default: return `[${type}]`;
   }

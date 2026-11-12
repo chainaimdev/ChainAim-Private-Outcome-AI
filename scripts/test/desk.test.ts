@@ -36,6 +36,7 @@ test("ARCH-613 ARCH-620 ARCH-626 -Test, -All and -Ship run the receipt, agent-po
   assert.match(suites, /"packages\/receipt\/test\/\*\.test\.ts"/);
   assert.match(suites, /"packages\/agent-policy\/test\/\*\.test\.ts"/);
   assert.match(suites, /"packages\/ap2\/test\/\*\.test\.ts"/, "design-33 ARCH-626: the AP2 package suite runs with -Test, -All and -Ship");
+  assert.match(suites, /"packages\/offer\/test\/\*\.test\.ts"/, "design-34 ARCH-634: the offer package suite runs with -Test, -All and -Ship");
   assert.match(suites, /"packages\/crossask\/test\/\*\.test\.ts"/);
   assert.match(suites, /& npm --prefix services\\paywall test/);
   assert.match(suites, /return @\(\$a, \$b, \$c\)/);
@@ -334,4 +335,53 @@ test("ARCH-627 -Ap2Key runs scripts\\receipt-key.ts --alg ES256 on <secretsDir>\
   assert.match(k, /& node @ap2Args/); assert.match(k, /exit 0/);
   assert.ok(!/"--env-file"/.test(k), "never --env-file (lesson 2)");
   assert.ok(!/docker|Stop-Process|Get-Content|Select-String/.test(k), "touches no service and reads no file itself");
+});
+
+test("privateAI-design-33 ARCH-628 ARCH-630: up.ps1 -Ap2 passes AP2_SIGNING_KEY to compose by name (never into commands.yml), cent prices, the agent's pinned-key check, and the admin feed flags", () => {
+  const up = readFileSync(new URL("../../test-console/up.ps1", import.meta.url), "utf8");
+  assert.ok(/^[\x00-\x7F]*$/.test(up), "up.ps1 must be ASCII");
+  assert.match(up, /\[ValidateSet\("on", "off"\)\]\[string\]\$Ap2 = "on",/);
+  assert.match(up, /Set-Secret "AP2_SIGNING_KEY" \$ap2Key/);
+  assert.match(up, /\$consoleCmd \+= @\("--ap2=on", "--ap2-key-env=AP2_SIGNING_KEY", "--ap2-alg=ES256", "--ap2-terms-url=\$Ap2TermsUrl", "--price-round=cent"\)/);
+  assert.match(up, /if \(\$agentCmd\) \{ \$agentCmd \+= @\("--ap2-verify=on", "--ap2-public-key=\/app\/config\/ap2-public-key\.jwk\.json"\) \}/);
+  assert.match(up, /\$consoleCmd \+= "--job-feed-receipts=on"/);
+  assert.match(up, /\$consoleCmd \+= "--job-feed-ap2=on"/);
+  assert.match(up, /\$ap2Key = \$null/, "the key is dropped from the script's memory once set for compose");
+  assert.ok(!/--ap2-[a-z-]*=\$ap2Key/.test(up), "the key itself never goes into a command line");
+  const compose = readFileSync(new URL("../../docker-compose.yml", import.meta.url), "utf8");
+  assert.match(compose, /- RECEIPT_SIGNING_KEY\n(?:\s*#.*\n)*\s*- AP2_SIGNING_KEY\n/, "passed by name only (lesson 2: never --env-file)");
+});
+
+test("ARCH-635 -Calibrate runs scripts\\calibrate.ts on the sample root through the running console API and writes config\\cost-model.json; the compute price is never defaulted; runs on its own, before any start", () => {
+  assert.match(code, /\[switch\]\$Calibrate,/); assert.match(code, /\[string\]\$CalibrateComputeUsdPerHour = "",/);
+  assert.match(code, /\[string\]\$CalibrateModel = "bedrock\/nemotron-nano-3-30b",/); assert.match(code, /\[string\]\$CalibrateAnswerModel = "same",/);
+  assert.match(code, /\[int\]\$CalibrateRuns = 3,/); assert.match(code, /\[string\[\]\]\$CalibrateDatasets = @\("all"\),/);
+  assert.match(code, /\[string\]\$CalibrateTokensPerByte = "bound",/); assert.match(code, /\[switch\]\$CalibrateDryRun,/);
+  assert.match(code, /\$otherModes = [^\n]*-or \$Calibrate\b/, "-AgentAsk / -VerifyReceipt refuse it beside them");
+  assert.match(code, /if \(\$Calibrate -and \([^\n]*-or \$All -or \$Ship[^\n]*-or \$AgentAsk -or \$VerifyReceipt\)\) \{ Stop-Here "-Calibrate runs on its own/);
+  assert.ok(code.indexOf('Stop-Here "-Calibrate runs on its own') < code.indexOf("if ($Logs.Count)"), "checked before anything runs");
+  const c = code.slice(code.indexOf("if ($Calibrate) {"), code.indexOf("# ---------------------------------------------------------------- -Test"));
+  assert.ok(c.length > 0 && code.indexOf("if ($Calibrate) {") < code.indexOf("# 1. pre-flight"), "no start");
+  assert.match(c, /\$calArgs = @\("scripts\\calibrate\.ts", "--api", "http:\/\/127\.0\.0\.1:8735", "--root", "samples", [^\n]*"--out", "config\\cost-model\.json"\)/);
+  assert.match(c, /\[string\]\$calDs = @\(\$CalibrateDatasets\) -join ","/);
+  assert.match(c, /if \(\$CalibrateRuns -lt 2 -or \$CalibrateRuns -gt 20\)/);
+  // the compute price: the switch, else COMPUTE_USD_PER_HOUR in the committed team price file; neither = stop (no invented number)
+  assert.match(c, /\$priceFile = "config\\paid-jobs-prices\.conf"/); assert.match(c, /COMPUTE_USD_PER_HOUR/);
+  assert.match(c, /if \(-not \$cuh -and -not \$CalibrateDryRun\) \{ Stop-Here "no compute price/);
+  assert.match(c, /HttpStatus "http:\/\/127\.0\.0\.1:8735\/"/); assert.match(c, /& node @calArgs\s+exit \$LASTEXITCODE/);
+  assert.ok(!/docker|ollama|Stop-Process|secretsDir|chainaim\.env/.test(c), "starts nothing, reads no secret");
+});
+
+test("ARCH-615 ARCH-631 -VerifyJob JOBID fetches the job's receipt from the console API (the file Download receipt saves), writes it to runtime\\agent-ask and runs -VerifyReceipt on it; runs on its own (owner run 2026-11-12: no download in the browser)", () => {
+  assert.match(code, /\[string\]\$VerifyJob = "",/);
+  assert.match(code, /if \(\$VerifyJob -and \(\$AgentAsk -or \$VerifyReceipt -or \$Calibrate[^\n]*\)\) \{ Stop-Here "-VerifyJob runs on its own/);
+  assert.match(code, /\$otherModes = [^\n]*-or \$VerifyJob\n/);
+  const j = code.slice(code.indexOf("if ($VerifyJob) {"), code.indexOf("if ($VerifyReceipt) {"));
+  assert.ok(j.length > 0 && code.indexOf("if ($VerifyJob) {") < code.indexOf("if ($VerifyReceipt) {"), "fetched first, then the same offline check");
+  assert.match(j, /if \(\$VerifyJob -notmatch '\^\[0-9a-f\]\{32\}\$'\)/);
+  assert.match(j, /\$rcptUrl = "http:\/\/127\.0\.0\.1:8735\/jobs\/\$VerifyJob\/receipt"/);
+  assert.match(j, /\$VerifyReceipt = Join-Path \$rcptDir "chainaim-receipt-\$VerifyJob\.json"/);
+  assert.match(j, /UTF8Encoding\(\$false\)/, "written as UTF-8 without a BOM, byte for byte what the console sent");
+  assert.ok(!/docker|Get-Content|RECEIPT_SIGNING_KEY/.test(j), "no service started, no secret read");
+  assert.ok(code.indexOf("if ($VerifyJob) {") < code.indexOf("# 1. pre-flight"), "no start");
 });

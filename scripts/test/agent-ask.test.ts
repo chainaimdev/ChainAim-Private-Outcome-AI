@@ -16,6 +16,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { addSettlement, filesRoot, resultSha256, sha256Hex, signerFromKey, signReceipt, type ReceiptSigner, type SignedReceipt } from "../../packages/receipt/src/index.ts";
+import { merchantAuthSha256, signerFromKey as ap2SignerFromKey, signMerchantAuthorization } from "../../packages/ap2/src/index.ts";
 import { buildRun, parseFrame, resultText, stepLine, type ListedDataset } from "../agent-ask-core.ts";
 
 const ASK = fileURLToPath(new URL("../agent-ask.ts", import.meta.url));
@@ -247,5 +248,55 @@ describe("step D -VerifyReceipt: offline, pinned key", () => {
     const nokey = await cli(VERIFY, ["--file", write("y.json", receiptFor(id, RESULT, signer)), "--public-key", join(dir, "none.pem")]);
     assert.equal(nokey.code, 2);
     assert.match(nokey.err, /desk\.ps1 -ReceiptKey exports it/);
+  });
+});
+
+describe("ARCH-630 ARCH-631 the signed quote in -AgentAsk and -VerifyReceipt", () => {
+  const write = (name: string, j: unknown) => { const p = join(dir, name); writeFileSync(p, JSON.stringify(j)); return p; };
+  const ap2 = ap2SignerFromKey(generateKeyPairSync("ec", { namedCurve: "P-256" }).privateKey);
+  const ap2Other = ap2SignerFromKey(generateKeyPairSync("ec", { namedCurve: "P-256" }).privateKey);
+  const ap2File = join(dir, "ap2-public-key.jwk.json");
+  writeFileSync(ap2File, JSON.stringify({ keys: [ap2.publicJwk] }));
+  const id = randomBytes(16).toString("hex");
+  const quoteFor = (jobId: string, amountUnits: string, s = ap2) => {
+    const checkout = { id: jobId, currency: "USD", totals: [{ type: "total", amount: 1 }], "dev.chainaim.job": { amountUnits, usdcDecimals: 6 } };
+    return { checkout, merchant_authorization: signMerchantAuthorization(checkout, s) };
+  };
+  /** A receipt that points at `q` (merchantAuthSha256), signed by the pinned receipt key. */
+  const pointing = (q: { merchant_authorization: string }) => {
+    const base = receiptFor(id, RESULT, signer);
+    return signReceipt({ ...base.body, merchantAuthSha256: merchantAuthSha256(q.merchant_authorization) }, signer);
+  };
+  const v = (...a: string[]) => verifyCli("--ap2-public-key", ap2File, "--result", "none", ...a);
+
+  test("ARCH-630: the step lines: quote signed by ChainAim, and a refusal carries its AP2 code", () => {
+    assert.equal(stepLine("t01", "quote_signed", { kid: "83816e6fd32b879fd96d0318a40cd40d", cents: 1 }), "[Agent t01] Quote signed by ChainAim OK · key id 83816e6f… · price, payee and network match");
+    assert.equal(stepLine("t01", "refused", { reason: "no", code: "mandate_scope_mismatch" }), "Not paid [mandate_scope_mismatch]: no");
+    assert.equal(stepLine("t01", "refused", { reason: "no" }), "Not paid: no");
+  });
+
+  test("ARCH-631: a receipt with its signed quote: the quote verifies with the pinned AP2 key and matches the receipt", async () => {
+    const q = quoteFor(id, "10000");
+    const r = await v("--file", write("q-ok.json", { receipt: pointing(q), publicKeyPem: signer.publicKeyPem, ap2: q }));
+    assert.equal(r.code, 0, r.out + r.err);
+    assert.match(r.out, new RegExp(`quote +sha256 ${merchantAuthSha256(q.merchant_authorization)} · signed by the pinned AP2 key ${ap2.kid} · job and amount match the receipt`));
+    assert.match(r.out, /^OK .*signed quote matches$/m);
+    const without = await v("--file", write("q-none.json", { receipt: pointing(q) }));
+    assert.equal(without.code, 0);
+    assert.match(without.out, /signed quote not in this file, not checked/);
+  });
+
+  test("ARCH-631: another AP2 key, another quote than the receipt points at, or another amount: exit 1, naming why", async () => {
+    const q = quoteFor(id, "10000");
+    const otherKey = await v("--file", write("q-k.json", { receipt: pointing(q), ap2: quoteFor(id, "10000", ap2Other) }));
+    assert.equal(otherKey.code, 1);
+    assert.match(otherKey.out, /signed quote NOT valid: merchant_authorization_invalid/);
+    const swapped = quoteFor(id, "10000");
+    const s = await v("--file", write("q-s.json", { receipt: pointing(q), ap2: { ...swapped, merchant_authorization: quoteFor(id, "10000").merchant_authorization } }));
+    assert.equal(s.code, 1);
+    const amt = quoteFor(id, "20000");
+    const a = await v("--file", write("q-a.json", { receipt: pointing(amt), ap2: amt }));
+    assert.equal(a.code, 1);
+    assert.match(a.out, /signed quote's amount is not the receipt's amount/);
   });
 });

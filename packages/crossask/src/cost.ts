@@ -25,8 +25,37 @@ export type JobQuote = {
     subtotalUsd: string;
     /** The subtotal with the margin, before the minimum price, rounded up to 6 decimals (the total when the minimum is not applied). */
     withMarginUsd: string;
+    /**
+     * Present only with round "cent" (privateAI-design-33 ARCH-629, D2 option A): the total before it was rounded UP to
+     * whole cents, 6 decimals. Absent with "micro" (the default), so a micro quote is exactly what it was before.
+     */
+    beforeCentUsd?: string;
+    /**
+     * privateAI-design-34 ARCH-634: extra cost lines added before the margin (e.g. Presidio, analyst and gateway time
+     * from the calibrated cost model), each rounded up to 6 decimals. Present only when extras were given.
+     */
+    extras?: { name: string; usd: string }[];
   };
 };
+
+/**
+ * How the total is rounded (ARCH-629): "micro" (default) = up to 6 decimals (USDC base units, as before); "cent" = up to
+ * whole cents, for a UCP checkout whose amounts are integer ISO 4217 minor units (design-33 D2). With "cent" the amount
+ * in USDC base units is always a multiple of 10^(6-2).
+ */
+export const PRICE_ROUNDS = ["micro", "cent"] as const;
+export type PriceRound = (typeof PRICE_ROUNDS)[number];
+/** extras (design-34 ARCH-634): named non-negative USD decimals added to the subtotal before the margin. */
+export type QuoteOptions = { round?: PriceRound; extras?: readonly { name: string; usd: string }[] };
+/** USDC base units in one US cent. */
+export const MICROS_PER_CENT = 10n ** BigInt(6 - 2);
+/** The whole cents of a cent-rounded amount in USDC base units; throws when it is not a whole number of cents. */
+export function centsOfAmount(amount: string): number {
+  if (!/^[1-9]\d*$/.test(amount)) throw new Error(`amount ${amount} is not a positive whole number of USDC base units`);
+  const units = BigInt(amount);
+  if (units % MICROS_PER_CENT !== 0n) throw new Error(`amount ${amount} is not a whole number of cents`);
+  return Number(units / MICROS_PER_CENT);
+}
 
 /** USDC decimals: the amount is in millionths of a dollar. */
 export const USDC_DECIMALS = 6;
@@ -64,7 +93,9 @@ function priceOf(model: string, prices: ReadonlyMap<string, ModelPrice> | Record
   return p;
 }
 
-export function quoteJob(meter: readonly MeterLine[], prices: ReadonlyMap<string, ModelPrice> | Record<string, ModelPrice>, fees: Fees): JobQuote {
+export function quoteJob(meter: readonly MeterLine[], prices: ReadonlyMap<string, ModelPrice> | Record<string, ModelPrice>, fees: Fees, opts: QuoteOptions = {}): JobQuote {
+  const round = opts.round ?? "micro";
+  if (!(PRICE_ROUNDS as readonly string[]).includes(round)) throw new Error(`round must be micro or cent, got ${round}`);
   // Common scale for everything: enough for the catalog's prices and the fees as given.
   const f = {
     perCall: parseDecimal(fees.perModelCallUsd, "perModelCallUsd"), analyst: parseDecimal(fees.analystUsd, "analystUsd"),
@@ -81,18 +112,27 @@ export function quoteJob(meter: readonly MeterLine[], prices: ReadonlyMap<string
   const callUsdPerM = lines.map((l) => BigInt(l.pt) * at(l.inP, S) + BigInt(l.ct) * at(l.outP, S));
   const modelPerM = callUsdPerM.reduce((a, b) => a + b, 0n);
   const callFees = BigInt(lines.length) * at(f.perCall, S);
-  // base = USD × 10^(S+6)
-  const base = modelPerM + (callFees + at(f.analyst, S) + at(f.gas, S)) * 1_000_000n;
+  // design-34: extras at the same scale (a finer extra raises S for everything, exactly).
+  const extras = (opts.extras ?? []).map((e, i) => {
+    if (typeof e?.name !== "string" || !/^[a-z][A-Za-z0-9]{0,40}$/.test(e.name)) throw new Error(`extras[${i}].name must be a short identifier`);
+    return { name: e.name, d: parseDecimal(e.usd, `extras[${i}] (${e.name})`) };
+  });
+  const S2 = Math.max(S, ...extras.map((e) => e.d.scale));
+  const atS2 = (v: bigint) => v * 10n ** BigInt(S2 - S);
+  const extrasSum = extras.reduce((a, e) => a + at(e.d, S2), 0n);
+  // base = USD × 10^(S2+6)
+  const base = atS2(modelPerM) + (atS2(callFees + at(f.analyst, S) + at(f.gas, S)) + extrasSum) * 1_000_000n;
   // with margin: USD = base × (100·10^mk + M) / (100·10^mk · 10^(S+6))
   const mk = BigInt(f.margin.scale);
   const num = base * (100n * 10n ** mk + f.margin.n);
-  const den = 100n * 10n ** mk * 10n ** BigInt(S + 6);
+  const den = 100n * 10n ** mk * 10n ** BigInt(S2 + 6);
   // in millionths, rounded up; then the minimum (itself rounded up to millionths)
   const withMargin = ceilDiv(num * 1_000_000n, den);
   const minMicros = ceilDiv(at(f.min, S) * 1_000_000n, 10n ** BigInt(S));
   const minApplied = minMicros > withMargin;
-  const micros = minApplied ? minMicros : withMargin;
-  if (micros <= 0n) throw new Error("the job's total is 0: set a minimum price (minPriceUsd) above 0");
+  const exactMicros = minApplied ? minMicros : withMargin;
+  if (exactMicros <= 0n) throw new Error("the job's total is 0: set a minimum price (minPriceUsd) above 0");
+  const micros = round === "cent" ? ceilDiv(exactMicros, MICROS_PER_CENT) * MICROS_PER_CENT : exactMicros;
   const perMToMicrosUp = (v: bigint) => ceilDiv(v, 10n ** BigInt(S));
   const usd = (v: bigint, scale: number) => microsToUsd(ceilDiv(v * 1_000_000n, 10n ** BigInt(scale)));
   return {
@@ -103,7 +143,9 @@ export function quoteJob(meter: readonly MeterLine[], prices: ReadonlyMap<string
       modelUsd: microsToUsd(perMToMicrosUp(modelPerM)),
       callFeesUsd: usd(callFees, S), analystUsd: usd(at(f.analyst, S), S), nearGasUsd: usd(at(f.gas, S), S),
       marginPct: fees.marginPct, minPriceUsd: fees.minPriceUsd, minApplied,
-      subtotalUsd: microsToUsd(perMToMicrosUp(base)), withMarginUsd: microsToUsd(withMargin),
+      subtotalUsd: microsToUsd(ceilDiv(base, 10n ** BigInt(S2))), withMarginUsd: microsToUsd(withMargin),
+      ...(extras.length ? { extras: extras.map((e) => ({ name: e.name, usd: usd(at(e.d, S2), S2) })) } : {}),
+      ...(round === "cent" ? { beforeCentUsd: microsToUsd(exactMicros) } : {}),
     },
   };
 }

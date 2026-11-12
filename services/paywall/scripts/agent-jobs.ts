@@ -46,6 +46,12 @@
  *                          committed; exported by desk.ps1 -ReceiptKey). The publicKeyPem the console sends is never used
  * --receipt-poll-ms N / --receipt-poll-max N  how often and how many times to ask for the receipt, which the console makes
  *                          just after the release (defaults 1000 and 15, as tab 03)
+ * --ap2-verify on|off      privateAI-design-33 ARCH-630: verify ChainAim's signed quote (the console's --ap2 on answer) with
+ *                          the PINNED AP2 key and bind it to the quote before the policy; a failure refuses the run with the
+ *                          AP2 error code, nothing signed or paid (default off). On: start-up refuses a missing or bad key file
+ * --ap2-public-key PATH    the pinned JWK Set (default config/ap2-public-key.jwk.json at the repository root, committed;
+ *                          exported by desk.ps1 -Ap2Key). A key the console sends or publishes is never used
+ * --ap2-skew-sec N         clock skew allowed on the signed quote's expiry (default 30)
  * --run-timeout-sec N      a run is cancelled if not signed by then (default 300)
  * --body-max-bytes N       largest POST /run body (default 65536)
  *
@@ -61,6 +67,7 @@ import { parseArgs } from "node:util";
 import { BedrockModel } from "@strands-agents/sdk";
 import { SpendLedger } from "../../../packages/agent-policy/src/index.ts";
 import { loadPinnedKey, type ReceiptCheck } from "./agent-receipt.ts";
+import { loadPinnedJwks, type Ap2Check } from "./agent-ap2.ts";
 import { AccountQueue, loadAgentTenants, loadPolicies, parseRunRequest, payingNetwork, policyViews, publicTenants, runAgentJob, SetupError, sseFrame, type AgentPolicy, type AgentTenant } from "./agent-jobs-core.ts";
 import { presidioClient, PROMPT_SCANNERS, PromptScan, type PromptScanner } from "./prompt-scan.ts";
 
@@ -95,6 +102,9 @@ const { values } = parseArgs({
     "spend-dir": { type: "string", default: join(REPO, "runtime", "agent-spend") },
     "receipt-verify": { type: "string", default: "on" },
     "receipt-public-key": { type: "string", default: join(REPO, "config", "receipt-public-key.pem") },
+    "ap2-verify": { type: "string", default: "off" },
+    "ap2-public-key": { type: "string", default: join(REPO, "config", "ap2-public-key.jwk.json") },
+    "ap2-skew-sec": { type: "string", default: "30" },
     "receipt-poll-ms": { type: "string", default: "1000" },
     "receipt-poll-max": { type: "string", default: "15" },
     "run-timeout-sec": { type: "string", default: "300" },
@@ -163,6 +173,17 @@ if (receiptOn) {
     receiptCheck = { ...loadPinnedKey(keyPath), keyPath, pollMs: receiptPollMs, pollMax: receiptPollMax, fetchTimeoutMs: 5000 };
   } catch (e) {
     fail(`--receipt-public-key: ${(e as Error).message} (or start with --receipt-verify off)`);
+  }
+}
+const ap2On = onOff("ap2-verify", values["ap2-verify"]);
+const ap2SkewSec = whole("ap2-skew-sec", values["ap2-skew-sec"], 0, 600);
+let ap2Check: Ap2Check | undefined;
+if (ap2On) {
+  const keyPath = values["ap2-public-key"].trim();
+  try {
+    ap2Check = { ...loadPinnedJwks(keyPath), keyPath, skewSec: ap2SkewSec };
+  } catch (e) {
+    fail(`--ap2-public-key: ${(e as Error).message} (or start with --ap2-verify off)`);
   }
 }
 
@@ -247,7 +268,7 @@ createServer(async (req, res) => {
       res.on("close", () => { if (!finished) stop.abort(); });
       const timer = setTimeout(() => stop.abort(), runTimeoutMs);
       try {
-        await runAgentJob(run, { tenants: byId, console: consoleUrl, paywall: paywallUrl, scan, promptMask, makeModel, maxTurns, ...(maxAmount ? { maxAmount } : {}), ...(policy ? { policy } : {}), ...(receiptCheck ? { receiptCheck } : {}), queue, tenantLabel, log },
+        await runAgentJob(run, { tenants: byId, console: consoleUrl, paywall: paywallUrl, scan, promptMask, makeModel, maxTurns, ...(maxAmount ? { maxAmount } : {}), ...(policy ? { policy } : {}), ...(receiptCheck ? { receiptCheck } : {}), ...(ap2Check ? { ap2Check } : {}), queue, tenantLabel, log },
           (e) => { if (!res.writableEnded && !res.destroyed) res.write(sseFrame(e)); }, stop.signal);
       } catch (e) {
         if (!res.writableEnded && !res.destroyed) res.write(sseFrame({ type: "error", reason: `the agent service failed: ${e instanceof Error ? e.message : String(e)}` }));
@@ -272,6 +293,9 @@ createServer(async (req, res) => {
   console.log(policy
     ? `[agent] spending policy on (tenant.json "policy"): ${policyViews(tenants, policy).map((v) => ("error" in v ? `${v.id} ${v.error}` : `${v.id} auto-pay <= ${v.autoApproveMaxUsd}, max ${v.maxPerJobUsd}/job, ${v.dailyCapUsd}/day (spent ${v.spentTodayUsd})${v.requireAttestedRoute ? ", attested route only" : ""}`)).join("; ")}; ledger ${spendDir}`
     : "[agent] spending policy off (--agent-policy off): every quote within --agent-max-amount is paid");
+  console.log(ap2Check
+    ? `[agent] signed-quote check on: each quote is verified with the pinned AP2 key ${ap2Check.kids.join(", ")} from ${ap2Check.keyPath} before the policy (skew ${ap2Check.skewSec} s)`
+    : "[agent] signed-quote check off (--ap2-verify off)");
   console.log(receiptCheck
     ? `[agent] receipt check on: each paid job's receipt is verified with the pinned key ${receiptCheck.keyId} from ${receiptCheck.keyPath} (asked ${receiptPollMax} times, ${receiptPollMs} ms apart)`
     : "[agent] receipt check off (--receipt-verify off)");

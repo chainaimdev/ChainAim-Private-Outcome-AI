@@ -187,6 +187,8 @@ services:
       - NEAR_WATCH_INGEST_KEY
       # The receipt signing key (ARCH-614), set by up.ps1 only with receipts on; unset = not passed, receipts off.
       - RECEIPT_SIGNING_KEY
+      # The AP2 quote signing key (privateAI-design-33 ARCH-628), set by up.ps1 only with -Ap2 on; unset = not passed.
+      - AP2_SIGNING_KEY
     secrets: [gateway-key]
     volumes:
       - ./config:/app/config:ro

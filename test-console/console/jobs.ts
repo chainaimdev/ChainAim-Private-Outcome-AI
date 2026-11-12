@@ -11,18 +11,35 @@ import { randomBytes, timingSafeEqual } from "node:crypto";
 import { readFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { ChatReply, CrossAskResult } from "../../packages/crossask/src/index.ts";
-import { parseDecimal, pricesFromCatalog, quoteJob, type Fees, type JobQuote, type MeterLine, type ModelPrice } from "../../packages/crossask/src/cost.ts";
+import { parseDecimal, PRICE_ROUNDS, pricesFromCatalog, quoteJob, type Fees, type JobQuote, type MeterLine, type ModelPrice, type PriceRound } from "../../packages/crossask/src/cost.ts";
 import type { ReceiptFile } from "../../packages/receipt/src/index.ts";
+import type { Ap2Hold } from "./ap2.ts";
 
 export type PaidJobsFlags = {
   "paid-jobs"?: string; "jobs-internal-host"?: string; "jobs-internal-port"?: string; "paid-jobs-key-env"?: string;
   "job-ttl-min"?: string; "job-max"?: string; "pricing-catalog"?: string;
   "fee-per-model-call-usd"?: string; "fee-analyst-usd"?: string; "near-gas-fee-usd"?: string; "margin-pct"?: string; "min-price-usd"?: string;
+  /** privateAI-design-33 ARCH-629: micro (default) or cent; cent is the default, and the only value allowed, under --ap2 on. */
+  "price-round"?: string; ap2?: string;
 };
 export type PaidJobsConfig = {
   internalHost: string; internalPort: number; key: string; keyEnv: string; ttlMs: number; max: number;
   prices: Map<string, ModelPrice>; fees: Fees;
+  /** How quoteJob rounds the total (ARCH-629). */
+  priceRound: PriceRound;
 };
+
+/**
+ * --price-round (ARCH-629, design-33 D2 option A): micro unless --ap2 on, where it is cent (a UCP checkout's totals are
+ * whole cents, so a sub-cent price cannot be signed). --ap2 on with --price-round micro is refused, never silently changed.
+ */
+export function priceRoundOf(flags: Pick<PaidJobsFlags, "price-round" | "ap2">): PriceRound {
+  const ap2On = flags.ap2 === "on";
+  const raw = flags["price-round"] ?? (ap2On ? "cent" : "micro");
+  if (!(PRICE_ROUNDS as readonly string[]).includes(raw)) throw new Error(`--price-round must be micro or cent, got ${raw}`);
+  if (ap2On && raw !== "cent") throw new Error("--ap2 on needs --price-round cent (UCP checkout totals are whole cents; design-33 D2)");
+  return raw as PriceRound;
+}
 
 /** The fee flags ARCH-114 requires, in the order their absence is reported. */
 export const FEE_FLAGS = ["fee-per-model-call-usd", "fee-analyst-usd", "near-gas-fee-usd", "margin-pct", "min-price-usd"] as const;
@@ -31,7 +48,11 @@ export const FEE_FLAGS = ["fee-per-model-call-usd", "fee-analyst-usd", "near-gas
 export function paidJobsConfig(flags: PaidJobsFlags, env: Record<string, string | undefined>): PaidJobsConfig | undefined {
   const mode = flags["paid-jobs"] ?? "off";
   if (mode !== "on" && mode !== "off") throw new Error(`--paid-jobs must be on or off, got ${mode}`);
-  if (mode === "off") return undefined;
+  if (mode === "off") {
+    if (flags["price-round"] !== undefined) throw new Error("--price-round needs --paid-jobs on (it rounds the paid job's quote)");
+    return undefined;
+  }
+  const priceRound = priceRoundOf(flags);
   if (!flags["pricing-catalog"]) throw new Error("--paid-jobs on needs --pricing-catalog PATH (the model catalog whose pricing.inputPerM / outputPerM price each call, e.g. config/catalog.bedrock.json)");
   for (const f of FEE_FLAGS) {
     const v = flags[f];
@@ -61,6 +82,7 @@ export function paidJobsConfig(flags: PaidJobsFlags, env: Record<string, string 
     max: int("job-max", "100", 1, 10_000),
     prices: pricesFromCatalog(catalog),
     fees,
+    priceRound,
   };
 }
 
@@ -78,7 +100,8 @@ export type ReceiptHold = {
   network: string; quoteId: string; route: string; datasetId: string; templateLabel?: string; files: ReceiptFile[]; sql: string;
   priceUsd: string; quoteBasis: Record<string, string | number | boolean>; actualUsd?: string;
 };
-export type HeldJob = { jobId: string; result: CrossAskResult; amount: string; breakdown: JobQuote["breakdown"]; expiresAt: number; receipt?: ReceiptHold };
+/** ap2 (privateAI-design-33 ARCH-628): the signed UCP checkout of the quote, only with --ap2 on. */
+export type HeldJob = { jobId: string; result: CrossAskResult; amount: string; breakdown: JobQuote["breakdown"]; expiresAt: number; receipt?: ReceiptHold; ap2?: Ap2Hold };
 
 /** Held results, in memory only, removed on release or expiry. */
 export class JobStore {

@@ -423,6 +423,7 @@ footer.fine { margin-top: 30px; padding-top: 16px; border-top: 1px solid var(--r
             <button class="ghost" data-route="scan">Try scan</button>
             <button class="ghost" data-route="mask">Try mask</button>
             <button class="ghost" data-route="chat">Try chat</button>
+            <button class="ghost" id="ucpProfile" title="GET /.well-known/ucp: the UCP capabilities and the public key ChainAim signs paid-job quotes with (AP2)">Show the UCP profile</button>
           </div>
         </div>
         <div id="payOut"></div>
@@ -1316,28 +1317,71 @@ $("send").onclick = () => busy($("send"), async () => {
   out.append(el("details", { className: "behind", open: true }, el("summary", { textContent: "Behind the scenes: what left ChainAim" }), el("div", { className: "row" }, m, j)));
 });
 
+// privateAI-design-33 section 7 (ARCH-628): the console's UCP business profile, so the demo can show the AP2 capability
+// and the key (kid, curve, alg) that signs each paid-job quote. 404 when the console runs with --ap2 off.
+if ($("ucpProfile")) $("ucpProfile").onclick = () => busy($("ucpProfile"), async () => {
+  const out = $("payOut"); out.replaceChildren();
+  const res = await fetch("/.well-known/ucp");
+  const j = await res.json().catch(() => ({}));
+  if (!res.ok) { out.append(block(verdict(cell("Status", res.status, "phi", "no profile")), el("p", { className: "muted", textContent: typeof j.error === "string" ? j.error : "AP2 signed quotes are off (start with desk.ps1 and an AP2 key: desk.ps1 -Ap2Key)." }))); return; }
+  const caps = Object.keys(j.ucp?.capabilities ?? {});
+  const keys = Array.isArray(j.keys) ? j.keys : [];
+  out.append(block(verdict(
+    cell("Status", res.status, "clear", "UCP business profile"),
+    cell("UCP version", j.ucp?.version ?? "?"),
+    cell("AP2 mandates", caps.includes("dev.ucp.common.payment.ap2_mandate") ? "on" : "off", caps.includes("dev.ucp.common.payment.ap2_mandate") ? "clear" : "phi", "dev.ucp.common.payment.ap2_mandate"),
+    cell("Signing keys", keys.length, "", keys.map((k) => `${String(k.kid).slice(0, 8)}... ${k.alg ?? "?"}`).join(", ")))));
+  const row = (k, v) => el("tr", {}, el("th", { textContent: k }), el("td", { textContent: v }));
+  out.append(block(el("span", { className: "blabel", textContent: "Capabilities and keys" }),
+    el("div", { className: "scroll" }, el("table", { className: "kv" },
+      ...caps.map((c) => row(c, (j.ucp.capabilities[c] ?? []).map((e) => `version ${e.version}${e.extends ? ` · extends ${e.extends}` : ""}`).join("; "))),
+      ...Object.keys(j.ucp?.payment_handlers ?? {}).map((h) => row(`payment handler ${h}`, (j.ucp.payment_handlers[h] ?? []).map((e) => `${e.id} · version ${e.version}`).join("; "))),
+      ...keys.map((k) => row(`key ${k.kid}`, `${k.kty} ${k.crv} · ${k.alg} · use ${k.use}`)))),
+    el("p", { className: "muted", textContent: "Each paid job's quote is a UCP checkout signed with this key (AP2 merchant authorization, ES256). The buyer's AI agent checks it with its own pinned copy of the key, not this one." })));
+  out.append(block(el("span", { className: "blabel", textContent: "The profile in full" }), pre(j)));
+});
+
 for (const b of document.querySelectorAll("[data-route]")) b.onclick = () => busy(b, async () => {
   const r = await call("/paywall/" + b.dataset.route);
   const out = $("payOut"); out.replaceChildren();
-  const a = r.accepts?.[0];
+  // One offer per payment rail the paywall runs (PAY_RAILS): RLUSD on XRPL and/or USDC on NEAR, for the same invoice.
+  // rail from the relay; from the network id when an older relay sent none (its NEAR price is then base units: not shown as a price).
+  const offers = (r.accepts ?? []).map((q) => (q.rail ? q : String(q.network).startsWith("near:") ? { ...q, rail: "near", price: null } : { ...q, rail: "xrpl" }));
+  const unit = (q) => (q.rail === "near" ? "USDC" : "RLUSD");
+  const railName = (q) => (q.rail === "near" ? `NEAR ${q.network === "near:mainnet" ? "MainNet" : "TestNet"}` : q.network === "xrpl:0" ? "XRPL MainNet" : q.network === "xrpl:1" ? "XRPL TestNet" : q.network);
   out.append(block(verdict(
     cell("Status", r.status, r.status === 402 ? "clear" : "phi", r.status === 402 ? "payment required" : "unexpected"),
     cell("Route", b.dataset.route),
-    cell("Price", a ? a.price : "—", "", a ? "RLUSD per call" : "no quote returned"),
+    cell("Price", offers.length ? offers.map((q) => `${q.price ?? "?"} ${unit(q)}`).join(" · ") : "—", "", offers.length ? `per call, ${offers.map(railName).join(" or ")}` : "no quote returned"),
     cell("Bazaar", r.bazaar ? "on" : "off", "", r.bazaar ? "discovery metadata" : ""))));
-  for (const q of r.accepts ?? []) {
-    const main = q.network === "xrpl:0";
-    const explorer = `https://${main ? "livenet" : "testnet"}.xrpl.org`;
-    const link = (href, text, cls = "") => el("a", { href, target: "_blank", rel: "noopener", textContent: text, className: cls });
-    const row = (k, ...v) => el("tr", {}, el("th", { textContent: k }), el("td", {}, ...v));
-    out.append(block(el("span", { className: "blabel", textContent: "The quote in full" }),
-      el("div", { className: "scroll" }, el("table", { className: "kv" },
+  const link = (href, text, cls = "") => el("a", { href, target: "_blank", rel: "noopener", textContent: text, className: cls });
+  const row = (k, ...v) => el("tr", {}, el("th", { textContent: k }), el("td", {}, ...v));
+  for (const q of offers) {
+    let rows;
+    if (q.rail === "near") {
+      const explorer = `https://${q.network === "near:mainnet" ? "" : "testnet."}nearblocks.io`;
+      rows = [
+        row("Price", `${q.price ?? "?"} USDC`, el("span", { className: "small", textContent: q.amountUnits ? `  (${q.amountUnits} base units, the exact x402 amount)` : "" })),
+        row("Network", `${railName(q)} (${q.network})`),
+        row("Asset", "USDC, contract ", link(`${explorer}/token/${q.asset}`, q.asset, "addr")),
+        row("Pay to", link(`${explorer}/address/${q.payTo}`, q.payTo, "addr")),
+        row("Invoice", q.invoiceId ?? "—"),
+        row("Gas", "paid by ChainAim's relayer (the buyer signs a NEP-366 delegate and needs USDC only)"),
+      ];
+    } else {
+      const main = q.network === "xrpl:0";
+      const explorer = `https://${main ? "livenet" : "testnet"}.xrpl.org`;
+      rows = [
         row("Price", `${q.price} RLUSD`),
-        row("Network", main ? "XRPL MainNet" : q.network === "xrpl:1" ? "XRPL TestNet" : q.network),
+        row("Network", railName(q)),
         row("Asset", `RLUSD (currency code ${q.asset})`),
         row("Issuer", link(`${explorer}/accounts/${q.issuer}`, q.issuer, "addr")),
         row("Pay to", link(`${explorer}/accounts/${q.payTo}`, q.payTo, "addr")),
         row("Invoice", q.invoiceId),
+      ];
+    }
+    out.append(block(el("span", { className: "blabel", textContent: `The quote in full: ${unit(q)} on ${railName(q)}` }),
+      el("div", { className: "scroll" }, el("table", { className: "kv" }, ...rows,
         row("Bazaar", r.bazaar ? "discovery metadata is on" : "off", el("span", { className: "small", textContent: r.bazaar ? "  (the listing itself appears after the first settled payment)" : "" })))),
       el("p", { className: "muted", textContent: "No payment is made here. The paywall strips payment headers before the gateway sees the request." })));
   }

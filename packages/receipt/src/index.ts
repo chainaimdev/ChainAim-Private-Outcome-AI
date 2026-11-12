@@ -101,6 +101,11 @@ export type ReceiptBody = {
   resultSha256: string;
   calls: ReceiptCall[];
   evidenceBundleSha256?: string;
+  /**
+   * privateAI-design-33 ARCH-631: SHA-256 hex of the AP2 merchant_authorization string of the job's signed quote, so the
+   * receipt points at the signed quote. Optional: absent when the console runs with --ap2 off, and old receipts verify.
+   */
+  merchantAuthSha256?: string;
   price: ReceiptPrice;
   /** ISO 8601. */
   createdAt: string;
@@ -130,6 +135,7 @@ export function checkBody(b: ReceiptBody): void {
   if (Number.isNaN(Date.parse(b.createdAt))) fail("createdAt", "an ISO 8601 time");
   for (const f of ["filesRoot", "sqlSha256", "resultSha256"] as const) if (!SHA256_HEX.test(b[f])) fail(f, "64 lowercase hex characters");
   if (b.evidenceBundleSha256 !== undefined && !SHA256_HEX.test(b.evidenceBundleSha256)) fail("evidenceBundleSha256", "64 lowercase hex characters");
+  if (b.merchantAuthSha256 !== undefined && !SHA256_HEX.test(b.merchantAuthSha256)) fail("merchantAuthSha256", "64 lowercase hex characters");
   if (!Array.isArray(b.files) || b.files.length === 0) fail("files", "a non-empty list");
   for (const [i, f] of b.files.entries()) {
     if (typeof f.name !== "string" || f.name === "") fail(`files[${i}].name`, "a non-empty string");

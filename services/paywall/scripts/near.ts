@@ -89,6 +89,11 @@ export type NearPayOptions = {
   rpc?: NearRpc;
   /** Called at each buyer-side step of a call whose price carried an invoice id; must not throw. */
   onStep?: (step: PayStep, info: StepInfo) => void;
+  /**
+   * privateAI-design-33 ARCH-630: refuse, before signing, an offer whose payee, asset or amount (base units) is not this
+   * one (the agent passes what the console signed). The message carries mandate_scope_mismatch.
+   */
+  requireOffer?: { payTo: string; asset: string; amount: string };
 };
 
 /** What payAndFetchNear returned: Paid, with amount the USDC decimal signed for (as RLUSD is on the XRPL rail), and units the same in base units. */
@@ -121,6 +126,12 @@ export async function payAndFetchNear(url: string, init: { method: string; heade
   }
   if (buyer.usdcContract && offer.asset !== buyer.usdcContract) {
     throw new SetupError(`the paywall asks to be paid in ${offer.asset}, not the USDC contract ${buyer.usdcContract} this buyer is set up for; nothing was paid`);
+  }
+  if (options.requireOffer) {
+    const want = options.requireOffer;
+    for (const [field, got, exp] of [["payee", offer.payTo, want.payTo], ["asset", offer.asset, want.asset], ["amount", offer.amount, want.amount]] as const) {
+      if (got !== exp) throw new SetupError(`mandate_scope_mismatch: the paywall's ${field} (${String(got)}) is not the one ChainAim signed (${exp}); nothing was paid`);
+    }
   }
   const rpc = options.rpc ?? createNearRpc({ urls: [buyer.rpcUrl], timeoutMs: 10_000 });
   const decimals = await tokenDecimals(rpc, offer.asset);

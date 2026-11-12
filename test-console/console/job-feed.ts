@@ -12,6 +12,9 @@
  *   job_receipt   when the job's signed receipt is stored (privateAI-design-32 ARCH-615): receipt id, signing key id, the
  *                 result and files hashes, whether settled and the settlement transaction. Only with --job-feed-receipts on
  *                 (default off): near-watch refuses event names it does not know, so turn it on once near-watch accepts it.
+ *   job_quoted.ap2  {kid, merchantAuthSha256} of the quote's AP2 merchant authorization (privateAI-design-33 section 7;
+ *                 chainaim-adminUI-NEAR near-watch ARCH-702): key id and signature hash only. Only with --job-feed-ap2 on
+ *                 (default off): an older near-watch refuses the unknown field and with it the whole job_quoted.
  * Never awaited by a request: a feed that is slow, down or refusing never blocks or fails a job. A failed post is
  * logged once as job_feed_failed with the job id and a reason (an HTTP status, "timeout", "unreachable", "too many in
  * flight") only.
@@ -26,11 +29,12 @@ import type { SignedReceipt } from "../../packages/receipt/src/index.ts";
 
 export type JobFeedFlags = {
   "job-feed-url"?: string; "job-feed-key-env"?: string; "job-feed-timeout-ms"?: string; "job-feed-max-inflight"?: string; "job-expiry-check-sec"?: string;
-  "job-feed-attest-keep"?: string; "job-feed-receipts"?: string;
+  "job-feed-attest-keep"?: string; "job-feed-receipts"?: string; "job-feed-ap2"?: string;
 };
 /** attestKeep: quoted jobs whose call list is kept for their job_attested (oldest dropped first; a re-check needs it too); default 500. */
 /** receipts: send job_receipt (--job-feed-receipts on); absent/false: not sent. */
-export type JobFeedConfig = { url: string; key: string; keyEnv: string; timeoutMs: number; maxInflight: number; expiryCheckSec: number; attestKeep?: number; receipts?: boolean };
+/** ap2: send job_quoted.ap2 (--job-feed-ap2 on); absent/false: not sent. */
+export type JobFeedConfig = { url: string; key: string; keyEnv: string; timeoutMs: number; maxInflight: number; expiryCheckSec: number; attestKeep?: number; receipts?: boolean; ap2?: boolean };
 export const DEFAULT_ATTEST_KEEP = 500;
 
 /** undefined without --job-feed-url; otherwise the checked configuration, or an Error naming what to set. The key is never in a message. */
@@ -38,8 +42,11 @@ export function jobFeedConfig(flags: JobFeedFlags, env: Record<string, string | 
   const url = flags["job-feed-url"];
   const receiptsMode = flags["job-feed-receipts"] ?? "off";
   if (receiptsMode !== "on" && receiptsMode !== "off") throw new Error(`--job-feed-receipts must be on or off, got ${receiptsMode}`);
+  const ap2Mode = flags["job-feed-ap2"] ?? "off";
+  if (ap2Mode !== "on" && ap2Mode !== "off") throw new Error(`--job-feed-ap2 must be on or off, got ${ap2Mode}`);
   if (url === undefined || url === "") {
     if (receiptsMode === "on") throw new Error("--job-feed-receipts on needs --job-feed-url");
+    if (ap2Mode === "on") throw new Error("--job-feed-ap2 on needs --job-feed-url");
     return undefined;
   }
   if (!paidJobsOn) throw new Error("--job-feed-url needs --paid-jobs on: the feed reports paid jobs only");
@@ -63,6 +70,7 @@ export function jobFeedConfig(flags: JobFeedFlags, env: Record<string, string | 
     expiryCheckSec: int("job-expiry-check-sec", "30", 1, 3600),
     attestKeep: int("job-feed-attest-keep", String(DEFAULT_ATTEST_KEEP), 1, 100_000),
     receipts: receiptsMode === "on",
+    ap2: ap2Mode === "on",
   };
 }
 
@@ -89,7 +97,7 @@ export type WatchAttestedCall = {
 export type AttestMeta = { network: string; calls: { step: "query" | "answer"; model: string }[] };
 
 export type JobEvent =
-  | { v: 1; event: "job_quoted"; ts: string; jobId: string; network: string; amount: string; totalUsd: string; expiresAt: string; steps: JobStep[]; breakdown: JobQuote["breakdown"] }
+  | { v: 1; event: "job_quoted"; ts: string; jobId: string; network: string; amount: string; totalUsd: string; expiresAt: string; steps: JobStep[]; breakdown: JobQuote["breakdown"]; ap2?: QuotedAp2 }
   | { v: 1; event: "job_released" | "job_expired"; ts: string; jobId: string; network: string }
   | { v: 1; event: "job_attested"; ts: string; jobId: string; network: string; summary: WatchSummary; calls: WatchAttestedCall[] }
   | { v: 1; event: "job_receipt"; ts: string; jobId: string; network: string; receiptId: string; keyId: string; resultSha256: string; filesRoot: string; settled: boolean; transaction: string | null };
@@ -131,12 +139,15 @@ export function jobSteps(out: CrossAskResult, quote: JobQuote): JobStep[] {
   ];
 }
 
-export function quotedEvent(j: { jobId: string; network: string; expiresAt: number; out: CrossAskResult; quote: JobQuote }, now = Date.now()): JobEvent {
+/** The signed quote as near-watch takes it on job_quoted (ARCH-702 there): key id and signature hash only. */
+export type QuotedAp2 = { kid: string; merchantAuthSha256: string };
+export function quotedEvent(j: { jobId: string; network: string; expiresAt: number; out: CrossAskResult; quote: JobQuote; ap2?: QuotedAp2 }, now = Date.now()): JobEvent {
   const b = j.quote.breakdown;
   return {
     v: 1, event: "job_quoted", ts: iso(now), jobId: j.jobId, network: j.network, amount: j.quote.amount, totalUsd: j.quote.totalUsd, expiresAt: iso(j.expiresAt),
     steps: jobSteps(j.out, j.quote),
     breakdown: { calls: b.calls.map((c) => ({ model: c.model, promptTokens: c.promptTokens, completionTokens: c.completionTokens, usd: c.usd })), modelUsd: b.modelUsd, callFeesUsd: b.callFeesUsd, analystUsd: b.analystUsd, nearGasUsd: b.nearGasUsd, marginPct: b.marginPct, minPriceUsd: b.minPriceUsd, minApplied: b.minApplied, subtotalUsd: b.subtotalUsd, withMarginUsd: b.withMarginUsd },
+    ...(j.ap2 ? { ap2: { kid: j.ap2.kid, merchantAuthSha256: j.ap2.merchantAuthSha256 } } : {}),
   };
 }
 
@@ -211,9 +222,11 @@ export class JobFeed {
     this.now = now;
   }
 
-  quoted(j: { jobId: string; network: string; expiresAt: number; out: CrossAskResult; quote: JobQuote }): void {
+  /** ap2 (design-33): the signed quote's key id and hash; put on the event only with --job-feed-ap2 on. */
+  quoted(j: { jobId: string; network: string; expiresAt: number; out: CrossAskResult; quote: JobQuote; ap2?: QuotedAp2 }): void {
     let event: JobEvent;
-    try { event = quotedEvent(j, this.now()); }
+    const { ap2, ...rest } = j;
+    try { event = quotedEvent(this.cfg.ap2 && ap2 ? { ...rest, ap2 } : rest, this.now()); }
     catch (e) { return this.failed(j.jobId, (e as Error).message); }
     this.networks.set(j.jobId, j.network);
     this.attestMeta.delete(j.jobId);

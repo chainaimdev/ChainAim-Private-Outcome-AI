@@ -1,6 +1,7 @@
 # chainaim-agent: the tab 03 agent service (architecture-tab03-agent-mode.md ARCH-310). Build context: the repository
 # root (the agent imports services/web/src, services/gateway/src/privacy and, since privateAI-design-32 ARCH-620,
-# packages/agent-policy, and since privateAI-design-32 step B packages/receipt and the pinned config/receipt-public-key.pem);
+# packages/agent-policy, since privateAI-design-32 step B packages/receipt and the pinned config/receipt-public-key.pem, and
+# since privateAI-design-33 ARCH-630 packages/ap2 and the pinned config/ap2-public-key.jwk.json);
 # ignore file: services/paywall/agent.Dockerfile.dockerignore. Every file the agent loads at run
 # time must be copied here and kept by that ignore file: scripts/test/agent-docker.test.ts walks agent-jobs.ts's imports.
 #   docker build -f services/paywall/agent.Dockerfile -t chainaim-agent:local .
@@ -24,6 +25,11 @@ COPY packages/agent-policy/src packages/agent-policy/src
 COPY packages/receipt/package.json packages/receipt/package.json
 COPY packages/receipt/src packages/receipt/src
 COPY config/receipt-public-key.pem config/receipt-public-key.pem
+# privateAI-design-33 ARCH-630: the agent verifies ChainAim's signed quote (packages/ap2, Node built-ins only) with the
+# PINNED public JWK Set (not secret; committed; exported by desk.ps1 -Ap2Key). The default --ap2-public-key is this path.
+COPY packages/ap2/package.json packages/ap2/package.json
+COPY packages/ap2/src packages/ap2/src
+COPY config/ap2-public-key.jwk.json config/ap2-public-key.jwk.json
 # /data/spend: the spend ledger (--spend-dir, volume chainaim-agent-spend); owned by node, which runs the service, so an
 # empty named volume takes this owner on first use.
 RUN mkdir -p /data/spend && chown node:node /data/spend

@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 import { createServer, request, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { fileURLToPath } from "node:url";
-import { JobStore, internalHandler, meterOf, paidJobsConfig, FEE_FLAGS } from "../console/jobs.ts";
+import { JobStore, internalHandler, meterOf, paidJobsConfig, priceRoundOf, FEE_FLAGS } from "../console/jobs.ts";
 import type { CrossAskResult } from "../../packages/crossask/src/index.ts";
 
 const RESULT = { question: "q", answer: "a" } as unknown as CrossAskResult;
@@ -85,4 +85,18 @@ test("ARCH-114: off by default; with on, each fee flag and the catalog are requi
   const c = paidJobsConfig(on, { PAID_JOBS_KEY: KEY })!;
   assert.deepEqual([c.internalHost, c.internalPort, c.ttlMs, c.max, c.keyEnv], ["127.0.0.1", 8731, 15 * 60_000, 100, "PAID_JOBS_KEY"]);
   assert.deepEqual(c.prices.get("bedrock/nemotron-nano-3-30b"), { inputPerM: 0.0618, outputPerM: 0.2472 });
+  assert.equal(c.priceRound, "micro");
+});
+
+test("ARCH-629: --price-round micro by default, cent under --ap2 on, micro with --ap2 on refused", () => {
+  const catalog = fileURLToPath(new URL("../../config/catalog.bedrock.json", import.meta.url));
+  const on = { "paid-jobs": "on", "pricing-catalog": catalog, ...Object.fromEntries(FEE_FLAGS.map((f) => [f, "0.001"])) };
+  const env = { PAID_JOBS_KEY: KEY };
+  assert.equal(paidJobsConfig({ ...on, "price-round": "cent" }, env)!.priceRound, "cent");
+  assert.equal(paidJobsConfig({ ...on, "price-round": "micro" }, env)!.priceRound, "micro");
+  assert.equal(priceRoundOf({ ap2: "on" }), "cent");
+  assert.equal(priceRoundOf({ ap2: "off" }), "micro");
+  assert.throws(() => paidJobsConfig({ ...on, "price-round": "dollar" }, env), /--price-round must be micro or cent/);
+  assert.throws(() => priceRoundOf({ ap2: "on", "price-round": "micro" }), /--ap2 on needs --price-round cent/);
+  assert.throws(() => paidJobsConfig({ "price-round": "cent" }, {}), /--price-round needs --paid-jobs on/);
 });

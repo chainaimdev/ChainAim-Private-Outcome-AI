@@ -1286,3 +1286,110 @@ Built in the AI's workspace on a snapshot of the owner's repo (main = e8626e8, v
   written. AI check: keyFromJwk on the file -> kid matches its RFC 7638 thumbprint id. ARCH-627 verified on the PC.
 - Owner desk.ps1 -Test ~18:47Z (after ARCH-627): analyst 234/234, paywall 325/325, "OK all terminal suites passed" (root
   passed; its count and the ARCH-626/627 lines were above the pasted part). ARCH-627 tests verified on the PC.
+- 2026-11-11 18:52Z owner desk.ps1 -Ship -ShipTag v1.5.6: all terminal suites passed; commit 716aafc (13 files, +891 -35);
+  tag v1.5.6 annotated; pushed main d169ee1..716aafc and v1.5.6 to origin.
+
+## design-33 ARCH-629, 628, 630, 631 + section 7 UIs (chat near-ai-impl-8, 2026-11-11 ~19:10-20:30Z) - written and run in the Linux workspace, NOT run on the PC
+- ARCH-629 packages/crossask/src/cost.ts: quoteJob(..., {round: "micro"|"cent"}) (default micro = unchanged; cent rounds the
+  total UP to whole cents, breakdown.beforeCentUsd only then), PRICE_ROUNDS, MICROS_PER_CENT, centsOfAmount. Console
+  jobs.ts paidJobsConfig: priceRound (priceRoundOf: micro, cent under --ap2 on, --ap2 on + micro refused); server.ts --price-round.
+- ARCH-628 new test-console/console/ap2.ts: ap2Config (--ap2 on|off, --ap2-key-env, --ap2-alg ES256 only, --ap2-terms-url
+  required), jobCheckout (UCP 2026-08-25 checkout: ucp, id, status ready_for_complete, USD cents totals, line item, links,
+  expires_at, dev.chainaim.job {network, asset, payTo, amountUnits, usdcDecimals, datasetId?, filesRoot?}),
+  signJobCheckout (packages/ap2), ucpProfile (services {}, checkout + ap2_mandate capabilities, x402.near.exact handler,
+  keys[]). server.ts: answer ap2 {checkout, merchant_authorization} only with --ap2 on (unchanged otherwise), GET
+  /.well-known/ucp (404 when off), HeldJob.ap2, start-up line "ap2 on: signing key id ...". UCP profile entry shapes
+  read from https://ucp.dev/latest/specification/overview/ in this chat (services required even if empty; capability
+  entries version/spec/schema; extension "extends"). console.Dockerfile + ignore: packages/ap2. docker-compose.yml:
+  AP2_SIGNING_KEY by name. up.ps1: -Ap2 on|off (auto off without key), -Ap2KeyName, -Ap2TermsUrl; agent --ap2-verify on.
+- ARCH-630 new services/paywall/scripts/agent-ap2.ts (loadPinnedJwks, checkSignedQuote: pinned key, then job id, USD
+  cents x 10^(dec-2) == amount, amountUnits, network, asset, payTo, expires_at == quote, expiry with --ap2-skew-sec);
+  agent-jobs-core.ts: step quote_signed between quoted and policy, refused {reason, code}; near.ts payAndFetchNear
+  requireOffer (402 offer payee/asset/amount == signed, mandate_scope_mismatch, before signing); agent-jobs.ts
+  --ap2-verify (default off), --ap2-public-key, --ap2-skew-sec. agent.Dockerfile + ignore: packages/ap2 + the JWK file.
+- ARCH-631 packages/receipt: optional body.merchantAuthSha256 (checked hex). Console receipt.ts sets it from HeldJob.ap2,
+  ReceiptStore.putQuote/getQuote (<jobId>.ap2.json); GET /jobs/<id>/receipt adds ap2 when held. agent-ask.ts saves it;
+  agent-ask-core.ts step lines quote_signed and "Not paid [code]"; verify-receipt.ts --ap2-public-key: verifies the
+  signed quote with the pinned AP2 key and binds hash, job and amount to the receipt (exit 1 otherwise).
+- Section 7 private UI: paid-jobs.html agent step "Quote signed by ChainAim ✓ · key id ... · price, payee and network
+  match", refusal code shown; Me path: WebCrypto ECDSA P-256 check with this console's /.well-known/ucp key + binding,
+  Pay disabled until it passes, honest label; receipt panel "quote <8 hex>…", download adds ap2. index.html t3
+  "Show the UCP profile" button.
+- Admin feed: job-feed.ts job_quoted.ap2 {kid, merchantAuthSha256} only with --job-feed-ap2 on (default off: an older
+  near-watch refuses the field); up.ps1 adds --job-feed-receipts=on / --job-feed-ap2=on when the feed and the feature are on.
+- Tests run here (Linux, node 22): packages crossask 54/54, receipt 9/9, ap2 14/14, agent-policy 13/13;
+  test-console/test/*.test.ts 60/60 (incl. new ap2.test.ts 3, job-feed-ap2.test.ts 4 against the REAL near-watch,
+  paid-jobs-receipt.test.ts +5 incl. the page's own WebCrypto check on a real ES256 signature); scripts/test/*.test.ts
+  141 pass, 0 fail, console-paid-jobs.test.ts cancelled here only (lesson 12: no DuckDB binding in this VM; its new
+  ARCH-628 describe has 2 tests); agent-ask.test.ts 13/13; desk.test.ts 26/26; console-docker 13/13; agent-docker 5/5;
+  paywall agent-ap2.test.ts 10/10 (new), agent-receipt 14/14, agent-policy 11/11, paid-jobs 15/15 (agent-jobs.test.ts
+  needs DuckDB here); check-deps OK. A real console start with --ap2 on served /.well-known/ucp.
+- Expected on the PC: root about 653 + 25, paywall 325 + 10, analyst 234.
+- CORRECTION (2026-11-12 ~00:30Z): the workspace runs of test-console/test/job-feed-ap2.test.ts ran only its 2 pure tests; the
+  "REAL near-watch" describe was skipped there (near-watch not located from the Linux mount), so the line above claiming
+  both events were stored against the real near-watch was not verified in the workspace.
+- Owner desk.ps1 -Test ~00:20Z (19:20 local): root 676/677, analyst 234/234, paywall 334/335.
+  Root failure: job-feed-ap2 ARCH-702 expected the stored row's network "near:testnet", near-watch stores its own name
+  "testnet" (watchedNetwork). Test fixed to compare kid and merchantAuthSha256 only (the network check belongs to near-watch's
+  own tests). ARCH-701 against the real near-watch passed on the PC. Paywall failure: payment-sink.test.ts LW2-SINK read the
+  log file before the append reached disk (race, not touched by design-33); test now waits for the file to exist too.
+- Owner desk.ps1 -Test ~00:32Z (19:32 local) after both test fixes: analyst 234/234, paywall 335/335 (LW2-SINK passes),
+  "OK all terminal suites passed" (root exit 0; its count was above the pasted part). design-33 Phase 1 tests verified on the PC.
+- Owner desk.ps1 -All ~00:39Z: ALL OK. Admin UI next build OK (TypeScript OK); ca-near-watch rebuilt with the new src;
+  up.ps1 "OK AP2 signed quotes on: whole-cent quotes signed ES256; key from C:\PRIV-AI-SECRETS\chainaim.env (not printed);
+  the agent verifies them with the pinned key", receipts on, agent t01..t03, attest on; READY table all OK; UI smoke
+  PASS 60 WARN 1 SKIP 5 FAIL 0 (the WARN is a model-worded answer, unrelated). Next: live t01 (AI agent, then Me).
+- Owner check 2026-11-12 ~01:14Z: tab 04 "Show the UCP profile" -> 200, AP2 mandates on, key 83816e6fd32b879fd96d0318a40cd40d
+  with the committed JWK's x/y. Owner found tab 04 Try scan/mask/chat shown as XRPL only although PAY_RAILS=xrpl,near.
+  Cause (code): server.ts /paywall/<route> mapped every offer as RLUSD (NEAR's base units became the "price") and
+  index.html drew every offer with XRPL labels. Fix: relay adds rail, decimal price on both, amountUnits for NEAR;
+  page draws one block per rail (USDC + nearblocks for NEAR). New test-console/test/paywall-try.test.ts (2, real console
+  against a two-rail 402). Workspace: test-console/test 62/62 incl. new; console-agent, console-progress pass.
+
+## design-34 ARCH-634 offer core (chat near-ai-impl-8, 2026-11-12 ~01:35Z) - written and run in the Linux workspace
+- V-P2 (code read): the NEAR delegate's max_block_height comes from the offer's maxTimeoutSeconds = XRPL_MAX_TIMEOUT_SECONDS,
+  default 600 s (paywall config.ts DEFAULT_MAX_TIMEOUT_SECONDS), above the 300 s crossask timeout, so running inside the
+  paid release fits by configuration. Still to confirm: the value the PC's paywall runs with, and Intear's own delegate.
+- packages/crossask cost.ts: quoteJob opts.extras (named USD lines before the margin, breakdown.extras only when given);
+  golden + all crossask tests unchanged (55/55, +1 ARCH-634).
+- NEW packages/offer: OFFER_KINDS scan|mask|chat|crossask, OFFER_MODES estimate-first|run-hold, parseCostModel (every field
+  required, nothing defaulted), checkBasis, worstCase (scan/mask Presidio only, no model call - owner D2; chat whole prompt
+  + max_tokens; crossask 1+retries query calls + answer call), quoteOffer -> quoteJob (cents). 5/5 tests.
+- desk.ps1 -Test/-All/-Ship run packages/offer; desk.test.ts guard (+1 assert) 26/26; check-deps OK.
+- Not visible yet; next ARCH-635 calibration (desk.ps1 -Calibrate -> config/cost-model.json), then ARCH-636..638 + 642.
+
+## design-34 ARCH-635 cost-model calibration (chat near-ai-impl-9, 2026-11-12 ~02:15Z) - written and run in the PC's Linux shell, NOT run on the PC desk
+- packages/crossask index.ts: sentToModel entries carry `bytes` (UTF-8 bytes of exactly what was sent, beside `chars`);
+  module-private utf8Bytes. +1 test (non-ASCII question: bytes = Buffer.byteLength of each sent message). 56/56.
+- console server.ts free POST /crossask: `timings: true` (boolean only) passes the clock, so the reply carries the ARCH-204
+  step timings; without it the reply is as before. Test in scripts/test/console-paid-jobs.test.ts (ARCH-635 describe):
+  needs the analyst's DuckDB, so it runs on the PC only (lesson 12).
+- NEW packages/offer/src/calibrate.ts costModelFrom(samples, opts): units = worst ms per KB/MB seen x compute USD/h, rounded
+  UP to 12 decimals (BigInt, no floats); safetyPct = widest run-to-run spread per group, whole % up (needs 2+ runs);
+  bytesPerChar = max bytes per UTF-16 unit (>= 1); tokensPerByte bound (1, V-P4 checked on every call: refuses when a call
+  used more tokens than bytes) or observed (max ratio up to 4 dp). Throws, naming what is missing; nothing defaulted.
+  packages/offer/test/calibrate.test.ts 5/5 (offer suite 10/10).
+- NEW scripts/calibrate.ts: through the console API: crossask datasets' template questions (template sql NOT sent, so a
+  model writes the query) x --runs with timings: true; analyst = relationsMs + sqlMs over the folder's file bytes
+  (/data/files); one call sample per served call; Presidio /gateway/scan + /gateway/mask on the start of the datasets' own
+  local sample files at --presidio-kb sizes (max 19 KB: gateway MAX_TEXT_CHARS 20,000). Writes config/cost-model.json
+  (+ "observed" block) and test-console/runs/calibrate-<time>.json (sizes, ms, token counts; no data). Any problem = nothing
+  written, exit 1. --compute-usd-per-hour required. scripts/test/calibrate.test.ts 5/5 (console double, child process).
+- desk.ps1 -Calibrate (+ -Calibrate* options): compute price from the switch or COMPUTE_USD_PER_HOUR in
+  config\paid-jobs-prices.conf, else stop; runs on its own; before any start. desk.test.ts guard 27/27. ASCII checked.
+- MANUAL_SETUP "Cost-model calibration". check-deps OK.
+- Linux shell run (this PC's VM, node 22.23): packages + test-console/test 166/166; scripts/test 148 pass, the 26
+  console-paid-jobs tests cancelled (analyst: no @duckdb/node-bindings-linux-x64 here; lesson 12) - PC desk.ps1 -Test proves them.
+- AI choices to confirm (owner): tokensPerByte default bound (= design-32 --tokens-per-byte 1); units are the WORST ratio
+  seen (small inputs dominate; fixed overhead is also in FEE_ANALYST_USD); gateway ms/KB includes provider latency (design-32
+  §3.2 says "from callsMs"); Presidio timed through the console relay (includes the relay: worst case).
+- 2026-11-12 ~02:00Z owner -Calibrate -CalibrateComputeUsdPerHour 0.40: 6/6 crossask runs ok (analyst 539-998 ms over
+  5395 B; calls 1525-2472 + 915-1364 ms), Presidio 1 KB 37-57 ms; nothing written: 4 and 16 KB "skipped" because smb-fin-1's
+  statements hold 2,600 bytes of text (3 small CSVs + a PDF). FIX scripts/calibrate.ts sampleText(..., fill): the files'
+  own text repeated (newline between copies) up to each size, cut on a character boundary; a size is a problem only when
+  there is no text file at all; NOTE line + report presidioKbRepeatedText. calibrate.test.ts 6/6 (+1 test, sampleText fill
+  asserts). Host-side script: no image rebuild.
+- 2026-11-12 ~01:53Z owner -Calibrate -CalibrateComputeUsdPerHour 0.40: WRITTEN config/cost-model.json (23 s). presidio
+  0.000005222223 USD/KB (worst 47 ms/KB, scan 1 KB), analyst 0.013993970714 USD/MB (648 ms over 5395 B), gateway
+  0.000185123580 USD/KB prompt, safety 47 % (Presidio scan 4 KB 152 vs 104 ms), tokensPerByte 1 (observed max 0.3890: V-P4
+  holds for bedrock/nemotron-nano-3-30b), bytesPerChar 1. ARCH-635 VERIFIED on the PC.
