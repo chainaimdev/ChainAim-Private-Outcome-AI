@@ -115,9 +115,40 @@ describe("ARCH-410 judgeCall", () => {
     assert.equal(r.reportFetchedAt, BEFORE);
   });
 
-  it("ARCH-410: the signer must match exactly one attestation", () => {
-    const twice = fetchAt(BEFORE, [judgeAttestation(SIGNER, "ecdsa", passing(), true), judgeAttestation(SIGNER, "ecdsa", passing(), true)]);
-    assert.match(judgeCall(call(), sig(), SIGNER, [twice], OPTS).reason!, /more than one attestation/);
+  // 2026-11-14 attest-rule change (owner decision, option 1): this test said "the signer must match exactly one attestation".
+  // NEAR AI's live report (DeepSeek-V4.1-Flash-1017, 2026-11-13 19:10Z) lists the same signer twice, both verified, so the
+  // rule is now: every matching attestation verified and naming the model. The three cases below replace it.
+  it("ARCH-410: the signer in 2 attestations, both verified (the live report's shape) -> verified, detail says so", () => {
+    const twice = fetchAt(BEFORE, [judgeAttestation(SIGNER, "ecdsa", passing(), true), judgeAttestation(SIGNER, "ecdsa", passing(), true), judgeAttestation(OTHER, "ecdsa", passing(), true)]);
+    const r = judgeCall(call(), sig(), SIGNER, [twice], OPTS);
+    assert.equal(r.status, "verified");
+    assert.equal(r.reason, null);
+    assert.equal(r.detail, "signer in 2 attestations, all verified");
+    assert.deepEqual([r.tdx, r.gpu, r.signature, r.hashes], [true, true, true, true]);
+    assert.equal(judgeCall(call(), sig(), SIGNER, [fetchAt(BEFORE)], OPTS).detail, "signer in 1 attestation, verified");
+  });
+
+  it("ARCH-410: the signer in 2 attestations, one not verified -> unverified, the reason names it and its failed check", () => {
+    const mixed = fetchAt(BEFORE, [judgeAttestation(SIGNER, "ecdsa", passing(), true), judgeAttestation(SIGNER, "ecdsa", passing({ embedsNonce: false }), true)]);
+    const r = judgeCall(call(), sig(), SIGNER, [mixed], OPTS);
+    assert.equal(r.status, "unverified");
+    assert.equal(r.reason, "signer in 2 attestations, 1 not verified: report_data does not hold the request nonce");
+    assert.equal(r.detail, "signer in 2 attestations, 1 not verified");
+    assert.equal(r.tdx, false);
+  });
+
+  it("ARCH-410: the signer in 2 attestations that do not agree on the model -> unverified, naming that", () => {
+    const split = fetchAt(BEFORE, [judgeAttestation(SIGNER, "ecdsa", passing(), true), judgeAttestation(SIGNER, "ecdsa", passing({ modelNameMatches: false }), true)]);
+    const r = judgeCall(call(), sig(), SIGNER, [split], OPTS);
+    assert.equal(r.status, "unverified");
+    assert.match(r.reason!, /^signer in 2 attestations, 1 naming another model: the attestations do not agree on the model$/);
+  });
+
+  it("ARCH-410: the signer in 0 attestations -> unverified (unchanged)", () => {
+    const r = judgeCall(call(), sig(), SIGNER, [fetchAt(BEFORE, [judgeAttestation(OTHER, "ecdsa", passing(), true), judgeAttestation(OTHER, "ecdsa", passing(), true)])], OPTS);
+    assert.equal(r.status, "unverified");
+    assert.match(r.reason!, /signer is not in the report that arrived before the call/);
+    assert.equal(r.detail, null);
   });
 
   it("ARCH-410: the signer's attestation failing makes the call unverified with its reasons", () => {
@@ -161,7 +192,9 @@ describe("ARCH-410 judgeCall", () => {
 
   it("ARCH-410 / ARCH-412 + fix 4: a result carries ids, addresses, booleans, reasons and well-formed signature evidence only", () => {
     const r = judgeCall(call(), sig(), SIGNER, [fetchAt(BEFORE)], OPTS);
-    assert.deepEqual(Object.keys(r).sort(), ["chatId", "gpu", "hashes", "reason", "reportFetchedAt", "servedModel", "signature", "signatureHex", "signatureKind", "signedText", "signingAddress", "signingAlgo", "status", "tdx"]);
+    // detail (2026-11-14 attest-rule change): how many attestations the signer matched, in a fixed form built from counts only.
+    assert.deepEqual(Object.keys(r).sort(), ["chatId", "detail", "gpu", "hashes", "reason", "reportFetchedAt", "servedModel", "signature", "signatureHex", "signatureKind", "signedText", "signingAddress", "signingAlgo", "status", "tdx"]);
+    assert.match(r.detail!, /^signer in \d+ attestations?, (verified|all verified|not verified|\d+ not verified|\d+ naming another model)$/);
     assert.equal(r.signatureHex, null, "a malformed signature (0xsig) is never echoed");
     assert.ok(!JSON.stringify(r).includes("0xsig"));
     assert.equal(r.signedText, `${MODEL}:${REQ}:${RESP}`, "the signed text is a model id and two hashes");

@@ -9,6 +9,7 @@
  *   GET  /v1/models             chainaim/auto and the current free pool
  *   GET  /internal/capacity     whether chat can be served now (the paywall's guard)
  *   GET  /v1/deployments        per-deployment health
+ *   GET  /internal/egress/<sha256>  --expose-egress on: the exact bytes a recent chat call sent (privateAI-design-41 ARCH-699)
  *   GET  /healthz               200 when Presidio answered its last check (no auth)
  */
 import { randomUUID, timingSafeEqual } from "node:crypto";
@@ -36,7 +37,21 @@ export type ServerOptions = {
    * counts only, never a value or placeholder. The paywall drops both before answering a public caller (ARCH-203).
    */
   exposeEntityCounts?: boolean;
+  /**
+   * --expose-egress (privateAI-design-41 ARCH-695; default off): chat replies carry x-chainaim-egress, compact JSON of the
+   * served call's egress (chat.ts Egress: destination host, zone, sentSha256, sentBytes, masked kind -> count, residual,
+   * dataClass). Hashes, counts and a host only; the paywall strips it (ARCH-696). The flag itself lives in deps.chat.
+   */
+  exposeEgress?: boolean;
+  /**
+   * --egress-keep N (ARCH-699; default 64): with --expose-egress on, the bytes of the last N calls are kept in memory only
+   * (never logged, never on disk), so the owner's console can fetch them by hash for "download what was sent".
+   */
+  egressKeep?: number;
 };
+
+/** privateAI-design-41 ARCH-695: the egress header; the paywall strips it before answering a public caller (ARCH-696). */
+export const EGRESS_HEADER = "x-chainaim-egress";
 
 /** The two masking headers of --expose-entity-counts (ARCH-202); the paywall strips exactly these (ARCH-203). */
 export const ENTITY_COUNTS_HEADER = "x-chainaim-entity-counts";
@@ -92,6 +107,13 @@ function authorized(req: IncomingMessage, key: string | undefined): boolean {
 
 export function createGateway(deps: GatewayDeps, opts: ServerOptions): Server {
   const { presidio, ledger } = deps;
+  // privateAI-design-41 ARCH-699: sentSha256 -> the exact bytes sent, the newest egressKeep; memory only.
+  const sentKept = new Map<string, Uint8Array>();
+  const keepSent = (sha: string, bytes: Uint8Array) => {
+    sentKept.delete(sha);
+    sentKept.set(sha, bytes);
+    while (sentKept.size > (opts.egressKeep ?? 64)) sentKept.delete(sentKept.keys().next().value!);
+  };
 
   /** scan and mask (spec section 4): detect, classify, and for mask replace. */
   async function privacy(kind: "scan" | "mask", req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -171,6 +193,10 @@ export function createGateway(deps: GatewayDeps, opts: ServerOptions): Server {
       headers[REQ_SHA256_HEADER] = attest.requestSha256;
       headers[RESP_SHA256_HEADER] = attest.responseSha256;
     }
+    if (opts.exposeEgress && result.record.egress) {
+      headers[EGRESS_HEADER] = JSON.stringify(result.record.egress);
+      if (result.sent) keepSent(result.record.egress.sentSha256, result.sent);
+    }
     if (opts.exposeEntityCounts) {
       headers[ENTITY_COUNTS_HEADER] = JSON.stringify(result.record.entityCounts ?? {});
       // A served reply passed the residual check; with --residual-guard off there was no check, so no header.
@@ -219,6 +245,15 @@ export function createGateway(deps: GatewayDeps, opts: ServerOptions): Server {
       else if (route === "GET /v1/models") sendJson(res, 200, models());
       else if (route === "GET /internal/capacity") sendJson(res, 200, deps.quota.capacity(deps.source.ready()));
       else if (route === "GET /v1/deployments") sendJson(res, 200, { unavailableModels: deps.pool.unavailableModels(), deployments: deps.pool.status() });
+      else if (opts.exposeEgress && req.method === "GET" && /^\/internal\/egress\/[0-9a-f]{64}$/.test(url.pathname)) {
+        // ARCH-699: the bytes exactly as sent (gateway key required, as every route above; the paywall never proxies it).
+        const bytes = sentKept.get(url.pathname.slice("/internal/egress/".length));
+        if (!bytes) sendError(res, 404, "no kept bytes for this hash (older than --egress-keep, or the gateway restarted)");
+        else {
+          res.writeHead(200, { "content-type": "application/json", "content-length": bytes.length, "cache-control": "no-store" });
+          res.end(bytes);
+        }
+      }
       else sendError(res, 404, `no route for ${route}`);
     } catch (e) {
       if (e instanceof HttpError) sendError(res, e.status, e.message, e.headers);

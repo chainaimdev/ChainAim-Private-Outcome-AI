@@ -198,6 +198,16 @@ const paidHow = s ? ` (${[...(s.flow ? [s.flow] : []), `tx ${s.transaction.slice
 const trail = e
   ? `paid ${b.price.priceUsd} USDC${paidHow} · NEAR AI cost ${e.nearAiCostUsd} · gas ${e.nearGasUsd} · cost ${e.costUsd} · margin ${e.marginUsd} · overrun absorbed ${e.overrunAbsorbedUsd} (costs at ChainAim's catalog prices)`
   : undefined;
+// privateAI-design-41 ARCH-698: what left the PC, per call (checkBody already held egress to the calls; checked again here
+// so the line below can say so): the host, zone, masked counts and the sent-bytes hash, = the attested request hash.
+const maskedText = (m: Record<string, number>) => Object.entries(m).filter(([, n]) => n > 0).map(([k, n]) => `${k}×${n}`).join(" ") || "nothing to mask";
+const egressLines = (b.egress ?? []).map((e) => `${e.call + 1} → ${e.destination} (${e.zone}) · masked ${maskedText(e.masked)} · ${e.sentBytes} bytes sha256 ${e.sentSha256.slice(0, 12)}…${b.calls[e.call]?.reqSha256 ? " · = attested request hash" : ""}`);
+if (b.egress) {
+  for (const e of b.egress) {
+    const req = b.calls[e.call]?.reqSha256;
+    if (req !== undefined && req !== e.sentSha256) { say("FAIL", `egress: call ${e.call + 1}'s sent-bytes hash is NOT the attested request hash`); process.exit(1); }
+  }
+}
 const lines: [string, string][] = [
   ["receipt", `${b.receiptId} (v${b.v}, made ${b.createdAt})`],
   ["job", `${b.jobId} · quote ${b.quoteId}${b.counterOf ? ` · counter of ${b.counterOf}` : ""}`],
@@ -213,6 +223,7 @@ const lines: [string, string][] = [
   ["price", `${b.price.priceUsd} USD = ${b.price.amountUnits} units (${b.price.usdcDecimals} decimals)${b.price.actualUsd ? ` · metered ${b.price.actualUsd}` : ""}`],
   ...(e ? [["economics", `NEAR AI ${e.nearAiCostUsd} + gas ${e.nearGasUsd} = cost ${e.costUsd} · call fees ${e.callFeesUsd} · analyst ${e.analystUsd} · margin ${e.marginUsd} · overrun absorbed ${e.overrunAbsorbedUsd} · basis ${e.costBasis}`] as [string, string]] : []),
   ...(bundleLine ? [["evidence", bundleLine] as [string, string]] : []),
+  ...(egressLines.length ? [["egress", egressLines.join(" · ")] as [string, string]] : []),
   ["settled", s ? `${s.network} transaction ${s.transaction} · invoice ${s.invoiceId}${s.payer ? ` · payer ${s.payer}` : ""}${s.flow ? ` · flow ${s.flow}` : ""} · ${s.settledAt}` : "no settlement attached (signed before settlement)"],
 ];
 for (const [k, val] of lines) process.stdout.write(`        ${k.padEnd(10)} ${val}\n`);
@@ -220,4 +231,11 @@ if (s && /^near:(testnet|mainnet)$/.test(s.network)) process.stdout.write(`     
 say("OK", `receipt valid: signed by the pinned key ${pinnedId!}${v.settled ? ", settlement signed too" : ""}${result === undefined ? "" : ", result matches"}${quoteOk ? ", signed quote matches" : ""}${mandateOk ? ", checkout mandate matches" : ""}${quoteOk ? limitsNote : ""}`);
 say("OK", trail ? `money trail: ${trail}` : "no money trail (before v2.1.0)");
 if (bundleLine && raw && typeof raw === "object" && raw.attestation !== undefined) say("OK", `attestation bundle ${bundleLine}`);
+if (b.egress) {
+  const attested = b.egress.filter((e) => b.calls[e.call]?.reqSha256 !== undefined).length;
+  const where = [...new Set(b.egress.map((e) => `${e.destination} (${e.zone})`))].join(", ");
+  const masked: Record<string, number> = {};
+  for (const e of b.egress) for (const [k, n] of Object.entries(e.masked)) masked[k] = (masked[k] ?? 0) + n;
+  say("OK", `egress: ${b.egress.length} call${b.egress.length === 1 ? "" : "s"} left the PC → ${where}, masked ${maskedText(masked)}${attested ? `, sent-bytes hash = the attested request hash on ${attested}/${attested} NEAR AI call${attested === 1 ? "" : "s"}` : ""}`);
+}
 process.exit(0);

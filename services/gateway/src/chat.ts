@@ -4,7 +4,7 @@
  * leaves: messages are rebuilt field by field, and only the fields in
  * PASSTHROUGH are copied from the request.
  */
-import { attemptChat, type AttestEvidence, type ModelAttempt } from "./dispatch.ts";
+import { attemptChat, type AttestEvidence, type ModelAttempt, type SentEvidence } from "./dispatch.ts";
 import { HttpError } from "./errors.ts";
 import { REQUEST_FAULTS, shapeBody } from "./openrouter.ts";
 import type { Pool } from "./pool.ts";
@@ -44,7 +44,16 @@ export type ChatOptions = {
   autoZones?: readonly string[];
   /** Zones that may receive health data, PHI (--phi-zones); unset = every zone. Applies to named and automatic models. */
   phiZones?: readonly string[];
+  /** privateAI-design-41 ARCH-695 (--expose-egress): hash the exact bytes every call sends and record its egress; default off. */
+  exposeEgress?: boolean;
 };
+
+/**
+ * privateAI-design-41 ARCH-695: what left for one served chat call, never content: the destination host, the zone, the
+ * SHA-256 and length of the exact bytes sent, the entity kinds masked in them with counts, the residual check (pass, or off
+ * with --residual-guard off; a refused request is never sent) and the data class.
+ */
+export type Egress = { v: 1; destination: string; zone: string; sentSha256: string; sentBytes: number; masked: Record<string, number>; residual: "pass" | "off"; dataClass: string };
 export type ChatDeps = {
   presidio: PresidioClient;
   pool: Pool;
@@ -84,10 +93,12 @@ export type ChatRecord = {
   residual?: ResidualHit[];
   /** The served attempt's provider attestation evidence (ARCH-408): chat id, served model and byte hashes, never text. */
   attest?: AttestEvidence;
+  /** privateAI-design-41 ARCH-695: what left for the served call (only with --expose-egress on). */
+  egress?: Egress;
 };
 
 export type ChatResult =
-  | { ok: true; completion: Record<string, unknown>; stream: boolean; record: ChatRecord }
+  | { ok: true; completion: Record<string, unknown>; stream: boolean; record: ChatRecord; /** ARCH-699: the exact bytes sent (--expose-egress on); never logged. */ sent?: Uint8Array }
   | { ok: false; status: number; message: string; retryAfterSec?: number; record: ChatRecord };
 
 export type Validated = {
@@ -313,7 +324,7 @@ async function decide(p: Prepared, deps: ChatDeps, record: ChatRecord): Promise<
   return { classes, chain };
 }
 
-type ChainOutcome = { ok: true; model: string; completion: Record<string, unknown> } | { ok: false; status: number; message: string; retryAfterSec?: number };
+type ChainOutcome = { ok: true; model: string; completion: Record<string, unknown>; sent?: SentEvidence } | { ok: false; status: number; message: string; retryAfterSec?: number };
 
 /** Step 7 (spec section 7): every attempt counts against the quota; account limits and a rejected key stop the chain. */
 async function callChain(d: Decision, p: Prepared, deps: ChatDeps, signal: AbortSignal, record: ChatRecord): Promise<ChainOutcome> {
@@ -331,12 +342,14 @@ async function callChain(d: Decision, p: Prepared, deps: ChatDeps, signal: Abort
       const cap = deps.quota.capacity(true);
       return { ok: false, status: 503, message: `free-model capacity is used up right now (${cap.reason ?? "rate_limited"}); you were not charged`, retryAfterSec: cap.retryAfterSec };
     }
-    const r = await attemptChat(model, body, dataCollection, deps.pool, deps.chat.attemptTimeoutMs, signal);
+    const r = deps.chat.exposeEgress
+      ? await attemptChat(model, body, dataCollection, deps.pool, deps.chat.attemptTimeoutMs, signal, true)
+      : await attemptChat(model, body, dataCollection, deps.pool, deps.chat.attemptTimeoutMs, signal);
     attempts.push(r.attempt);
     switch (r.attempt.outcome) {
       case "ok":
         if (r.attest) record.attest = r.attest;
-        return { ok: true, model, completion: r.completion! };
+        return { ok: true, model, completion: r.completion!, ...(r.sent ? { sent: r.sent } : {}) };
       case "client_abort":
         return { ok: false, ...CLIENT_CLOSED };
       case "rate_limited_account":
@@ -386,6 +399,7 @@ export async function runChat(body: unknown, deps: ChatDeps, signal: AbortSignal
   record.served = outcome.model;
   const servedModel = deps.source.models().find((m) => m.id === outcome.model);
   if (servedModel) record.zone = zoneOf(servedModel);
+  if (outcome.sent) record.egress = egressOf(outcome.sent, record, deps);
   record.restored = v.restore;
   if (v.restore) {
     const stats: { unresolved: number; lenient?: number } = { unresolved: 0 };
@@ -393,7 +407,7 @@ export async function runChat(body: unknown, deps: ChatDeps, signal: AbortSignal
     record.unresolvedPlaceholders = stats.unresolved;
     if (stats.lenient) record.lenientRestores = stats.lenient;
   }
-  return { ok: true, completion: outcome.completion, stream: v.stream, record };
+  return { ok: true, completion: outcome.completion, stream: v.stream, record, ...(outcome.sent ? { sent: outcome.sent.bytes } : {}) };
 }
 
 /** The decision for a chat request without calling a chat model (Jev is called). It holds no text. */
@@ -427,6 +441,14 @@ export function toSse(completion: Record<string, unknown>): string {
     ...(completion.usage ? { usage: completion.usage } : {}),
   };
   return `data: ${JSON.stringify(chunk)}\n\ndata: [DONE]\n\n`;
+}
+
+/** privateAI-design-41 ARCH-695: the served call's egress, from what was sent and what the record already says. */
+function egressOf(sent: SentEvidence, record: ChatRecord, deps: ChatDeps): Egress {
+  return {
+    v: 1, destination: sent.destination, zone: record.zone ?? zoneOf({}), sentSha256: sent.sentSha256, sentBytes: sent.sentBytes,
+    masked: { ...(record.entityCounts ?? {}) }, residual: (deps.chat.residual ?? DEFAULT_RESIDUAL).enabled ? "pass" : "off", dataClass: record.dataClass ?? "none",
+  };
 }
 
 /** A model's zone: the catalog's, or public-api for an OpenRouter free-pool model (which has none). */

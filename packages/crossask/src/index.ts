@@ -14,6 +14,7 @@
  * Pure: the analyst and the model are passed in, so the console (server.ts, /crossask) and the terminal
  * (scripts/ask.ts) run the same steps, and the tests run them without a network.
  */
+import { createHash } from "node:crypto";
 import { verifyAnswer, type MoneyVerifyResult } from "./verify.ts";
 import { deriveFigure } from "./derive.ts";
 
@@ -33,7 +34,49 @@ export type ChatReply = {
   entityCounts?: Record<string, number>; residual?: "pass" | "refused";
   /** NEAR AI attestation evidence (PLAN-private-ai-nearai-attestation.md ARCH-411), from the gateway's ARCH-408 headers; absent otherwise. */
   attest?: AttestEvidence;
+  /** privateAI-design-41 ARCH-697: what left for this call (the gateway's x-chainaim-egress, --expose-egress on); hashes, counts, a host. */
+  egress?: EgressEntry;
+  /** ARCH-697: why a present x-chainaim-egress header was not taken (unknown member, bad value); the console logs it. */
+  egressRefused?: string;
 };
+
+/**
+ * privateAI-design-41 ARCH-697: one call's egress as the gateway reports it: the destination host (of the deployment's
+ * baseUrl, optional :port), the catalog zone, SHA-256 and length of the exact bytes sent, entity kind -> count masked in
+ * them, the residual check (pass, or off when the gateway runs without it) and the data class. Never content.
+ */
+export type EgressEntry = { destination: string; zone: string; sentSha256: string; sentBytes: number; masked: Record<string, number>; residual: "pass" | "off"; dataClass: "PHI" | "PCI" | "PII" | "none" };
+export const EGRESS_FIELDS = ["v", "destination", "zone", "sentSha256", "sentBytes", "masked", "residual", "dataClass"] as const;
+export const EGRESS_HOST = /^[a-z0-9.-]{1,253}(:\d{1,5})?$/;
+export const EGRESS_KIND = /^[A-Z_]{1,40}$/;
+/**
+ * ARCH-697: the x-chainaim-egress header, member by member (an allowlist: an unknown member, a missing one or a bad value
+ * is refused by name, and the call then has no egress entry). Absent header: { }.
+ */
+export function parseEgressHeader(header: string | null): { egress?: EgressEntry; refused?: string } {
+  if (header === null) return {};
+  if (header.length > 2048) return { refused: "the header is longer than 2048 characters" };
+  let v: unknown;
+  try { v = JSON.parse(header); } catch { return { refused: "the header is not JSON" }; }
+  if (typeof v !== "object" || v === null || Array.isArray(v)) return { refused: "the header is not a JSON object" };
+  const o = v as Record<string, unknown>;
+  for (const k of Object.keys(o)) if (!(EGRESS_FIELDS as readonly string[]).includes(k)) return { refused: `unknown member ${k.slice(0, 40)}` };
+  for (const k of EGRESS_FIELDS) if (!(k in o)) return { refused: `member ${k} is missing` };
+  if (o.v !== 1) return { refused: "v must be 1" };
+  if (typeof o.destination !== "string" || !EGRESS_HOST.test(o.destination)) return { refused: "destination must be a host name" };
+  if (typeof o.zone !== "string" || !/^[a-z][a-z-]{0,39}$/.test(o.zone)) return { refused: "zone must be a zone name" };
+  if (typeof o.sentSha256 !== "string" || !SHA256_HEX.test(o.sentSha256)) return { refused: "sentSha256 must be 64 lowercase hex characters" };
+  if (typeof o.sentBytes !== "number" || !Number.isSafeInteger(o.sentBytes) || o.sentBytes < 0) return { refused: "sentBytes must be a whole number >= 0" };
+  if (typeof o.masked !== "object" || o.masked === null || Array.isArray(o.masked)) return { refused: "masked must be an object of kind -> count" };
+  const masked: Record<string, number> = {};
+  for (const [k, n] of Object.entries(o.masked as Record<string, unknown>)) {
+    if (!EGRESS_KIND.test(k) || typeof n !== "number" || !Number.isSafeInteger(n) || n < 0) return { refused: "masked must map entity kinds to whole numbers >= 0" };
+    masked[k] = n;
+  }
+  if (o.residual !== "pass" && o.residual !== "off") return { refused: "residual must be pass or off" };
+  if (o.dataClass !== "PHI" && o.dataClass !== "PCI" && o.dataClass !== "PII" && o.dataClass !== "none") return { refused: "dataClass must be PHI, PCI, PII or none" };
+  return { egress: { destination: o.destination, zone: o.zone, sentSha256: o.sentSha256, sentBytes: o.sentBytes, masked, residual: o.residual, dataClass: o.dataClass } };
+}
 /**
  * What the console hands ca-attest for one call (ARCH-411): the provider's chat id (absent when the gateway had none), the
  * served model id, SHA-256 of the exact request and response bytes, and calledAt = the time just BEFORE this client sent the
@@ -438,7 +481,12 @@ export function analystClient(url: string, timeoutMs: number): (route: string, b
 
 /** One chat completion through the gateway (it masks, routes by zone and restores); the served model and zone come from its x-chainaim-* headers. */
 /** maxTokens (optional) caps the answer; omitted from the request when unset, so callers without it send exactly what they sent before. */
-export function gatewayChat(opts: { url: string; key: string; timeoutMs: number; maxTokens?: number }): CrossAskDeps["chat"] {
+/**
+ * onSent (privateAI-design-41 ARCH-699): when given and the reply carries an egress entry, the exact bytes sent are fetched
+ * from the gateway (GET /internal/egress/<sentSha256>, gateway key) and handed over only when their SHA-256 matches; for the
+ * owner's "download what was sent" on this PC. A failed fetch only leaves them out.
+ */
+export function gatewayChat(opts: { url: string; key: string; timeoutMs: number; maxTokens?: number; onSent?: (sentSha256: string, bytes: Uint8Array) => void }): CrossAskDeps["chat"] {
   const base = opts.url.replace(/\/+$/, "");
   return async (messages, model) => {
     let r: Response;
@@ -462,8 +510,29 @@ export function gatewayChat(opts: { url: string; key: string; timeoutMs: number;
     // ARCH-411: only for a deployment the gateway attests (NEAR AI); every other reply is exactly as before.
     const attest = parseAttestHeaders((n) => r.headers.get(n), calledAt);
     if (attest) reply.attest = attest;
+    // privateAI-design-41 ARCH-697: only when the gateway sent it (--expose-egress on); a refused header leaves no entry.
+    const eg = parseEgressHeader(r.headers.get("x-chainaim-egress"));
+    if (eg.egress) reply.egress = eg.egress;
+    if (eg.refused) reply.egressRefused = eg.refused;
+    if (eg.egress && opts.onSent) await fetchSent(base, opts.key, eg.egress.sentSha256, opts.timeoutMs, opts.onSent);
     return reply;
   };
+}
+
+/** ARCH-699: the kept bytes of one call, checked against their hash; nothing on a failure (the download is then absent). */
+async function fetchSent(base: string, key: string, sha: string, timeoutMs: number, onSent: (sentSha256: string, bytes: Uint8Array) => void): Promise<void> {
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), timeoutMs);
+  try {
+    const r = await fetch(`${base}/internal/egress/${sha}`, { headers: { authorization: `Bearer ${key}` }, signal: ac.signal });
+    if (!r.ok) { await r.body?.cancel(); return; }
+    const bytes = new Uint8Array(await r.arrayBuffer());
+    if (createHash("sha256").update(bytes).digest("hex") === sha) onSent(sha, bytes);
+  } catch {
+    return;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 // ---- reconcile explanation (Phase 4b-3): code reconciles, the model explains, the analyst checks every figure ----------

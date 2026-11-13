@@ -183,6 +183,7 @@ import { microsToUsd, quoteJob, USDC_DECIMALS } from "../../packages/crossask/sr
 import { JobStore, internalHandler, meterOf, paidJobsConfig, registerJob, type RunNotice } from "./jobs.ts";
 import { JobFeed, jobFeedConfig } from "./job-feed.ts";
 import { AttestClient, attestConfig, payOnlyAttestedConfig, privacyProven } from "./attest.ts";
+import { egressRefusedLines, SentStore, sentOf } from "./egress.ts";
 import { calledModels, datasetFiles, datasetIdOf, receiptConfig, receiptConfigRemote, receiptOnRelease, ReceiptStore, routeOf, templateLabelOf } from "./receipt.ts";
 import type { HeldJob, ReceiptHold } from "./jobs.ts";
 import { ap2Answer, ap2Config, ap2ConfigRemote, JOB_EXTENSION, ucpProfile, type Ap2Hold } from "./ap2.ts";
@@ -363,6 +364,8 @@ const PAY_ONLY_ATTESTED = MODE === "ui" ? undefined : payOnlyAttestedConfig(flag
 /** ARCH-687: the 422 body of a job whose privacy was not proven (verified mode); the paywall then delivers nothing. */
 const notProven = (summary: string, nothingPaid: boolean) => ({ error: `privacy was not proven for this job (NEAR AI attestation: ${summary})${nothingPaid ? ", so nothing can be paid" : ""}`, code: "attestation_not_proven", summary });
 const JOBS = PAID_JOBS ? new JobStore(PAID_JOBS.max, PAID_JOBS.ttlMs, Date.now, JOB_FEED ? (j) => JOB_FEED.expired(j.jobId) : undefined) : undefined;
+/** privateAI-design-41 ARCH-699: the exact bytes each held paid job's model calls sent, memory only, for the run's owner. */
+const SENT = PAID_JOBS ? new SentStore(PAID_JOBS.max) : undefined;
 /**
  * privateAI-design-36 ARCH-663: --signer local (default) signs in this process with the keys of --ap2-key-env and
  * --receipt-key-env; --signer remote leaves every ChainAim key in ca-control-signer, whose PUBLIC keys are read here once
@@ -443,9 +446,11 @@ async function runOffer(jobId: string, notice?: RunNotice): Promise<{ status: nu
   // Every limit of the run from the signed limits when there are some (equal to the held basis, checked above).
   const r = o.request, bs = limits ?? o.basis;
   let out;
+  // ARCH-699: the bytes each call sent, by their egress hash (only when the gateway runs with --expose-egress on).
+  const sentBySha = new Map<string, Uint8Array>();
   try {
     out = await crossAsk({ folder: r.folder, question: r.question, model: limits?.model ?? r.model, answerModel: limits?.answerModel ?? r.answerModel, phrase: bs.phrase, sqlRetries: bs.sqlRetries, answerMaxRows: bs.answerMaxRows, maxPromptChars: bs.maxPromptChars, answerMaxPromptChars: bs.answerMaxPromptChars, retryErrorMaxChars: CROSSASK_ERROR_CHARS, sql: r.sql, checkSmallNumbers: CHECK_SMALL },
-      { analyst: analystClient(ANALYST, CROSSASK_TIMEOUT_MS), chat: gatewayChat({ url: GATEWAY, key: KEY, timeoutMs: CROSSASK_TIMEOUT_MS, maxTokens: bs.maxTokens }), ...(JOB_FEED ? { clock: () => performance.now() } : {}) });
+      { analyst: analystClient(ANALYST, CROSSASK_TIMEOUT_MS), chat: gatewayChat({ url: GATEWAY, key: KEY, timeoutMs: CROSSASK_TIMEOUT_MS, maxTokens: bs.maxTokens, onSent: (sha, bytes) => sentBySha.set(sha, bytes) }), ...(JOB_FEED ? { clock: () => performance.now() } : {}) });
   } catch (e) { return { status: 422, body: { error: `the job did not run: ${(e as Error).message}` } }; }
   if (out.error || !out.result) return { status: 422, body: { error: "the job did not produce a result (run it unpaid to see why)" } };
   if (limits) {
@@ -496,6 +501,8 @@ async function runOffer(jobId: string, notice?: RunNotice): Promise<{ status: nu
   }
   const { timings: _timings, ...result } = out;
   // Held a little past the offer's expiry, so a settlement that lands near it still finds the job to release.
+  for (const line of egressRefusedLines("offer", jobId, out.served)) console.log(line);
+  SENT?.hold(jobId, sentOf(out.served, sentBySha), Math.max(o.expiresAt, Date.now() + 120_000));
   JOBS.hold({ jobId, result, amount: o.amount, breakdown: o.quote.breakdown, expiresAt: Math.max(o.expiresAt, Date.now() + 120_000), ...(receiptHold ? { receipt: receiptHold } : {}), ...(o.ap2 ? { ap2: o.ap2 } : {}), ...(mandate ? { mandate } : {}) });
   OFFERS!.drop(jobId);
   // The feed: each step at its metered cost; the total is the estimate the buyer paid (near-watch reconciles on it).
@@ -1046,6 +1053,17 @@ createServer(async (req, res) => {
     }
     // ARCH-650: what anyone reading NEAR learns about this job, from public RPC (no key; only the transaction hash and
     // the payer account, both already public, are sent).
+    // privateAI-design-41 ARCH-699: "download what was sent": the exact bytes one model call of a held paid job sent, for the
+    // run's owner on this PC (127.0.0.1 only); never logged, never sent to the paywall or the signer.
+    if (PAID_JOBS && SENT && api === "jobs" && req.method === "GET" && /^\/jobs\/[0-9a-f]{32}\/egress\/\d{1,2}$/.test(url.pathname)) {
+      if (!hostOk(req)) return dataJson(res, 403, { error: `open the console as http://127.0.0.1:${PORT}` });
+      const [, , jobId, , call] = url.pathname.split("/");
+      const bytes = SENT.get(jobId, Number(call));
+      if (!bytes) return dataJson(res, 404, { error: "nothing kept for this call: the job expired, the gateway runs without --expose-egress, or the bytes could not be fetched" });
+      res.writeHead(200, { "content-type": "application/json", "content-length": bytes.length, "cache-control": "no-store", "content-disposition": `attachment; filename="chainaim-sent-${jobId}-${call}.json"` });
+      res.end(bytes);
+      return;
+    }
     if (PAID_JOBS && api === "jobs" && req.method === "GET" && /^\/jobs\/[0-9a-f]{32}\/observer$/.test(url.pathname)) {
       if (!hostOk(req)) return dataJson(res, 403, { error: `open the console as http://127.0.0.1:${PORT}` });
       if (!RECEIPTS || !OBSERVER) return dataJson(res, 404, { error: "the observer view is off: it needs --receipts on and --observer on" });
@@ -1053,7 +1071,9 @@ createServer(async (req, res) => {
       if (!receipt) return dataJson(res, 404, { error: "no receipt for this job: it is made once the job is paid and released" });
       if (!receipt.settlement) return dataJson(res, 409, { error: "the settlement is not attached to the receipt yet" });
       try {
-        return dataJson(res, 200, await observe(receipt.settlement, OBSERVER));
+        // privateAI-design-41 ARCH-699: what left the PC, as counts and hashes only (no host or zone in this view).
+        const egress = receipt.body.egress?.map((e) => ({ call: e.call, sentSha256: e.sentSha256, sentBytes: e.sentBytes, masked: e.masked }));
+        return dataJson(res, 200, { ...(await observe(receipt.settlement, OBSERVER)), ...(egress ? { egress } : {}) });
       } catch (e) {
         const status = e instanceof ObserverError ? e.status : 502;
         return dataJson(res, status, { error: (e as Error).message });
@@ -1126,9 +1146,10 @@ createServer(async (req, res) => {
       if (answerModel && !/^[\w.-]+\/[\w.:-]+$/.test(answerModel)) return dataJson(res, 400, { error: `answerModel must look like provider/name, got ${answerModel}` });
       if (JOBS.full()) return dataJson(res, 503, { error: `${PAID_JOBS.max} paid jobs are open (--job-max); pay or let one expire first` });
       let out;
+      const sentBySha = new Map<string, Uint8Array>(); // ARCH-699, as in runOffer
       try {
         out = await crossAsk({ folder: b.folder, question: b.question, model, answerModel, phrase, sqlRetries: CROSSASK_RETRIES, answerMaxRows: CROSSASK_ROWS, maxPromptChars: CROSSASK_MAX_PROMPT, answerMaxPromptChars: CROSSASK_ANSWER_MAX_PROMPT, retryErrorMaxChars: CROSSASK_ERROR_CHARS, sql: typeof b.sql === "string" && b.sql.trim() ? b.sql : undefined, checkSmallNumbers: CHECK_SMALL },
-          { analyst: analystClient(ANALYST, CROSSASK_TIMEOUT_MS), chat: gatewayChat({ url: GATEWAY, key: KEY, timeoutMs: CROSSASK_TIMEOUT_MS }), ...(JOB_FEED ? { clock: () => performance.now() } : {}) });
+          { analyst: analystClient(ANALYST, CROSSASK_TIMEOUT_MS), chat: gatewayChat({ url: GATEWAY, key: KEY, timeoutMs: CROSSASK_TIMEOUT_MS, onSent: (sha, bytes) => sentBySha.set(sha, bytes) }), ...(JOB_FEED ? { clock: () => performance.now() } : {}) });
       } catch (e) {
         return dataJson(res, 502, { error: `the job did not run, so nothing can be paid: ${(e as Error).message}` });
       }
@@ -1190,6 +1211,8 @@ createServer(async (req, res) => {
           return dataJson(res, signFailStatus(e), { error: `the quote could not be signed, so nothing can be paid: ${(e as Error).message}` });
         }
       }
+      for (const line of egressRefusedLines("paid-job", jobId, out.served)) console.log(line);
+      SENT?.hold(jobId, sentOf(out.served, sentBySha), expiresAt);
       JOBS.hold({ jobId, result, amount: quote.amount, breakdown: quote.breakdown, expiresAt, ...(receiptHold ? { receipt: receiptHold } : {}), ...(ap2Hold ? { ap2: ap2Hold } : {}) });
       JOB_FEED?.quoted({ jobId, network: offer.network, expiresAt, out, quote, ...(ap2Hold ? { ap2: { kid: ap2Hold.kid, merchantAuthSha256: ap2Hold.merchantAuthSha256 } } : {}) });
       // ARCH-411: in the background; the quote below is returned without waiting for it. ARCH-687: in verified mode the

@@ -26,6 +26,7 @@ import {
   signerFromEnv,
   signReceipt,
   type ReceiptCall,
+  type ReceiptEgress,
   type ReceiptEconomics,
   type ReceiptFile,
   type ReceiptMandate,
@@ -117,6 +118,16 @@ export function receiptCalls(served: readonly ChatReply[], statusOf: (index: num
   });
 }
 
+/**
+ * privateAI-design-41 ARCH-697: the receipt's egress, one entry per call in run order, from each reply's egress (the
+ * gateway's x-chainaim-egress). Only when EVERY call has one (checkBody wants one per call): a gateway without
+ * --expose-egress, or a refused header on any call, gives no egress member (the job log names a refused header).
+ */
+export function receiptEgress(served: readonly ChatReply[]): ReceiptEgress[] | undefined {
+  if (served.length === 0 || served.some((s) => s.egress === undefined)) return undefined;
+  return served.map((s, i): ReceiptEgress => ({ call: i, ...s.egress! }));
+}
+
 export type ReceiptInput = {
   jobId: string;
   quoteId: string;
@@ -172,6 +183,7 @@ export async function buildReceipt(input: ReceiptInput, cfg: ReceiptConfig, bind
       sqlSha256: sha256Hex(input.sql),
       resultSha256: resultSha256(input.result),
       calls: receiptCalls(input.served, input.attestStatusOf),
+      ...(receiptEgress(input.served) ? { egress: receiptEgress(input.served) } : {}),
       ...(input.evidenceBundleSha256 ? { evidenceBundleSha256: input.evidenceBundleSha256 } : {}),
       ...(input.merchantAuthSha256 ? { merchantAuthSha256: input.merchantAuthSha256 } : {}),
       ...(input.mandate ? { mandate: input.mandate } : {}),

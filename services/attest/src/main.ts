@@ -272,7 +272,7 @@ export function createAttestServer(cfg: AttestConfig, attestor: Attestor) {
           calls.push(p);
         }
         const results = await Promise.all(calls.map((c) => attestor.verify(c)));
-        log("verify", { results: results.map((r) => ({ chatId: r.chatId, status: r.status, reason: r.reason })) });
+        log("verify", { results: results.map((r) => ({ chatId: r.chatId, status: r.status, reason: r.reason, detail: r.detail })) });
         return json(res, 200, { results });
       }
       return json(res, 404, { error: "unknown route" });

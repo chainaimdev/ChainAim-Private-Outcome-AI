@@ -120,3 +120,24 @@ test("ARCH-694 --refund verifies a signed refund record and prints paid -> refun
     assert.equal(w.status, 1, w.out);
     assert.match(w.out, /FAIL +refund NOT valid: the refund signature does not verify/);
   }));
+
+test("ARCH-698 a receipt with egress prints what left the PC and that the sent hash is the attested request hash; a changed hash FAILs", () =>
+  withDir((dir) => {
+    const { signer, keyFile, body } = signed(dir);
+    const egress = [{ call: 0, destination: "cloud-api.near.ai", zone: "private-cloud", sentSha256: "d".repeat(64), sentBytes: 812, masked: { PERSON: 2, EMAIL_ADDRESS: 1, PHONE_NUMBER: 0 }, residual: "pass" as const, dataClass: "PII" as const }];
+    const r = signReceipt({ ...body, egress }, signer);
+    const file = join(dir, "egress.json");
+    writeFileSync(file, JSON.stringify({ receipt: r, publicKeyPem: signer.publicKeyPem }));
+    const v = run(["--file", file, "--public-key", keyFile, "--result", "none"]);
+    assert.equal(v.status, 0, v.out);
+    assert.match(v.out, /egress +1 → cloud-api\.near\.ai \(private-cloud\) · masked PERSON×2 EMAIL_ADDRESS×1 · 812 bytes sha256 dddddddddddd… · = attested request hash/);
+    assert.match(v.out, /OK +egress: 1 call left the PC → cloud-api\.near\.ai \(private-cloud\), masked PERSON×2 EMAIL_ADDRESS×1, sent-bytes hash = the attested request hash on 1\/1 NEAR AI call$/m);
+    // The rule is part of the signed body: a changed hash breaks it (and the signature), so the receipt is not valid.
+    const tampered = { ...r, body: { ...r.body, egress: [{ ...egress[0], sentSha256: "7".repeat(64) }] } };
+    const bad = join(dir, "egress-tampered.json");
+    writeFileSync(bad, JSON.stringify(tampered));
+    const w = run(["--file", bad, "--public-key", keyFile, "--result", "none"]);
+    assert.equal(w.status, 1, w.out);
+    assert.match(w.out, /FAIL +receipt NOT valid: receipt egress\[0\]\.sentSha256 must be calls\[0\]\.reqSha256 \(the attested request hash\)/);
+    assert.doesNotMatch(w.out, /OK +egress/);
+  }));

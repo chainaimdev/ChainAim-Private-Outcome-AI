@@ -10,7 +10,7 @@
 import { test, after, before, describe } from "node:test";
 import assert from "node:assert/strict";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { generateKeyPairSync, randomBytes } from "node:crypto";
+import { createHash, generateKeyPairSync, randomBytes } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { createServer, request, type IncomingHttpHeaders, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -762,3 +762,44 @@ describe("privateAI-design-39 ARCH-685 ARCH-687 --pay-only-attested verified on 
   });
 });
 
+
+describe("privateAI-design-41 ARCH-697 ARCH-699 egress: the console keeps what each call sent, for its owner only", () => {
+  // Its own gateway with --expose-egress on, in front of the same loopback model.
+  let egGateway: TestGateway;
+  let port = 0, iport = 0;
+  let proc: Proc;
+  before(async () => {
+    egGateway = await startTestGateway({ presidioUrl: presidio.url, catalog: validateCatalog(JSON.parse(readFileSync(catalogPath, "utf8"))), gatewayKey: KEY, exposeEgress: true });
+    port = await freePort(); iport = await freePort();
+    proc = await start(consoleArgs(port, iport, { gateway: egGateway.url }), consoleReady(port), { PAID_JOBS_KEY: JOBS_KEY }, "the console (egress)");
+  });
+  after(async () => {
+    await stop(proc);
+    await egGateway?.close();
+  });
+
+  test("ARCH-699: GET /jobs/<id>/egress/<call> answers the exact bytes sent (their hash is the call's egress hash), 127.0.0.1 only; the held result carries hashes, never the bytes; nothing is logged", async () => {
+    const q = await call(port, "POST", "/jobs/crossask", { "content-type": "application/json" }, JSON.stringify({ folder: data, question: QUESTION, model: MODEL, answerModel: MODEL }));
+    assert.equal(q.status, 200, q.text);
+    const jobId = JSON.parse(q.text).jobId as string;
+    const held = await call(iport, "GET", `/internal/jobs/${jobId}`, { "x-jobs-key": JOBS_KEY });
+    assert.equal(held.status, 200, held.text);
+    const served = JSON.parse(held.text).result.served as { egress?: { sentSha256: string; destination: string; zone: string; masked: Record<string, number> } }[];
+    assert.ok(served.length >= 1 && served.every((s) => s.egress), "every call has its egress entry");
+    assert.equal(served[0].egress!.destination, new URL(modelUrl).host);
+    assert.equal(served[0].egress!.zone, "local");
+    const got = await call(port, "GET", `/jobs/${jobId}/egress/0`);
+    assert.equal(got.status, 200, got.text);
+    assert.equal(got.headers["content-disposition"], `attachment; filename="chainaim-sent-${jobId}-0.json"`);
+    assert.equal(createHash("sha256").update(got.text, "utf8").digest("hex"), served[0].egress!.sentSha256, "the bytes the gateway sent, hash for hash");
+    const sent = JSON.parse(got.text) as { model: string; messages: { content: string }[] };
+    assert.equal(sent.model, "standin", "the provider request, as sent");
+    assert.ok(!held.text.includes(got.text), "the held result (what the paywall releases) does not carry the bytes");
+    assert.ok(!proc.out().includes(sent.messages.at(-1)!.content.slice(0, 60)), "the console log does not carry them");
+    // Owner only: a foreign Host is refused; an unknown call or job is 404.
+    const foreign = await call(port, "GET", `/jobs/${jobId}/egress/0`, { host: "attacker.example" });
+    assert.equal(foreign.status, 403);
+    assert.equal((await call(port, "GET", `/jobs/${jobId}/egress/9`)).status, 404);
+    assert.equal((await call(port, "GET", `/jobs/${"0".repeat(32)}/egress/0`)).status, 404);
+  });
+});

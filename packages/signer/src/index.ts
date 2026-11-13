@@ -29,7 +29,7 @@ import {
   type MandateKeyEntry,
   type PublicJwk,
 } from "../../ap2/src/index.ts";
-import { addSettlement, checkBody, ECONOMICS_FIELDS, keyIdOf, SETTLEMENT_FLOWS, SIGNED_USD6, signReceipt, USD6, verifyReceipt, type ReceiptBody, type ReceiptSigner, type Settlement, type SettlementFlow, type SignedReceipt } from "../../receipt/src/index.ts";
+import { addSettlement, checkBody, ECONOMICS_FIELDS, EGRESS_FIELDS, keyIdOf, SETTLEMENT_FLOWS, SIGNED_USD6, signReceipt, USD6, verifyReceipt, type ReceiptBody, type ReceiptSigner, type Settlement, type SettlementFlow, type SignedReceipt } from "../../receipt/src/index.ts";
 import { ATTESTATION_MODES, checkBasis, LIMIT_FIELDS, limitsOf, parseLimits, quoteOffer, type AttestationMode, type CheckoutLimits, type CostModel, type OfferBasis } from "../../offer/src/index.ts";
 import type { RefundBook } from "./refund-book.ts";
 import { centsOfAmount, quoteJob, USDC_DECIMALS, type Fees, type JobQuote, type MeterLine, type ModelPrice, type PriceRound } from "../../crossask/src/cost.ts";
@@ -238,7 +238,7 @@ function parseAp2Quote(raw: unknown, path: string): Ap2Quote {
   return { checkout: o.checkout as Record<string, unknown>, merchant_authorization: o.merchant_authorization as string };
 }
 
-const RECEIPT_FIELDS = ["v", "receiptId", "jobId", "quoteId", "counterOf", "reduced", "route", "datasetId", "files", "filesRoot", "templateLabel", "sqlSha256", "resultSha256", "calls", "evidenceBundleSha256", "merchantAuthSha256", "mandate", "price", "createdAt"] as const;
+const RECEIPT_FIELDS = ["v", "receiptId", "jobId", "quoteId", "counterOf", "reduced", "route", "datasetId", "files", "filesRoot", "templateLabel", "sqlSha256", "resultSha256", "calls", "egress", "evidenceBundleSha256", "merchantAuthSha256", "mandate", "price", "createdAt"] as const;
 const QUOTE_BASIS_FIELDS = ["pricing", "phrase", "userSql", "sqlRetries", "answerMaxRows", "maxPromptChars", "answerMaxPromptChars", "maxTokens", "files", "totalBytes", "sizeTolerancePct", "calls"] as const;
 const MANDATE_REF_FIELDS = ["sha256", "kid", "tenant", "accountId", "nonce"] as const;
 
@@ -266,6 +266,22 @@ export function parseReceiptBody(raw: unknown, path = "$.body"): ReceiptBody {
     if (x.zone !== undefined) str(x.zone, /^[\w.-]{1,64}$/, `${path}.calls[${i}].zone`, "a zone id");
     if (x.chatId !== undefined) str(x.chatId, /^[\w.:-]{1,200}$/, `${path}.calls[${i}].chatId`, "a provider chat id");
   });
+  // privateAI-design-41 ARCH-697: egress, member by member (hosts, zones, hashes, counts only); checkBody then ties it to calls.
+  if (b.egress !== undefined) {
+    if (!Array.isArray(b.egress) || b.egress.length > 64) fail(`${path}.egress`, "a list of at most 64 entries");
+    (b.egress as unknown[]).forEach((e, i) => {
+      const x = onlyFields(e, EGRESS_FIELDS, `${path}.egress[${i}]`);
+      int(x.call, `${path}.egress[${i}].call`);
+      str(x.destination, /^[a-z0-9.-]{1,253}(:\d{1,5})?$/, `${path}.egress[${i}].destination`, "a host name");
+      str(x.zone, /^[a-z][a-z-]{0,39}$/, `${path}.egress[${i}].zone`, "a zone name");
+      str(x.sentSha256, RE.sha256, `${path}.egress[${i}].sentSha256`, "64 lowercase hex characters");
+      int(x.sentBytes, `${path}.egress[${i}].sentBytes`);
+      if (typeof x.masked !== "object" || x.masked === null || Array.isArray(x.masked) || Object.keys(x.masked).length > 64) fail(`${path}.egress[${i}].masked`, "an object of at most 64 entity kinds");
+      for (const [k, n] of Object.entries(x.masked as Record<string, unknown>)) { str(k, /^[A-Z_]{1,40}$/, `${path}.egress[${i}].masked key`, "an entity kind"); int(n, `${path}.egress[${i}].masked.${k}`); }
+      str(x.residual, /^(pass|off)$/, `${path}.egress[${i}].residual`, "pass or off");
+      str(x.dataClass, /^(PHI|PCI|PII|none)$/, `${path}.egress[${i}].dataClass`, "PHI, PCI, PII or none");
+    });
+  }
   const p = onlyFields(b.price, ["amountUnits", "usdcDecimals", "priceUsd", "quoteBasis", "actualUsd", "economics"], `${path}.price`);
   // privateAI-design-40 ARCH-690: the money trail, amounts only; checkBody then checks that its numbers add up.
   if (p.economics !== undefined) {

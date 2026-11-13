@@ -17,7 +17,12 @@ export type ModelAttempt = { model: string; outcome: Outcome; status?: number; m
  */
 export type AttestEvidence = { kind: "nearai"; providerId?: string; servedModel: string; requestSha256: string; responseSha256: string };
 
-export type AttemptResult = { attempt: ModelAttempt; completion?: Record<string, unknown>; accountScope?: "minute" | "day"; attest?: AttestEvidence };
+/**
+ * privateAI-design-41 ARCH-695 (--expose-egress on): where the request went and the SHA-256 and length of the exact bytes
+ * sent. destination is the host of the deployment's baseUrl only (no path, key or query).
+ */
+export type SentEvidence = { destination: string; sentSha256: string; sentBytes: number; bytes: Uint8Array };
+export type AttemptResult = { attempt: ModelAttempt; completion?: Record<string, unknown>; accountScope?: "minute" | "day"; attest?: AttestEvidence; sent?: SentEvidence };
 
 /**
  * Request headers NEAR AI's response signatures require (docs.near.ai/cloud/verification/cloud-api/response-signatures,
@@ -85,6 +90,7 @@ export async function attemptChat(
   pool: Pool,
   timeoutMs: number,
   clientSignal: AbortSignal,
+  exposeEgress = false,
 ): Promise<AttemptResult> {
   const lease = pool.acquire(model);
   if (!lease) return { attempt: { model, outcome: "no_deployment", ms: 0 } };
@@ -105,7 +111,9 @@ export async function attemptChat(
   // read as bytes and hashed before decoding. Every other deployment is called exactly as before.
   const attested = deployment.attest === "nearai";
   if (attested) Object.assign(headers, NEARAI_ATTEST_REQUEST_HEADERS);
-  const requestBytes = attested ? new TextEncoder().encode(payload) : undefined;
+  // privateAI-design-41 ARCH-695: with --expose-egress on, EVERY deployment encodes once and sends exactly those bytes,
+  // so the egress hash is of what left; off, only attested deployments do (as before).
+  const requestBytes = attested || exposeEgress ? new TextEncoder().encode(payload) : undefined;
   let status: number;
   let text: string;
   let responseBytes: Uint8Array | undefined;
@@ -130,7 +138,8 @@ export async function attemptChat(
   if (outcome !== "ok") return finish(outcome, status, accountScope ? { accountScope } : {});
   const completion = parseCompletion(text);
   if (!completion) return finish("upstream_error", status);
-  if (!attested || !requestBytes || !responseBytes) return finish("ok", status, { completion });
+  const sent: SentEvidence | undefined = exposeEgress && requestBytes ? { destination: new URL(deployment.baseUrl).host, sentSha256: sha256Hex(requestBytes), sentBytes: requestBytes.length, bytes: requestBytes } : undefined;
+  if (!attested || !requestBytes || !responseBytes) return finish("ok", status, { completion, ...(sent ? { sent } : {}) });
   const id = completion.id;
   const attest: AttestEvidence = {
     kind: "nearai",
@@ -139,5 +148,5 @@ export async function attemptChat(
     requestSha256: sha256Hex(requestBytes),
     responseSha256: sha256Hex(responseBytes),
   };
-  return finish("ok", status, { completion, attest });
+  return finish("ok", status, { completion, attest, ...(sent ? { sent } : {}) });
 }

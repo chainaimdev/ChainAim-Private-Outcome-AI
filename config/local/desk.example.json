@@ -12,6 +12,9 @@
     "payOnlyAttested": "evidence",
     "payOnlyAttestedDeadlineMs": 30000
   },
+  "gateway": {
+    "exposeEgress": true
+  },
   "agent": {
     "enabled": "auto",
     "tenants": "t01,t02,t03"

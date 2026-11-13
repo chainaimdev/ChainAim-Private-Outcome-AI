@@ -60,6 +60,10 @@ this PC (server.ts --mode ui, which forwards every call to the console API in Do
                                                 settles BEFORE any work and a refused job is refunded on chain by
                                                 ca-control-signer (needs -Signer separate and SELLER_NEAR_PRIVATE_KEY in
                                                 -SellerSecretsFile; refund ledger on the chainaim-refunds volume).
+  -ExposeEgress on|off                          privateAI-design-41 ARCH-695: ca-gateway --expose-egress (default off here;
+                                                desk.ps1 passes on for the desk stack, desk.json gateway.exposeEgress): every
+                                                model call's sent bytes are hashed and the receipt lists what left the PC
+                                                (host, zone, masked counts, hash). The paywall strips the header for public callers.
   -PayOnlyAttested off|evidence|verified  [-PayOnlyAttestedDeadlineMs 30000]
                                                 privateAI-design-39 ARCH-685 (console --pay-only-attested): evidence
                                                 (default, as before) | off | verified = the console waits for ca-attest's
@@ -167,6 +171,7 @@ param(
   [string]$MandateKeys = "config\ap2-mandate-keys.json",
   [ValidateSet("authorization", "upfront")][string]$PaidFlow = "authorization",
   [ValidateSet("off", "evidence", "verified")][string]$PayOnlyAttested = "evidence",
+  [ValidateSet("on", "off")][string]$ExposeEgress = "off",
   [int]$PayOnlyAttestedDeadlineMs = 30000
 )
 $ErrorActionPreference = "Stop"
@@ -245,6 +250,17 @@ try {
   if (-not $gwCmd -and $saved -and $saved.gatewayCmd) { $gwCmd = [string[]]@(foreach ($x in $saved.gatewayCmd) { [string]$x }); $gwFrom = "the last start ($statePath)" }
   if (-not $gwCmd) { Stop-Here "no ca-gateway to take the model mode from, and no saved last start ($statePath). Run .\test-console\switch-models.ps1 -To <mode> once (it asks for the model keys), then run this again." }
   Say "OK" "gateway mode from ${gwFrom}: $((@($gwCmd) | Where-Object { $_ -like '/config/*' }) -join ' ')"
+  # privateAI-design-41 ARCH-695: the gateway command is read back from the running gateway (or the last start), so any
+  # --expose-egress already in it is taken out first, then this start's choice is added: never twice, and off means gone.
+  $gwKeep = [System.Collections.Generic.List[string]]::new(); $gwSkip = $false
+  foreach ($x in @($gwCmd)) {
+    if ($gwSkip) { $gwSkip = $false; continue }
+    if ($x -eq "--expose-egress") { $gwSkip = $true; continue }
+    if ($x -like "--expose-egress=*") { continue }
+    $gwKeep.Add($x)
+  }
+  $gwCmd = [string[]]@($gwKeep)
+  if ($ExposeEgress -eq "on") { $gwCmd += "--expose-egress=on"; Say "OK" "gateway --expose-egress on: each model call's sent bytes are hashed; the receipt lists what left the PC (host, zone, masked counts, hash)" }
   $gwEnv = Get-ContainerEnv "ca-gateway"
   $fromFile = @{}
   if (Test-Path $SecretsFile) { $fromFile = (Read-EnvFile $SecretsFile '^(OPENROUTER_API_KEY|BEDROCK_API_KEY)$').Values }

@@ -64,6 +64,10 @@ one READY table across both. Neither launcher is changed or renamed; each team k
                 verdict (up to the deadline, 1000-240000 ms) and refuses the run unless every call is verified; with
                 -PaidFlow upfront the payment is then refunded. Needs ca-attest (attest.enabled / -Attest). The paywall's
                 run timeout is raised by the deadline.
+  -All ... (desk.json gateway.exposeEgress, default true)
+                privateAI-design-41: the desk stack's ca-gateway runs with --expose-egress on (up.ps1 -ExposeEgress on):
+                each model call's sent bytes are hashed, and tab 03 and the receipt show what left the PC (host, zone,
+                masked counts, hash). false = up.ps1 -ExposeEgress off. The public router keeps its default (off).
   -StopService NAME / -StartService NAME
                 stop or start ONE running container of the stack (NAME as for -Logs, e.g. attest), nothing else; for the
                 deliberate "privacy not proven" refusal (privateAI-design-39 section 5). Runs on its own.
@@ -1083,6 +1087,10 @@ $payOnlyMs = if ($PayOnlyAttestedDeadlineMs) { $PayOnlyAttestedDeadlineMs } else
 if ($payOnlyMs -lt 1000 -or $payOnlyMs -gt 240000) { Stop-Here "-PayOnlyAttestedDeadlineMs (or $Settings paidJobs.payOnlyAttestedDeadlineMs) must be from 1000 to 240000" }
 if ($payOnly -eq "verified" -and $attestMode -eq "off") { Stop-Here "-PayOnlyAttested verified needs ca-attest: leave attest on (attest.enabled / -Attest)" }
 $privArgs.PayOnlyAttested = $payOnly
+# privateAI-design-41: the desk stack's gateway reports what left the PC (desk.json gateway.exposeEgress, default true).
+$exposeEgress = if ($P.gateway -and $null -ne $P.gateway.exposeEgress) { $P.gateway.exposeEgress } else { $true }
+if ($exposeEgress -isnot [bool]) { Stop-Here "$Settings gateway.exposeEgress must be true or false" }
+$privArgs.ExposeEgress = $(if ($exposeEgress) { "on" } else { "off" })
 $privArgs.PayOnlyAttestedDeadlineMs = $payOnlyMs
 if ($payOnly -ne "evidence") { Say "INFO" "pay only for attested private inference: $payOnly$(if ($payOnly -eq 'verified') { ", ca-attest's verdict awaited up to $payOnlyMs ms before delivery" })" }
 Say "RUN" "test-console\up.ps1 -ReplaceRunning -PaidFlow $paidFlow -PaidJobs $($privArgs.PaidJobs)$(if ($Build) { ' -Build' })$(if ($WithStub) { ' -Test' })$(if ($agentMode -ne 'auto') { ' -Agent ' + $agentMode })$(if ($attestMode -ne 'auto') { ' -Attest ' + $attestMode }) -AttestGpuCheck $attestGpu$(if ($receiptsMode -ne 'auto') { ' -Receipts ' + $receiptsMode }) -DefaultPayer $defPayer$(if ($defAnswer) { ' -DefaultAnswerModel ' + $defAnswer }) -CrossaskMaxPromptChars $maxPrompt -Signer $signerMode -SignerUrl $signerUrl"

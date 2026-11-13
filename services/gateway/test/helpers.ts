@@ -103,6 +103,10 @@ export type TestGatewayOptions = {
   chatExtra?: Partial<Pick<ChatOptions, "restoreLenient" | "placeholderInstruction" | "autoZones" | "phiZones">>;
   /** --expose-entity-counts (ARCH-202); default off, as in production. */
   exposeEntityCounts?: boolean;
+  /** --expose-egress (privateAI-design-41 ARCH-695); default off, as in production. */
+  exposeEgress?: boolean;
+  /** --egress-keep (ARCH-699; default 64). */
+  egressKeep?: number;
 };
 
 export type TestGateway = {
@@ -148,9 +152,9 @@ export async function startTestGateway(o: TestGatewayOptions): Promise<TestGatew
       deny,
       jev,
       ledger: new Ledger(ledgerDir),
-      chat: { maxOutputTokens: 1024, maxAttempts: 3, attemptTimeoutMs: o.attemptTimeoutMs ?? 2000, healthFlagThreshold: 0.5, ...(o.residual ? { residual: o.residual } : {}), ...(o.chatExtra ?? {}) },
+      chat: { maxOutputTokens: 1024, maxAttempts: 3, attemptTimeoutMs: o.attemptTimeoutMs ?? 2000, healthFlagThreshold: 0.5, ...(o.residual ? { residual: o.residual } : {}), ...(o.chatExtra ?? {}), ...(o.exposeEgress ? { exposeEgress: true } : {}) },
     },
-    { maxBodyBytes: 1 << 20, gatewayKey: o.gatewayKey, ...(o.exposeEntityCounts ? { exposeEntityCounts: true } : {}) },
+    { maxBodyBytes: 1 << 20, gatewayKey: o.gatewayKey, ...(o.exposeEntityCounts ? { exposeEntityCounts: true } : {}), ...(o.exposeEgress ? { exposeEgress: true, egressKeep: o.egressKeep ?? 64 } : {}) },
   );
   const url = await listen(server);
   return { url, server, presidio, pool, quota, deny, ledgerDir, close: () => closeServer(server) };

@@ -643,3 +643,32 @@ with `-StopService attest`) refunded on NEAR about 17 s after the refusal. Remem
 attest` after such a run. Receipts downloaded from tab 03 from now on carry the attestation bundle, so `-VerifyReceipt`
 also re-hashes it ("OK attestation bundle matches ..."); receipts settled from now on name the flow in their settlement.
 The judge sample is docs/judge/sample-receipt-2026-11-13T1716Z.json.
+
+## 2026-11-14 What left your PC: the egress receipt (privateAI-design-41, ARCH-695..699)
+
+Built: the desk stack's ca-gateway runs with `--expose-egress on` (desk.json `gateway.exposeEgress`, default true; up.ps1
+`-ExposeEgress on|off`, default off when up.ps1 runs alone). For every model call the gateway hashes the exact bytes it
+sends and reports them in the header `x-chainaim-egress` and in its ledger line: the destination host, the zone, the
+SHA-256 and length of the bytes sent, how many values of each kind were masked, the residual check and the data class.
+The paywall never passes the header to a public caller. The receipt gets `egress[]` (one entry per call); on a NEAR AI
+call its hash equals the attested request hash. Tab 03 shows "What left your PC" under the signed receipt, with a
+"Download what was sent" button per call (from this console only, 127.0.0.1, while the job is held; the bytes are kept in
+memory, never logged or written to disk). The data files and their rows stay on the PC; masked prompts do leave, by design.
+
+Flags and settings (no secrets):
+
+| Flag / setting | Where | What |
+|---|---|---|
+| `--expose-egress on\|off` | ca-gateway (up.ps1 adds it to the read-back gateway command) | default off |
+| `--egress-keep N` | ca-gateway | with --expose-egress on: the bytes of the last N calls, memory only, for `GET /internal/egress/<sha256>` (gateway key) (default 64) |
+| desk.json `gateway.exposeEgress` | `config/local/desk.json` (optional) | default true on the desk |
+
+Live check, one step at a time:
+1. `.\test-console\desk.ps1 -All -AllSkipTests -PaidFlow upfront -PayOnlyAttested verified` — expect from up.ps1
+   `OK gateway --expose-egress on: ...`.
+2. Tab 03, AI agent t01, estimate-first, an attested NEAR AI model for query and answer, a template; pay. After `Result
+   released` the receipt panel shows `What left your PC: N model call(s)` with one line per call: `→ <host> (private-cloud) ·
+   masked ... · <bytes> bytes, sha256 <12 hex>… · = the attested request hash ✓`.
+3. Press "Download receipt", then `.\test-console\desk.ps1 -VerifyReceipt <the downloaded file>` — expect an `egress` line and
+   `OK egress: N call(s) left the PC → <host> (private-cloud), masked ..., sent-bytes hash = the attested request hash on
+   N/N NEAR AI calls`.

@@ -43,6 +43,9 @@ export const NEVER_PASS_BACK: ReadonlySet<string> = new Set([
   "x-chainaim-served-model",
   "x-chainaim-req-sha256",
   "x-chainaim-resp-sha256",
+  // privateAI-design-41 ARCH-696: the egress receipt line (destination, zone, sent hash, masked counts) is the operator's
+  // and the buyer's console's; PASS_BACK would forward it, so it is named here.
+  "x-chainaim-egress",
 ]);
 
 export type PaywallDeps = {

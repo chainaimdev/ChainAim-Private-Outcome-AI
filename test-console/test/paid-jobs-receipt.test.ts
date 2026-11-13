@@ -145,3 +145,14 @@ test("privateAI-design-39 ARCH-689 ARCH-688 tab 03: a refund because privacy was
 test("privateAI-design-40 ARCH-692 tab 03: Download receipt carries the attestation bundle when the console sends it, so verify-receipt re-hashes it offline", () => {
   assert.match(html, /\.\.\.\(j\.attestation \? \{ attestation: j\.attestation \} : \{\}\) \}, null, 2\)\], \{ type: "application\/json" \}\);/);
 });
+
+test("privateAI-design-41 ARCH-699 tab 03: What left your PC per call (host, zone, masked counts, hash, = the attested request hash), the owner's download, and counts and hashes only in the observer view", () => {
+  assert.match(html, /if \(Array\.isArray\(r\.body\.egress\) && r\.body\.egress\.length\) rcpt\.append\(egressPanel\(jobId, r\.body\)\);/);
+  assert.match(html, /What left your PC: \$\{body\.egress\.length\} model call/);
+  assert.match(html, /`→ \$\{e\.destination\} \(\$\{e\.zone\}\) · masked \$\{masked\} · \$\{e\.sentBytes\} bytes, sha256 \$\{e\.sentSha256\.slice\(0, 12\)\}…\$\{tied\}`/);
+  assert.match(html, /call\.reqSha256 === e\.sentSha256 \? " · = the attested request hash ✓"/);
+  assert.match(html, /fetch\(`\/jobs\/\$\{jobId\}\/egress\/\$\{e\.call\}`\)/);
+  assert.match(html, /Your data files and their rows stay on your PC\./);
+  assert.doesNotMatch(html, /nothing leaves your PC/i, "masked prompts do leave");
+  assert.match(html, /row\(`Left the PC, call \$\{e\.call \+ 1\} \(receipt\)`, `\$\{e\.sentBytes\} bytes, sha256/);
+});

@@ -13,5 +13,6 @@ const check = (module: string, name: string, skip = "") => {
 
 // parseAttestHeaders takes a header getter (a function), which a JSON case cannot hold; ARCH-411 tests cover it.
 // figuresVerdict (tab 03 figures line, 2026-11-07) is new, not a moved function: verify-small.test.ts covers every case of it.
-test("crossask golden master: extractSql, resultText, fanOutJoins and the two prompts unchanged", () => check("../src/index.ts", "crossask", "crossAsk,analystClient,gatewayChat,explainReconcile,parseAttestHeaders,figuresVerdict"));
+// parseEgressHeader (privateAI-design-41 ARCH-697, 2026-11-14) is new, not a moved function: egress.test.ts covers its cases.
+test("crossask golden master: extractSql, resultText, fanOutJoins and the two prompts unchanged", () => check("../src/index.ts", "crossask", "crossAsk,analystClient,gatewayChat,explainReconcile,parseAttestHeaders,figuresVerdict,parseEgressHeader"));
 test("verifyAnswer golden master: the number check unchanged", () => check("../src/verify.ts", "verify", "verifyMoney"));

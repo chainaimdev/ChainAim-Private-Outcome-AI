@@ -236,8 +236,48 @@
         setTimeout(() => URL.revokeObjectURL(a.href), 1000);
       };
       rcpt.append(dl);
+      // privateAI-design-41 ARCH-699: what left this PC, from the signed receipt's egress (one entry per model call).
+      if (Array.isArray(r.body.egress) && r.body.egress.length) rcpt.append(egressPanel(jobId, r.body));
     };
     ask();
+  }
+
+  /**
+   * privateAI-design-41 ARCH-699: "What left your PC": per model call the destination host, the zone, the values masked
+   * by kind and the hash of the exact bytes sent (on a NEAR AI call the same hash the attested enclave signed), and a
+   * download of those bytes for the owner of this run (from this console only, while the job is held).
+   */
+  const EGRESS_LINE = "Your data files and their rows stay on your PC. For every model call that left it: where it went, how many values of each kind were masked, and the hash of the exact bytes sent; on NEAR AI calls that hash is the one the attested enclave signed.";
+  function egressPanel(jobId, body) {
+    const box = document.createElement("div"); box.id = "xegress";
+    const h = document.createElement("p"); h.className = "muted"; h.id = "xegressHead";
+    h.textContent = `What left your PC: ${body.egress.length} model call${body.egress.length === 1 ? "" : "s"}. ${EGRESS_LINE}`;
+    const t = document.createElement("table"); t.className = "kv result-kv egress";
+    for (const e of body.egress) {
+      const call = body.calls[e.call] || {};
+      const masked = Object.entries(e.masked || {}).filter(([, n]) => n > 0).map(([k, n]) => `${k} ×${n}`).join(", ") || "nothing to mask";
+      const tied = typeof call.reqSha256 === "string" ? (call.reqSha256 === e.sentSha256 ? " · = the attested request hash ✓" : " · ≠ the attested request hash ✗") : "";
+      const tr = document.createElement("tr");
+      const th = document.createElement("th"); th.textContent = `Call ${e.call + 1}`;
+      const td = document.createElement("td");
+      const text = document.createElement("span");
+      text.textContent = `→ ${e.destination} (${e.zone}) · masked ${masked} · ${e.sentBytes} bytes, sha256 ${e.sentSha256.slice(0, 12)}…${tied}`;
+      text.title = `sha256 ${e.sentSha256} · residual check ${e.residual} · data class ${e.dataClass}`;
+      const dl = document.createElement("button");
+      dl.type = "button"; dl.className = "ghost"; dl.textContent = "Download what was sent";
+      dl.onclick = async () => {
+        let r = null;
+        try { r = await fetch(`/jobs/${jobId}/egress/${e.call}`); } catch { r = null; }
+        if (!r || !r.ok) { dl.textContent = "Not kept any more (the job expired)"; dl.disabled = true; return; }
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(await r.blob()); a.download = `chainaim-sent-${jobId}-${e.call}.json`;
+        document.body.append(a); a.click(); a.remove();
+        setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+      };
+      td.append(text, " ", dl); tr.append(th, td); t.append(tr);
+    }
+    box.append(h, t);
+    return box;
   }
 
   /**
@@ -266,6 +306,8 @@
       row("Token contract", v.token);
       if (v.memo) row("Memo", v.memo);
       row("Transaction", explorerLink(v.network, v.transaction));
+      // privateAI-design-41 ARCH-699: from the receipt, counts and hashes only (not on the chain).
+      if (Array.isArray(v.egress)) for (const e of v.egress) row(`Left the PC, call ${e.call + 1} (receipt)`, `${e.sentBytes} bytes, sha256 ${String(e.sentSha256).slice(0, 12)}… · masked ${Object.entries(e.masked || {}).filter(([, n]) => n > 0).map(([k, n]) => `${k} ×${n}`).join(", ") || "nothing"}`);
       const not = document.createElement("p"); not.className = "muted";
       not.textContent = `Not on the chain: ${v.notOnChain.join("; ")}. Read from ${new URL(v.rpcUrl).host}, a public NEAR RPC, with no ChainAim key.`;
       out.replaceChildren(t, not);

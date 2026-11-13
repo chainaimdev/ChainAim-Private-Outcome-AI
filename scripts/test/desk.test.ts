@@ -585,3 +585,29 @@ test("-Ship (2026-11-13, v2.1.0 ship failed with \"pathspec did not match\"): a 
   const commit = s.slice(s.indexOf('$commitArgs = @("commit"'), s.indexOf("Quiet { & git @commitArgs }"));
   assert.ok(commit.length > 0 && !/"--"|--include|\$addPaths|\$want/.test(commit), "the commit takes the index, no pathspec");
 });
+
+test("privateAI-design-41: the desk stack's ca-gateway runs with --expose-egress on (desk.json gateway.exposeEgress, default true); up.ps1 replaces any earlier --expose-egress in the read-back command, never adds it twice", async () => {
+  assert.match(ps, /\$exposeEgress = if \(\$P\.gateway -and \$null -ne \$P\.gateway\.exposeEgress\) \{ \$P\.gateway\.exposeEgress \} else \{ \$true \}/, "default true on the desk");
+  assert.match(ps, /if \(\$exposeEgress -isnot \[bool\]\) \{ Stop-Here/);
+  assert.match(ps, /\$privArgs\.ExposeEgress = \$\(if \(\$exposeEgress\) \{ "on" \} else \{ "off" \}\)/);
+  assert.equal(ex.gateway.exposeEgress, true, "desk.example.json shows the setting");
+  const up = readFileSync(new URL("../../test-console/up.ps1", import.meta.url), "utf8");
+  assert.match(up, /\[ValidateSet\("on", "off"\)\]\[string\]\$ExposeEgress = "off",/, "up.ps1 alone (and the public router) stays off");
+  const at = up.indexOf("$gwKeep = [System.Collections.Generic.List[string]]::new()");
+  const blk = up.slice(at, up.indexOf("\n", up.indexOf('if ($ExposeEgress -eq "on") { $gwCmd += "--expose-egress=on"')));
+  assert.ok(at > 0 && blk.length > 0);
+  assert.ok(at > up.indexOf('Say "OK" "gateway mode from ${gwFrom}') && at < up.indexOf("$override = [ordered]@{ services"), "after the command is read back, before compose gets it");
+  // Run the block itself on read-back commands: the two-token form the running gateway has, the = form, and none.
+  const { spawnSync } = await import("node:child_process");
+  const runBlk = (cmd: string[], mode: string) => {
+    const script = [`function Say($a, $b) { }`, `$ExposeEgress = "${mode}"`, `$gwCmd = [string[]]@(${cmd.map((c) => `"${c}"`).join(", ")})`, blk, "ConvertTo-Json -Compress @($gwCmd)"].join("\n");
+    const r = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], { encoding: "utf8", timeout: 60_000 });
+    assert.equal(r.status, 0, r.stderr);
+    return JSON.parse(r.stdout) as string[];
+  };
+  const base = ["--host", "::", "--port", "8700", "--expose-entity-counts", "on"];
+  assert.deepEqual(runBlk([...base, "--expose-egress", "off"], "on"), [...base, "--expose-egress=on"]);
+  assert.deepEqual(runBlk([...base, "--expose-egress=on"], "on"), [...base, "--expose-egress=on"], "never twice");
+  assert.deepEqual(runBlk([...base, "--expose-egress=on"], "off"), base, "off means gone");
+  assert.deepEqual(runBlk(base, "on"), [...base, "--expose-egress=on"]);
+});

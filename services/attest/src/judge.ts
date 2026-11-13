@@ -117,6 +117,11 @@ export type CallResult = {
   signedText: string | null;
   /** The signature in hex (ecdsa 65 bytes, ed25519 64 bytes), when well-formed for its algorithm; else null. */
   signatureHex: string | null;
+  /**
+   * How the signer matched the report, once that step is reached (2026-11-14 attest-rule change): e.g. "signer in 1
+   * attestation, verified", "signer in 2 attestations, all verified", "signer in 2 attestations, 1 not verified"; else null.
+   */
+  detail: string | null;
 };
 
 /** NEAR AI's signed text: an optional model id, then two lowercase SHA-256 hex hashes (near-watch accepts the same). */
@@ -145,7 +150,7 @@ export function judgeCall(
   const base: CallResult = {
     chatId: call.chatId ?? null, servedModel: call.servedModel, status: "unverified", reason: null,
     signatureKind: null, signingAlgo: null, signingAddress: null, reportFetchedAt: null, tdx: null, gpu: null, signature: null, hashes: null,
-    signedText: null, signatureHex: null,
+    signedText: null, signatureHex: null, detail: null,
   };
   const out = (status: CallStatus, reason: string | null, extra: Partial<CallResult> = {}): CallResult => ({ ...base, ...extra, status, reason });
 
@@ -183,12 +188,24 @@ export function judgeCall(
   const matched = report.attestations.filter((a) => a.signingAddress === signer && a.signingAlgo === algo);
   const at = { ...seen, hashes: true, signature: true, reportFetchedAt: report.fetchedAt };
   if (matched.length === 0) return out("unverified", "the signer is not in the report that arrived before the call", at);
-  if (matched.length > 1) return out("unverified", "the signer matches more than one attestation in the report", at);
-  const a = matched[0];
-  const tdx = a.checks.tdxVerified && a.checks.bindsAddress && a.checks.embedsNonce && a.checks.composeMatchesMrConfig === true && a.checks.modelNameMatches;
-  const gpu = a.checks.gpu.checked ? a.checks.gpu.nonceMatches && a.checks.gpu.verdict : null;
-  if (!a.verified) return out("unverified", `the signer's attestation failed: ${a.reasons.join("; ")}`, { ...at, tdx, gpu });
-  return out("verified", null, { ...at, tdx, gpu });
+  // 2026-11-14 (owner decision, option 1): NEAR AI's report can list the same signer more than once (live 2026-11-13: the
+  // DeepSeek-V4.1-Flash-1017 report listed 0xfe00…337e twice, both verified). The call is verified only when EVERY
+  // attestation the signer matches is verified and they all name the model asked for; one failing (or naming another
+  // model) keeps it unverified, and the reason says which.
+  const n = matched.length;
+  const label = `signer in ${n} attestation${n === 1 ? "" : "s"}`;
+  const tdx = matched.every((a) => a.checks.tdxVerified && a.checks.bindsAddress && a.checks.embedsNonce && a.checks.composeMatchesMrConfig === true && a.checks.modelNameMatches);
+  const gpus = matched.map((a) => (a.checks.gpu.checked ? a.checks.gpu.nonceMatches && a.checks.gpu.verdict : null));
+  const gpu = gpus.every((g) => g === null) ? null : gpus.every((g) => g === true);
+  const otherModel = matched.filter((a) => !a.checks.modelNameMatches).length;
+  const failed = matched.filter((a) => !a.verified);
+  if (n > 1 && otherModel > 0) return out("unverified", `${label}, ${otherModel} naming another model: the attestations do not agree on the model`, { ...at, tdx, gpu, detail: `${label}, ${otherModel} naming another model` });
+  if (failed.length > 0) {
+    const why = [...new Set(failed.flatMap((a) => a.reasons))].join("; ");
+    if (n === 1) return out("unverified", `the signer's attestation failed: ${why}`, { ...at, tdx, gpu, detail: `${label}, not verified` });
+    return out("unverified", `${label}, ${failed.length} not verified: ${why}`, { ...at, tdx, gpu, detail: `${label}, ${failed.length} not verified` });
+  }
+  return out("verified", null, { ...at, tdx, gpu, detail: n === 1 ? `${label}, verified` : `${label}, all verified` });
 }
 
 /** Keep the newest `keep` fetches per model (the history the judge needs: the last report before any recent call). */

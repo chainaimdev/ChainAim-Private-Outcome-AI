@@ -72,6 +72,18 @@ export type ReceiptCall = {
   attestStatus: "verified" | "failed" | "pending" | "none";
 };
 
+/**
+ * privateAI-design-41 ARCH-697: what left the PC for one model call (the gateway's --expose-egress): `call` indexes
+ * calls[], the destination host, the catalog zone, SHA-256 and length of the exact bytes sent, entity kind -> count
+ * masked in them, the residual check (pass, or off) and the data class. Never content. On an attested call sentSha256 is
+ * the same hash as calls[call].reqSha256 (ARCH-698): the bytes that left are the bytes the enclave signed for.
+ */
+export type ReceiptEgress = {
+  call: number; destination: string; zone: string; sentSha256: string; sentBytes: number;
+  masked: Record<string, number>; residual: "pass" | "off"; dataClass: "PHI" | "PCI" | "PII" | "none";
+};
+export const EGRESS_FIELDS = ["call", "destination", "zone", "sentSha256", "sentBytes", "masked", "residual", "dataClass"] as const;
+
 export type ReceiptPrice = {
   /** The x402 exact amount paid, whole USDC base units. */
   amountUnits: string;
@@ -193,6 +205,8 @@ export type ReceiptBody = {
   sqlSha256: string;
   resultSha256: string;
   calls: ReceiptCall[];
+  /** privateAI-design-41 ARCH-697: one entry per call, in call order; optional (absent with the gateway's --expose-egress off; older receipts verify). */
+  egress?: ReceiptEgress[];
   evidenceBundleSha256?: string;
   /**
    * privateAI-design-33 ARCH-631: SHA-256 hex of the AP2 merchant_authorization string of the job's signed quote, so the
@@ -265,11 +279,37 @@ export function checkBody(b: ReceiptBody): void {
     if (c.attestStatus !== "none" && hashes.some((x) => x === undefined)) fail(`calls[${i}]`, "request and response SHA-256 hashes on an attested call");
     if (hashes.some((x) => x !== undefined && !SHA256_HEX.test(x))) fail(`calls[${i}]`, "64 lowercase hex characters in each hash");
   }
+  if (b.egress !== undefined) checkEgress(b, fail);
   if (!/^[1-9]\d*$/.test(b.price.amountUnits)) fail("price.amountUnits", "a positive whole number as a string");
   if (!/^(0|[1-9]\d*)(\.\d+)?$/.test(b.price.priceUsd)) fail("price.priceUsd", "a decimal USD amount");
   if (b.price.actualUsd !== undefined && !/^(0|[1-9]\d*)(\.\d+)?$/.test(b.price.actualUsd)) fail("price.actualUsd", "a decimal USD amount");
   checkEconomics(b.price);
   if ((b.counterOf === undefined) !== (b.reduced === undefined)) fail("counterOf / reduced", "both present or both absent");
+}
+
+/**
+ * privateAI-design-41 ARCH-698: egress[] is one entry per call (entry i is call i), each member well formed, and on an
+ * attested call (one that carries reqSha256) sentSha256 equals it.
+ */
+function checkEgress(b: ReceiptBody, fail: (field: string, want: string) => never): void {
+  const eg = b.egress!;
+  if (!Array.isArray(eg)) fail("egress", "a list");
+  if (eg.length !== b.calls.length) fail("egress", "one entry per call");
+  for (const [i, e] of eg.entries()) {
+    const at = `egress[${i}]`;
+    if (typeof e !== "object" || e === null) fail(at, "an object");
+    if (e.call !== i) fail(`${at}.call`, `${i} (entries in call order)`);
+    if (typeof e.destination !== "string" || !/^[a-z0-9.-]{1,253}(:\d{1,5})?$/.test(e.destination)) fail(`${at}.destination`, "a host name");
+    if (typeof e.zone !== "string" || !/^[a-z][a-z-]{0,39}$/.test(e.zone)) fail(`${at}.zone`, "a zone name");
+    if (typeof e.sentSha256 !== "string" || !SHA256_HEX.test(e.sentSha256)) fail(`${at}.sentSha256`, "64 lowercase hex characters");
+    if (!Number.isSafeInteger(e.sentBytes) || e.sentBytes < 0) fail(`${at}.sentBytes`, "a whole number >= 0");
+    if (typeof e.masked !== "object" || e.masked === null || Array.isArray(e.masked)) fail(`${at}.masked`, "an object of kind -> count");
+    for (const [k, n] of Object.entries(e.masked)) if (!/^[A-Z_]{1,40}$/.test(k) || !Number.isSafeInteger(n) || n < 0) fail(`${at}.masked`, "entity kinds -> whole numbers >= 0");
+    if (e.residual !== "pass" && e.residual !== "off") fail(`${at}.residual`, "pass or off");
+    if (!["PHI", "PCI", "PII", "none"].includes(e.dataClass)) fail(`${at}.dataClass`, "PHI, PCI, PII or none");
+    const req = b.calls[i].reqSha256;
+    if (req !== undefined && e.sentSha256 !== req) fail(`${at}.sentSha256`, `calls[${i}].reqSha256 (the attested request hash)`);
+  }
 }
 
 /** The id of an Ed25519 public key: the first 16 bytes (hex) of SHA-256 over its SPKI DER encoding. */
