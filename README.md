@@ -8,21 +8,30 @@ receipt and a settlement on NEAR.
 
 ## What makes it different
 
-- **Your data never reaches a model in the clear.** Presidio plus ChainAim's own patterns find names, accounts, IDs,
-  health data and cards, and mask them before any model sees the text. A residual check refuses (HTTP 422) anything that
-  still looks personal; if the scanner is down, nothing is sent (fail closed). Real values are put back only on your side.
+- **Unmasked only on your own machine.** The gateway, Presidio, the analyst and the console run in Docker on your PC,
+  reachable on `127.0.0.1` only (Presidio not even that). Your files and your raw question never leave it: Presidio plus
+  ChainAim's own patterns find names, accounts, IDs, health data and cards, and mask them **on your PC** before any text
+  leaves. A residual check refuses (HTTP 422) anything that still looks personal; if the scanner is down, nothing is sent
+  (fail closed). Only masked text goes to a model, and the real values are put back on your PC.
 - **Numbers you can trust.** The analyst (DuckDB) computes the answer with one exact, read-only query on your files; the
   model only writes the query from column names and words the result, and every figure in its wording is checked
   against the computed result.
-- **A firm price before any work.** Estimate first: the price is set from the files' sizes, signed by ChainAim (AP2
-  merchant authorization), and the job runs only after payment. A failed job is never charged. Template questions cost
+- **A firm price before any work.** Estimate first: ChainAim's signer sets the price from the files' sizes and signs it
+  (AP2 merchant authorization), and the job runs only after payment. A failed job is never charged. Template questions cost
   0.01 to 0.02 USDC.
-- **Proof, not promises.** Each NEAR AI call runs in a hardware-sealed enclave (Intel TDX, NVIDIA GPU) and its
-  attestation is verified for the job. Every paid job ends with an Ed25519-signed receipt that binds the files, query,
+- **Proof, not promises.** The masked text that leaves your PC goes to NEAR AI, where each call runs in a hardware-sealed
+  enclave (Intel TDX, NVIDIA GPU) and its attestation is verified for the job. Every paid job ends with an Ed25519-signed receipt that binds the files, query,
   result, model calls, price and NEAR settlement, as hashes only: the receipt never holds the data.
-- **AI agents that buy safely.** A company's AI agent checks ChainAim's signed quote against its own spending mandate
-  (per job, per day, auto-approve limit, attested route only), pays in USDC on NEAR and verifies the receipt. Offered a
-  route that is not attested, it refuses before anything is signed or paid.
+- **AI agents that buy safely, on a two-sided deal.** A company's AI agent checks ChainAim's signed quote against its own
+  spending mandate (per job, per day, auto-approve limit, attested route only), then signs its permission as an AP2
+  Checkout Mandate with the tenant's own key, bound to that exact quote and that one payment, and pays in USDC on NEAR.
+  ChainAim's signer verifies the mandate before the job runs; nothing settles without both signatures, and the receipt
+  records both. Its own model sees the question only masked. Offered a route that is not attested, it refuses before
+  anything is signed or paid.
+- **Our signer never sees your data; your machine never holds our keys.** ChainAim's signing keys live in a separate
+  service, `ca-control-signer` (the control plane), in its own runtime with its own keys folder. It receives sizes, ids,
+  hashes and amounts only, and refuses any other field by name. Today it runs beside your stack on the same PC
+  (separation by design, not by hardware); the same image runs on a cloud server (`docs/deploy/signer-cloud.md`).
 - **Privacy you can check, edge included.** No question, file, query, result or answer ever goes on chain. The payment
   is an ordinary NEAR USDC transfer, so, as with any on-chain payment, its payer, amount and time are public; tab 03's
   "What the chain shows" displays exactly that for each job, read from public NEAR RPC.
@@ -33,30 +42,44 @@ receipt and a settlement on NEAR.
 - **Live operations.** Every payment and paid job is reported to the NEAR admin UI
   ([chainaim-adminUI-NEAR](https://github.com/chainaimdev/chainaim-adminUI-NEAR)), which reconciles it with the chain.
 
+## Roadmap
+
+- **Hosted mode, same guarantee.** Today the gateway runs on your PC. For businesses that want ChainAim to host it, the
+  gateway moves into a confidential VM (Intel TDX) built reproducibly; your client checks the hardware-signed measurement
+  against the published build before sending any raw text, and "no logs" becomes part of the measured code.
+- **ChainAim's signer in a TEE.** The control plane's signer moved into a TEE whose code a NEAR contract approves
+  (NEAR Shade Agents, Intel TDX), so its signing code is provable, not only separate.
+- **Settle remotely, release locally.** The paywall and relayer move to the control plane and return a signed settlement;
+  your PC releases the result itself, so the result never reaches a ChainAim server.
+- **Spending mandate on NEAR.** The tenant's limits (per job, per day, attested route only) enforced by a NEAR contract,
+  not only by the agent's code.
+- **Unlinkable credits.** Prepaid credits spent as unlinkable tokens, so the chain no longer shows each job's payment.
+
 ## Judges: verify it yourself, no keys
 
 Needs only Node.js 22.22 or later and this repository (no `npm install`, no account, no key). Run from the repository root.
 
 ```powershell
-# 1. A real paid job (testnet, 2026-11-13: an AI agent paid 0.02 USDC for "Credit limit exposure"): its signed receipt,
-#    checked offline against the pinned public key (config/receipt-public-key.pem), with the AP2 signed quote it points at
-#    (config/ap2-public-key.jwk.json).
-node scripts/verify-receipt.ts --file docs/judge/sample-receipt-2026-11-13T0214Z.json --result none
-#    expected last line: OK      receipt valid: signed by the pinned key d27d1e9f..., settlement signed too, signed quote matches
+# 1. A real paid job, a two-sided AP2 deal (testnet, 2026-11-13: tenant t01's AI agent paid 0.02 USDC for "Biggest
+#    payments out"): its signed receipt, checked offline against the pinned public key (config/receipt-public-key.pem),
+#    with ChainAim's AP2 signed quote (config/ap2-public-key.jwk.json) and the agent's checkout mandate it points at
+#    (config/ap2-mandate-keys.json: the tenants' public keys).
+node scripts/verify-receipt.ts --file docs/judge/sample-receipt-2026-11-13T0547Z.json --result none
+#    expected last line: OK      receipt valid: signed by the pinned key d27d1e9f..., settlement signed too, signed quote matches, checkout mandate matches
 
 # 2. The same job's payment, read from NEAR the way anyone can: who paid, how much and when, and that the content is not there.
-node scripts/observe-receipt.ts --file docs/judge/sample-receipt-2026-11-13T0214Z.json
-#    expected last line: OK      the chain shows this receipt's payment (0.02, as the receipt's price for job 81ad24c5...)
+node scripts/observe-receipt.ts --file docs/judge/sample-receipt-2026-11-13T0547Z.json
+#    expected last line: OK      the chain shows this receipt's payment (0.02, as the receipt's price for job 8314afbf...)
 
-# 3. The masking, pricing, receipt, AP2 and observer tests (no service needed; 471 pass on 2026-11-13).
-node --test "packages/receipt/test/*.test.ts" "packages/ap2/test/*.test.ts" "packages/offer/test/*.test.ts" "packages/observer/test/*.test.ts" "test-console/test/*.test.ts" "services/gateway/test/*.test.ts"
+# 3. The masking, pricing, receipt, AP2, signer, mandate and observer tests (no service needed; 481 pass on 2026-11-13).
+node --test "packages/receipt/test/*.test.ts" "packages/ap2/test/*.test.ts" "packages/offer/test/*.test.ts" "packages/observer/test/*.test.ts" "packages/signer/test/*.test.ts" "services/signer/test/*.test.ts" "test-console/test/*.test.ts" "services/gateway/test/*.test.ts"
 ```
 
 The demo scenes (a paid outcome; the agent refusing a route that is not attested) and the 1-minute video script:
-[docs/judge/demo-script-2026-11-13T0230Z.md](docs/judge/demo-script-2026-11-13T0230Z.md).
+[docs/judge/demo-script-2026-11-13T0530Z.md](docs/judge/demo-script-2026-11-13T0530Z.md).
 
 `--result none`: the released result (the answer) is not published; with it, step 1 also checks the receipt's result
-hash. The sample receipt names the dataset `smb-erp-fin` and the template "Credit limit exposure": the demo ERPNext books in
+hash. The sample receipt names the dataset `smb-erp-fin` and the template "Biggest payments out": the demo ERPNext books in
 `sample-data/smb-2-erp-fin/erpnext/orion` (demo customers, no real company).
 
 ## How to run it
@@ -119,13 +142,19 @@ The backend runs in Docker (one `docker-compose.yml`); only the 8730 UI runs on 
 | analyst | `ca-analyst` | 127.0.0.1:8740 | DuckDB relations and read-only SQL on your data folder |
 | chain-query | `ca-chain-query` | 127.0.0.1:8750 | Read-only blockchain queries for the "Blockchain queries" panel |
 | near-watch | `ca-near-watch` (from chainaim-adminUI-NEAR) | 127.0.0.1:8790 | Receives payment claims and job events; reconciles them with NEAR |
-| agent (optional) | `ca-agent`, only with `up.ps1 -Agent on` | 127.0.0.1:8760 | Tab 03 agent mode: masks the question, asks a Strands agent on Bedrock, runs the paid job and pays it from the tenant's NEAR account |
+| agent (optional) | `ca-agent`, only with `up.ps1 -Agent on` | 127.0.0.1:8760 | Tab 03 agent mode: masks the question, asks a Strands agent on Bedrock, runs the paid job, signs the tenant's AP2 checkout mandate and pays it from the tenant's NEAR account |
+| **control plane:** signer | `ca-control-signer`, its own compose project `chainaim-control-plane`, network `chainaim-control` | 127.0.0.1:8780 | ChainAim's signer: prices each job from sizes, signs the AP2 quote, verifies the agent's checkout mandate before the run, signs the receipt and its settlement. Holds ChainAim's two signing keys (from its own keys folder); sees sizes, ids, hashes and amounts only |
+
+Every container above it is the **data plane**: your files, your question, the result and the unmasking stay there, and
+none of them holds a ChainAim signing key (`.\test-console\desk.ps1 -Planes` checks this by variable name). The paywall
+still runs on your PC too (moving it is on the roadmap).
 
 ```
 Browser ── 8730 UI (PC) ──▶ console-api ──▶ analyst            (exact numbers from your files)
                                │      └────▶ gateway ──▶ Presidio (mask) ──▶ model (masked text only)
                                └──▶ paywall (x402: NEAR USDC / XRPL RLUSD) ──▶ gateway
 paywall, console-api ──▶ near-watch (claims, job events) ──▶ admin UI 8800
+console-api ──▶ ca-control-signer (control plane: price, AP2 quote, mandate check, receipt; sizes and hashes only)
 ```
 
 Your data folder (`up.ps1 -PrivDataDir`) is mounted **read-only** into console-api and the analyst; the folder picker shows

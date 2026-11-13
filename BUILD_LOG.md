@@ -1531,3 +1531,27 @@ Built in the AI's workspace on a snapshot of the owner's repo (main = e8626e8, v
 - Suites (VM, NODE_PATH=/tmp/duck/node_modules): crossask+receipt+agent-policy+ap2+offer+scripts+gateway+test-console 741 =
   740 pass + 1 skip, 0 fail. Not run here: paywall, analyst (unchanged).
 - 2026-11-13 ~02:40Z ship stop at check-deps ([direction] scripts -> test-console; [cycle]; [stale-allow] caused by the same edge): observer moved to packages/observer; check-deps OK, suites 741 (740 + 1 skip).
+
+## 2026-11-13 ~04:15-05:45Z - privateAI-design-36: signer split (ARCH-660..664) and checkout mandate (ARCH-665..668)
+
+- New: packages/signer (src + test 6), services/signer (src/main.ts, Dockerfile, Dockerfile.dockerignore, compose.yml,
+  package.json, test 4), packages/ap2/src/mandate.ts, test-console/console/signer-client.ts, services/paywall/scripts/
+  agent-mandate.ts, scripts/signer-keys(.ts, -core.ts), tests scripts/test/{console-signer, signer-deploy, signer-keys}.test.ts,
+  services/paywall/test/agent-mandate.test.ts, docs/deploy/signer-cloud.md, docs/judge/demo-script-2026-11-13T0530Z.md,
+  DESIGN/privateAI-design-36-SIGNER-SPLIT-AND-CHECKOUT-MANDATE-2026-11-13T0530.md.
+- Changed: server.ts (SIGNER for every price/quote/mandate/receipt; --signer*, --ap2-mandate, --mandate-*; /jobs/config
+  signer + mandates; receipt GET carries mandate), ap2.ts (ap2ConfigRemote), receipt.ts (remote config, buildReceipt bind,
+  putSettled, put/getMandate), jobs.ts (run notice), packages/receipt (mandate field), paywall app.ts (run notice), near.ts
+  (headersFor), agent-jobs(-core).ts, agent-receipt.ts, agent-ask(.ts, -core.ts), paid-jobs.html, verify-receipt.ts
+  (--mandate-keys), up.ps1, desk.ps1, down.ps1, docker-compose.yml, console.Dockerfile (+ ignore), desk.example.json,
+  README.md. Tests adjusted for the new API, not loosened: console-paid-jobs /jobs/config shape (+signer, mandates),
+  paid-jobs-receipt download shape (+mandate).
+- Found while testing: a test helper stop() waited forever for a child killed by a signal (exitCode null, signalCode set);
+  the new console-signer test's stop() checks both.
+- Results (Linux, NODE_PATH=/tmp/duck/node_modules): packages/*/test + test-console/test + services/signer/test 216/216;
+  scripts/test 102/102, console-paid-jobs + calibrate + ui-smoke 51 pass/1 skip, console-agent + console-docker +
+  console-near + console-progress + console-signer 57/57; services/gateway/test 349/349; services/paywall agent-ap2 12/12,
+  agent-mandate 3/3, paid-jobs + agent-receipt 36/36, near-scripts + signer-pay 21/21; check-deps OK; strict tsc on the new
+  and changed signer/console/verify files: no new errors (pre-existing: services/gateway mask.ts rawJSON with lib es2023,
+  server.ts observerConfig(flags) typing). Not run: services/paywall/test/agent-jobs.test.ts (agent start-up ~40 s here).
+- 2026-11-13 ~05:45Z owner desk.ps1 -Test on the PC: root 775/775 (was 749), analyst 249/249, paywall 347/347 (was 344; +3 agent-mandate); "OK all terminal suites passed".

@@ -28,3 +28,12 @@ if (Test-Path $cmdFile) { $files += @("-f", $cmdFile) }
 & docker compose @files --profile test --profile agent --profile attest down
 if ($LASTEXITCODE -ne 0) { Write-Host "STOP   docker compose down failed; see the message above."; exit 1 }
 Write-Host "DONE   compose stack stopped (volumes, network and images kept)"
+# privateAI-design-36 ARCH-664: the control plane (ca-control-signer, project chainaim-control-plane), when up.ps1 started it.
+if ((& docker ps -a --filter "label=com.docker.compose.project=chainaim-control-plane" -q) ) {
+  $sigFiles = @("-p", "chainaim-control-plane", "-f", "services/signer/compose.yml")
+  $sigCmd = Join-Path $repo "runtime\compose\signer-commands.yml"
+  if (Test-Path $sigCmd) { $sigFiles += @("-f", $sigCmd) }
+  & docker compose @sigFiles down
+  if ($LASTEXITCODE -ne 0) { Write-Host "STOP   docker compose down of chainaim-control-plane failed; see the message above."; exit 1 }
+  Write-Host "DONE   control plane stopped (ca-control-signer)"
+}

@@ -22,7 +22,9 @@ import {
   UCP_VERSION,
   type Ap2Alg,
   type Ap2Signer,
+  type PublicJwk,
 } from "../../packages/ap2/src/index.ts";
+import { remoteAp2Signer } from "./signer-client.ts";
 import { centsOfAmount, USDC_DECIMALS } from "../../packages/crossask/src/cost.ts";
 import type { JobOffer } from "./jobs.ts";
 
@@ -69,6 +71,27 @@ export function ap2Config(flags: Ap2Flags, env: Record<string, string | undefine
   const signer = signerFromEnv(env, keyEnv);
   if (signer.alg !== alg) throw new Error(`${keyEnv} signs with ${signer.alg}, not --ap2-alg ${alg}`);
   return { signer, keyEnv, alg: alg as Ap2Alg, termsUrl };
+}
+
+/**
+ * privateAI-design-36 ARCH-663: with --signer remote the AP2 key is in ca-control-signer: this console publishes its public
+ * half (GET /.well-known/ucp) and never signs. --ap2-key-env and --ap2-terms-url belong to --signer local (the signer has
+ * its own --terms-url).
+ */
+export function ap2ConfigRemote(flags: Ap2Flags, paidJobsOn: boolean, published: { keys: PublicJwk[] } | undefined): Ap2Config | undefined {
+  const mode = flags.ap2 ?? "off";
+  if (mode !== "on" && mode !== "off") throw new Error(`--ap2 must be on or off, got ${mode}`);
+  for (const f of ["ap2-key-env", "ap2-terms-url"] as const) if (flags[f] !== undefined) throw new Error(`--${f} is for --signer local: with --signer remote the AP2 key and the terms link are ca-control-signer's`);
+  if (mode === "off") {
+    if (flags["ap2-alg"] !== undefined) throw new Error("--ap2-alg needs --ap2 on");
+    return undefined;
+  }
+  if (!paidJobsOn) throw new Error("--ap2 on needs --paid-jobs on (the signed quote is a paid job's quote)");
+  const alg = flags["ap2-alg"] ?? "ES256";
+  if (alg !== "ES256") throw new Error(`--ap2-alg must be ES256, got ${alg}`);
+  const jwk = published?.keys?.[0];
+  if (!jwk) throw new Error("--ap2 on: ca-control-signer publishes no AP2 key");
+  return { signer: remoteAp2Signer(jwk), keyEnv: "ca-control-signer", alg: "ES256", termsUrl: "" };
 }
 
 export type JobCheckoutInput = {

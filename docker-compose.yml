@@ -188,7 +188,14 @@ services:
       # The receipt signing key (ARCH-614), set by up.ps1 only with receipts on; unset = not passed, receipts off.
       - RECEIPT_SIGNING_KEY
       # The AP2 quote signing key (privateAI-design-33 ARCH-628), set by up.ps1 only with -Ap2 on; unset = not passed.
+      # With up.ps1 -Signer separate (privateAI-design-36 ARCH-664) neither signing key is set here: they live in
+      # ca-control-signer (services/signer/compose.yml, project chainaim-control-plane) and this container gets only the
+      # request key below, sent as X-Signer-Key.
       - AP2_SIGNING_KEY
+      - SIGNER_REQUEST_KEY
+    # ca-control-signer publishes 127.0.0.1:8780 on the host from its own project; this is how this container reaches it
+    # (Docker Desktop resolves host.docker.internal itself; the mapping makes it work on Linux Docker too).
+    extra_hosts: ["host.docker.internal:host-gateway"]
     secrets: [gateway-key]
     volumes:
       - ./config:/app/config:ro

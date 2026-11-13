@@ -411,7 +411,7 @@ describe("ARCH-101 / ARCH-112 the page and the relay", () => {
     // defaultPayer (owner 2026-11-07): "me" unless the console runs with --default-payer agent
     // receipts (privateAI-design-32 ARCH-615): false unless the console runs with --receipts on
     // offers (privateAI-design-34 ARCH-642): estimate-first by default, since the repository has config/cost-model.json
-    assert.deepEqual(JSON.parse(cfg.text), { wallet: "intear-wallet", walletName: "Intear Wallet", ttlMin: 15, defaultPayer: "me", attest: null, receipts: false, observer: false, offers: { mode: "estimate-first", modes: ["estimate-first", "run-hold"] } });
+    assert.deepEqual(JSON.parse(cfg.text), { wallet: "intear-wallet", walletName: "Intear Wallet", ttlMin: 15, defaultPayer: "me", attest: null, receipts: false, observer: false, signer: { mode: "local" }, mandates: "off", offers: { mode: "estimate-first", modes: ["estimate-first", "run-hold"] } });
   });
 
   test("ARCH-112: the release relay adds no gateway key and logs neither the payment nor the result", async () => {

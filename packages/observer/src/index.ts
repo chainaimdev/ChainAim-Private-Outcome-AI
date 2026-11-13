@@ -1,5 +1,5 @@
 /**
- * packages/observer, the observer view (privateAI-design-35 ARCH-650; idea from Wraps' "spy bot"): what ANYONE reading
+ * packages/observer, the observer view (privateAI-design-35 ARCH-650): what ANYONE reading
  * NEAR learns about one paid job, read the way an outsider would read it — public NEAR RPC, no key, no ChainAim data.
  *
  * Why: Outcome AI protects the content of a job (de-identified before any model, every NEAR AI call attested). It does

@@ -21,6 +21,11 @@
  *   4. it pays <paywall>/v1/jobs/<jobId>/release with payAndFetchNear (scripts/near.ts) and the tenant's payer:
  *      a NEP-366 delegate signed with the tenant's key and submitted by ChainAim's relayer, so the tenant account
  *      needs USDC only
+ *   3c. with checkout mandates (privateAI-design-36 ARCH-666; --ap2-mandate on) and a signed estimate-first quote, right
+ *      before the payment is signed the agent signs a closed AP2 Checkout Mandate for that quote with the tenant's mandate
+ *      key, nonce = the paywall's invoice id (agent-mandate.ts): step `mandate_signed`; it goes with the paid release
+ *      (header x-ap2-checkout-mandate) and ChainAim's signer verifies it before the job runs. After the receipt check, the
+ *      step `mandate_verified` says whether the receipt records exactly this mandate
  *   4b. with a receipt check (privateAI-design-32 step B; --receipt-verify on), after the release the agent fetches the
  *      job's signed receipt from the console and verifies it with the PINNED public key (agent-receipt.ts): signature,
  *      settlement, the released result's hash, the job id, the amount and the transaction it paid with. The step is
@@ -44,6 +49,7 @@ import { nearBuyer, nearNetworkName, payAndFetchNear, SetupError, type NearBuyer
 import { AskRefused } from "./private-ask-core.ts";
 import { verifyPaidReceipt, type PaidJob, type ReceiptCheck, type ReceiptEvent } from "./agent-receipt.ts";
 import { checkSignedQuote, type Ap2Check, type QuoteSignedEvent } from "./agent-ap2.ts";
+import { MANDATE_HEADER, signMandateFor, type MandateSignedEvent, type MandateSigner, type MandateVerifiedEvent } from "./agent-mandate.ts";
 import type { Ap2ErrorCode } from "../../../packages/ap2/src/index.ts";
 import type { PromptScan } from "./prompt-scan.ts";
 import { loadTenants } from "./rig-core.ts";
@@ -165,11 +171,15 @@ export type AgentEvent =
   | QuoteSignedEvent
   /** ARCH-620: the tenant's policy applied to the quote; every check with its limit and value, the decision and why. */
   | { type: "policy"; tenant: string; decision: "pay" | "approve" | "counter" | "refuse"; reason: string; checks: PolicyCheck[]; spentTodayUsd: string }
+  /** ARCH-666: the tenant's checkout mandate for this quote and this payment, signed right before the payment. */
+  | MandateSignedEvent
   | { type: "signed"; account: string }
   | { type: "settled"; transaction: string; network: string }
   | { type: "released"; jobId: string; rows: number; calls: number; result: unknown }
   /** Step B: the job's signed receipt checked against the pinned key (agent-receipt.ts); after released, before done. */
   | ReceiptEvent
+  /** ARCH-668: the receipt records the mandate ChainAim's signer verified before the run (or does not). */
+  | MandateVerifiedEvent
   | { type: "done" }
   /** code: the UCP AP2 error code when the signed-quote check refused (ARCH-630). */
   | { type: "refused"; reason: string; code?: Ap2ErrorCode }
@@ -244,6 +254,8 @@ export type RunDeps = {
   receiptCheck?: ReceiptCheck;
   /** The signed-quote check before the policy (ARCH-630); unset = no quote_signed step (--ap2-verify off). */
   ap2Check?: Ap2Check;
+  /** ARCH-666: the tenants' checkout mandate keys (--ap2-mandate on); unset = no mandate is signed. */
+  mandates?: MandateSigner;
   queue: AccountQueue;
   /** The mode for a run that names none (agent-jobs.ts --offer-mode, default estimate-first); unset = run-hold. */
   defaultOfferMode?: OfferMode;
@@ -407,6 +419,7 @@ async function runAndPay(
       : refuse(reason);
 
   type Slot = { reply: JobsToolReply; terminal?: AgentEvent & { type: "refused" | "error" }; paid?: PaidJob };
+  let mandateSha: string | undefined;
   const out: Slot = await deps.queue.run(tenant.accountId, async (): Promise<Slot> => {
     // ARCH-620: the policy decides before anything is signed; in this queue slot, so today's spend cannot change under it.
     let maxAmount = deps.maxAmount;
@@ -415,11 +428,22 @@ async function runAndPay(
       if ("refused" in verdict) return refuse(verdict.refused);
       maxAmount = verdict.maxAmount(maxAmount);
     }
+    // ARCH-666: a mandate only for an estimate-first quote ChainAim signed (that is the run step its signer checks it in).
+    const ap2 = job.ap2 as { checkout?: unknown; merchant_authorization?: unknown } | undefined;
+    const withMandate = deps.mandates !== undefined && estimateFirst && typeof ap2?.merchant_authorization === "string" && typeof ap2.checkout === "object" && ap2.checkout !== null;
     let paid;
     try {
       paid = await payAndFetchNear(`${deps.paywall}/v1/jobs/${job.jobId}/release`, { method: "POST", headers: {}, body: "" }, payer, {
         ...(maxAmount ? { maxAmount } : {}),
         ...(deps.ap2Check ? { requireOffer: { payTo: job.payTo, asset: job.asset, amount: job.amount } } : {}),
+        ...(withMandate ? {
+          headersFor: (offer: { invoiceId?: string }) => {
+            const m = signMandateFor(deps.mandates!, tenant.id, job.jobId, ap2 as { checkout: Record<string, unknown>; merchant_authorization: string }, offer.invoiceId);
+            mandateSha = m.event.sha256;
+            emit(m.event);
+            return { [MANDATE_HEADER]: m.presentation };
+          },
+        } : {}),
       });
     } catch (e) {
       const reason = e instanceof Error ? e.message : String(e);
@@ -463,7 +487,17 @@ async function runAndPay(
     return { reply: { status: "paid" as const, amountUsdc: job.totalUsd, transaction, rows }, paid: { jobId: job.jobId, amount: job.amount, transaction, result } };
   });
   // Step B, outside the queue slot (the tenant's next payment need not wait for it): the receipt of the paid job.
-  if (out.paid && deps.receiptCheck) emit(await verifyPaidReceipt(deps.receiptCheck, deps.console, out.paid));
+  if (out.paid && deps.receiptCheck) {
+    const rc = await verifyPaidReceipt(deps.receiptCheck, deps.console, out.paid);
+    emit(rc);
+    // ARCH-668: ChainAim's signer verified the mandate before the run exactly when the receipt it signed records this hash.
+    if (mandateSha) {
+      const recorded = rc.type === "receipt_verified" ? rc.mandateSha256 : undefined;
+      emit(recorded === mandateSha
+        ? { type: "mandate_verified", jobId: out.paid.jobId, sha256: mandateSha, by: "ChainAim's signer", ok: true }
+        : { type: "mandate_verified", jobId: out.paid.jobId, sha256: mandateSha, by: "ChainAim's signer", ok: false, reason: rc.type === "receipt_verified" ? (recorded ? "the receipt records another mandate" : "the receipt records no mandate (is the signer's mandate key registry loaded?)") : "the receipt could not be checked" });
+    }
+  }
   return { reply: out.reply, ...(out.terminal ? { terminal: out.terminal } : {}) };
 }
 

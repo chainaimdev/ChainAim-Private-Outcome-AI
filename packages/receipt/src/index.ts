@@ -106,10 +106,18 @@ export type ReceiptBody = {
    * receipt points at the signed quote. Optional: absent when the console runs with --ap2 off, and old receipts verify.
    */
   merchantAuthSha256?: string;
+  /**
+   * privateAI-design-36 ARCH-668: the buyer agent's closed AP2 Checkout Mandate, verified by ChainAim's signer before the
+   * run: SHA-256 hex of the presentation, the tenant key id, the tenant and its NEAR account, and the nonce (the payment's
+   * invoice id). Optional: absent without a mandate, and older receipts verify.
+   */
+  mandate?: ReceiptMandate;
   price: ReceiptPrice;
   /** ISO 8601. */
   createdAt: string;
 };
+
+export type ReceiptMandate = { sha256: string; kid: string; tenant: string; accountId: string; nonce: string };
 
 export type Signature = { alg: "ed25519"; keyId: string; value: string };
 
@@ -136,6 +144,13 @@ export function checkBody(b: ReceiptBody): void {
   for (const f of ["filesRoot", "sqlSha256", "resultSha256"] as const) if (!SHA256_HEX.test(b[f])) fail(f, "64 lowercase hex characters");
   if (b.evidenceBundleSha256 !== undefined && !SHA256_HEX.test(b.evidenceBundleSha256)) fail("evidenceBundleSha256", "64 lowercase hex characters");
   if (b.merchantAuthSha256 !== undefined && !SHA256_HEX.test(b.merchantAuthSha256)) fail("merchantAuthSha256", "64 lowercase hex characters");
+  if (b.mandate !== undefined) {
+    const m = b.mandate;
+    if (typeof m !== "object" || m === null) fail("mandate", "an object");
+    if (!SHA256_HEX.test(m.sha256)) fail("mandate.sha256", "64 lowercase hex characters");
+    if (typeof m.kid !== "string" || !/^[0-9a-f]{32}$/.test(m.kid)) fail("mandate.kid", "32 lowercase hex characters");
+    for (const f of ["tenant", "accountId", "nonce"] as const) if (typeof m[f] !== "string" || m[f] === "") fail(`mandate.${f}`, "a non-empty string");
+  }
   if (!Array.isArray(b.files) || b.files.length === 0) fail("files", "a non-empty list");
   for (const [i, f] of b.files.entries()) {
     if (typeof f.name !== "string" || f.name === "") fail(`files[${i}].name`, "a non-empty string");

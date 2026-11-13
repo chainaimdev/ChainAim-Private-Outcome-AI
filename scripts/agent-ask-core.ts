@@ -91,6 +91,9 @@ export function stepLine(tenant: string, type: string, d: Record<string, unknown
       const dec = d.decision === "pay" ? "pay OK" : d.decision === "refuse" ? "refused" : `${String(d.decision)} (not paid)`;
       return `${A} Spending policy: ${dec} · ${checks.join(" · ")}`;
     }
+    // privateAI-design-36 ARCH-666/668: the agent's checkout mandate, and ChainAim's signer's check of it (from its receipt).
+    case "mandate_signed": return `${A} Checkout mandate signed OK · tenant key ${String(d.kid).slice(0, 8)}… · permits exactly this signed quote, for this payment only`;
+    case "mandate_verified": return d.ok ? `[ChainAim] Mandate verified by ChainAim's signer OK (before the job ran; recorded in the receipt) · ${String(d.sha256).slice(0, 12)}…` : `[ChainAim] Mandate NOT confirmed by the receipt: ${String(d.reason)}`;
     case "signed": return `${A} Payment signed by ${String(d.account)} (ChainAim's relayer pays the gas)`;
     case "settled": return `[NEAR] Settled on NEAR · transaction ${String(d.transaction)} (${nearblocks(String(d.network), String(d.transaction))})`;
     case "released": return undefined;

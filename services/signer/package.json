@@ -1,0 +1,9 @@
+{
+  "name": "@chainaim/signer-service",
+  "version": "0.1.0",
+  "private": true,
+  "description": "ca-control-signer (privateAI-design-36 ARCH-660): ChainAim's signer as its own service, the control plane of a paid job. Holds the AP2 quote key and the receipt key; sees sizes, ids, hashes and amounts only. No npm dependencies.",
+  "type": "module",
+  "engines": { "node": ">=22.22" },
+  "scripts": { "start": "node src/main.ts", "test": "node --test \"test/*.test.ts\"" }
+}

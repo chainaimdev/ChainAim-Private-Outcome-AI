@@ -19,7 +19,7 @@ import { ExactXrplScheme } from "@x402/xrpl/exact/server";
 import { HTTPFacilitatorClient, type FacilitatorClient } from "@x402/core/server";
 import { bazaarResourceServerExtension } from "@x402/extensions/bazaar";
 import { xrplOf, type PaywallConfig } from "./config.ts";
-import { InvoiceBook, SeenPayments } from "./invoices.ts";
+import { InvoiceBook, SeenPayments, invoiceIdOf } from "./invoices.ts";
 import { JobBook, JobInvoices, jobIdOfPath, parseJob } from "./jobs.ts";
 import type { NearRail } from "./near/rail.ts";
 import { PAID_ROUTES, routesConfig } from "./routes.ts";
@@ -136,6 +136,9 @@ const ROOT_PAGE = `<!doctype html>
 function errorBody(c: Context, status: 400 | 401 | 404 | 409 | 410 | 413 | 422 | 502 | 503, message: string, headers: Record<string, string> = {}): Response {
   return c.json({ error: { message, type: status >= 500 ? "gateway_error" : "invalid_request_error", code: status } }, status, headers);
 }
+
+/** privateAI-design-36 ARCH-667: the longest checkout mandate header passed on to the console (packages/ap2 MANDATE_MAX_CHARS). */
+export const MANDATE_HEADER_MAX = 16_384;
 
 export function createPaywall(config: PaywallConfig, deps: PaywallDeps = {}): Hono {
   const log = deps.log ?? ((line: string) => console.log(line));
@@ -292,12 +295,24 @@ export function createPaywall(config: PaywallConfig, deps: PaywallDeps = {}): Ho
     return c.json(held.result as object, 200);
   }
 
-  /** ARCH-637: POST console /internal/jobs/:id/run; its refusal (409 over the estimate, 422 no result) passes on unsettled. */
+  /**
+   * ARCH-637: POST console /internal/jobs/:id/run; its refusal (409 over the estimate, 422 no result) passes on unsettled.
+   * privateAI-design-36 ARCH-667: the run notice carries the invoice id the verified payment names and, when the buyer's
+   * agent sent one, its AP2 checkout mandate (header x-ap2-checkout-mandate, passed as it came). The paywall checks
+   * neither: ChainAim's signer verifies the mandate in the run step, and a refusal there (422) settles nothing here.
+   */
   async function runOffer(c: Context, jobId: string): Promise<Response> {
     const timeoutMs = (paidJobs!.runTimeoutSec ?? 300) * 1000;
+    const invoiceId = invoiceIdOf(c.req.header("payment-signature"));
+    const mandate = c.req.header("x-ap2-checkout-mandate");
+    if (mandate !== undefined && (mandate.length > MANDATE_HEADER_MAX || !/^[A-Za-z0-9_.~-]+$/.test(mandate))) {
+      jobs!.endPaying(jobId);
+      return errorBody(c, 400, `x-ap2-checkout-mandate must be an SD-JWT presentation of at most ${MANDATE_HEADER_MAX} characters; you were not charged`);
+    }
+    const notice = JSON.stringify({ ...(invoiceId ? { invoiceId } : {}), ...(mandate ? { checkoutMandate: mandate } : {}) });
     let r: Response;
     try {
-      r = await fetch(`${paidJobs!.resultUrl}/internal/jobs/${jobId}/run`, { method: "POST", headers: { "x-jobs-key": paidJobs!.key }, signal: AbortSignal.timeout(timeoutMs) });
+      r = await fetch(`${paidJobs!.resultUrl}/internal/jobs/${jobId}/run`, { method: "POST", headers: { "x-jobs-key": paidJobs!.key, "content-type": "application/json" }, body: notice, signal: AbortSignal.timeout(timeoutMs) });
     } catch (e) {
       jobs!.endPaying(jobId);
       return errorBody(c, 502, (e as Error).name === "TimeoutError" ? `the job did not finish within ${timeoutMs / 1000} s; you were not charged` : "the console could not be reached to run the job; you were not charged");

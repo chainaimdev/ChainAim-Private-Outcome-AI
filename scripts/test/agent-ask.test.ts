@@ -301,3 +301,9 @@ describe("ARCH-630 ARCH-631 the signed quote in -AgentAsk and -VerifyReceipt", (
     assert.match(a.out, /signed quote's amount is not the receipt's amount/);
   });
 });
+
+test("privateAI-design-36 ARCH-666 ARCH-668: the terminal names both sides of the AP2 deal: the agent's mandate and ChainAim's signer's check of it", () => {
+  assert.equal(stepLine("t02", "mandate_signed", { kid: "a1b2c3d4e5f60718", sha256: "f".repeat(64), nonce: "INV1" }), "[Agent t02] Checkout mandate signed OK · tenant key a1b2c3d4… · permits exactly this signed quote, for this payment only");
+  assert.equal(stepLine("t02", "mandate_verified", { ok: true, sha256: "0123456789abcdef".repeat(4) }), "[ChainAim] Mandate verified by ChainAim's signer OK (before the job ran; recorded in the receipt) · 0123456789ab…");
+  assert.equal(stepLine("t02", "mandate_verified", { ok: false, sha256: "0".repeat(64), reason: "the receipt records no mandate" }), "[ChainAim] Mandate NOT confirmed by the receipt: the receipt records no mandate");
+});

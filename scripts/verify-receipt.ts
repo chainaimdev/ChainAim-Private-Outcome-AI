@@ -15,6 +15,11 @@
  *   --ap2-public-key  privateAI-design-33 ARCH-631: the pinned AP2 key (JWK Set). When the receipt carries merchantAuthSha256
  *                 and the file carries the signed quote (ap2 {checkout, merchant_authorization}, as the console serves it with
  *                 --ap2 on), the quote is verified with this key and bound to the receipt: hash, job id and amount
+ *   --mandate-keys  privateAI-design-36 ARCH-668: the tenants' PUBLIC checkout mandate keys (default
+ *                 config/ap2-mandate-keys.json). When the receipt records a mandate and the file carries it (mandate, as
+ *                 the console serves it), the buyer's mandate is verified too: the tenant's signature, the checkout it
+ *                 permits being exactly the signed quote, its nonce being the settled invoice and its tenant the payer
+ *   --mandate-audience  the business id the mandate must be addressed to (default chainaim)
  *
  * Prints what the receipt commits to (ids, dataset, template, files, hashes, model calls, price, settlement): never a
  * question, a row or a key, because the receipt holds none.
@@ -26,15 +31,15 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { createPublicKey } from "node:crypto";
 import { keyIdOf, verifyReceipt, type SignedReceipt } from "../packages/receipt/src/index.ts";
-import { merchantAuthSha256, verifyMerchantAuthorization } from "../packages/ap2/src/index.ts";
+import { attachedJws, merchantAuthSha256, parseMandateRegistry, verifyCheckoutMandate, verifyMerchantAuthorization } from "../packages/ap2/src/index.ts";
 
 const REPO = fileURLToPath(new URL("../", import.meta.url));
 const say = (tag: string, text: string) => process.stdout.write(`${tag.padEnd(7)} ${text}\n`);
 const usage = (m: string): never => { process.stderr.write(`verify-receipt: ${m}\n`); process.exit(2); };
 
-let o: { file?: string; "public-key"?: string; result?: string; "ap2-public-key"?: string };
+let o: { file?: string; "public-key"?: string; result?: string; "ap2-public-key"?: string; "mandate-keys"?: string; "mandate-audience"?: string };
 try {
-  o = parseArgs({ strict: true, options: { file: { type: "string" }, "public-key": { type: "string", default: join(REPO, "config", "receipt-public-key.pem") }, result: { type: "string", default: "auto" }, "ap2-public-key": { type: "string", default: join(REPO, "config", "ap2-public-key.jwk.json") } } }).values;
+  o = parseArgs({ strict: true, options: { file: { type: "string" }, "public-key": { type: "string", default: join(REPO, "config", "receipt-public-key.pem") }, result: { type: "string", default: "auto" }, "ap2-public-key": { type: "string", default: join(REPO, "config", "ap2-public-key.jwk.json") }, "mandate-keys": { type: "string", default: join(REPO, "config", "ap2-mandate-keys.json") }, "mandate-audience": { type: "string", default: "chainaim" } } }).values;
 } catch (e) {
   usage((e as Error).message);
 }
@@ -50,7 +55,7 @@ try { pinnedPem = readFileSync(o!["public-key"]!, "utf8"); } catch (e) { usage(`
 let pinnedId: string;
 try { pinnedId = keyIdOf(createPublicKey(pinnedPem!)); } catch { usage(`${o!["public-key"]} is not a PEM public key`); }
 
-const raw = readJson(file, "the receipt file") as { receipt?: unknown; publicKeyPem?: unknown; body?: unknown; ap2?: unknown };
+const raw = readJson(file, "the receipt file") as { receipt?: unknown; publicKeyPem?: unknown; body?: unknown; ap2?: unknown; mandate?: unknown };
 const receipt = (raw && typeof raw === "object" && "receipt" in raw ? raw.receipt : raw) as SignedReceipt;
 if (!receipt || typeof receipt !== "object" || typeof receipt.body !== "object" || receipt.body === null || typeof receipt.sig !== "object" || receipt.sig === null) usage(`${file} holds no signed receipt ({receipt, publicKeyPem} or {body, sig, ...})`);
 
@@ -98,7 +103,32 @@ if (b.merchantAuthSha256 !== undefined) {
     quoteLine = `sha256 ${b.merchantAuthSha256} · signed by the pinned AP2 key ${(v2 as { kid: string }).kid} · job and amount match the receipt`;
   }
 }
+// ARCH-668: the buyer agent's checkout mandate the receipt records, re-checked with the pinned tenant keys.
+let mandateLine: string | undefined;
+let mandateOk = false;
 const s = receipt.settlement;
+if (b.mandate !== undefined) {
+  const m = b.mandate;
+  const token = raw && typeof raw === "object" ? raw.mandate : undefined;
+  if (typeof token !== "string") {
+    mandateLine = `sha256 ${m.sha256} · tenant ${m.tenant} (${m.accountId}) · the mandate itself is not in this file, not checked`;
+  } else {
+    const fail = (why: string): never => { say("FAIL", `checkout mandate NOT valid: ${why}`); process.exit(1); };
+    let registry;
+    try { registry = parseMandateRegistry(readJson(o!["mandate-keys"]!, "the pinned mandate keys")); } catch (e) { usage(`${o!["mandate-keys"]}: ${(e as Error).message}`); }
+    const v = verifyCheckoutMandate(token, { registry: registry!, aud: o!["mandate-audience"]!, nonce: m.nonce });
+    if (!v.ok) fail(`${v.code}: ${v.reason}`);
+    const ok = v as Extract<typeof v, { ok: true }>;
+    if (ok.sha256 !== m.sha256 || ok.kid !== m.kid || ok.tenant !== m.tenant || ok.accountId !== m.accountId) fail("the receipt's mandate record is not this mandate");
+    const q = raw.ap2 as { checkout?: Record<string, unknown>; merchant_authorization?: unknown } | undefined;
+    if (!q || typeof q.merchant_authorization !== "string" || typeof q.checkout !== "object") fail("the mandate cannot be bound: the file carries no signed quote");
+    if (ok.checkoutJwt !== attachedJws(q!.merchant_authorization as string, q!.checkout as Record<string, unknown>)) fail("the mandate permits another checkout than this receipt's signed quote");
+    if (s && s.invoiceId !== m.nonce) fail("the settled invoice is not the one the mandate permitted");
+    if (s && s.payer !== null && s.payer !== m.accountId) fail("the payment came from another account than the mandate's tenant");
+    mandateOk = true;
+    mandateLine = `sha256 ${m.sha256} · signed by tenant ${m.tenant} (${m.accountId}) key ${m.kid} · permits exactly the signed quote · nonce = invoice ${m.nonce}${s ? " (the settled one)" : ""}`;
+  }
+}
 const lines: [string, string][] = [
   ["receipt", `${b.receiptId} (v${b.v}, made ${b.createdAt})`],
   ["job", `${b.jobId} · quote ${b.quoteId}${b.counterOf ? ` · counter of ${b.counterOf}` : ""}`],
@@ -110,10 +140,11 @@ const lines: [string, string][] = [
   ["result", `sha256 ${b.resultSha256} · ${result === undefined ? resultFrom : `matches ${resultFrom}`}`],
   ["calls", b.calls.length ? b.calls.map((c, i) => `${i + 1} ${c.servedModel} attest ${c.attestStatus}${c.chatId ? ` chat ${c.chatId}` : ""}`).join(" · ") : "none (exact query, no worded answer)"],
   ...(quoteLine ? [["quote", quoteLine] as [string, string]] : []),
+  ...(mandateLine ? [["mandate", mandateLine] as [string, string]] : []),
   ["price", `${b.price.priceUsd} USD = ${b.price.amountUnits} units (${b.price.usdcDecimals} decimals)${b.price.actualUsd ? ` · metered ${b.price.actualUsd}` : ""}`],
   ["settled", s ? `${s.network} transaction ${s.transaction} · invoice ${s.invoiceId}${s.payer ? ` · payer ${s.payer}` : ""} · ${s.settledAt}` : "no settlement attached (signed before settlement)"],
 ];
 for (const [k, val] of lines) process.stdout.write(`        ${k.padEnd(10)} ${val}\n`);
 if (s && /^near:(testnet|mainnet)$/.test(s.network)) process.stdout.write(`        ${"explorer".padEnd(10)} https://${s.network === "near:mainnet" ? "" : "testnet."}nearblocks.io/txns/${s.transaction}\n`);
-say("OK", `receipt valid: signed by the pinned key ${pinnedId!}${v.settled ? ", settlement signed too" : ""}${result === undefined ? "" : ", result matches"}${quoteOk ? ", signed quote matches" : ""}`);
+say("OK", `receipt valid: signed by the pinned key ${pinnedId!}${v.settled ? ", settlement signed too" : ""}${result === undefined ? "" : ", result matches"}${quoteOk ? ", signed quote matches" : ""}${mandateOk ? ", checkout mandate matches" : ""}`);
 process.exit(0);

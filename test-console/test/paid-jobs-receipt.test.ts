@@ -40,7 +40,7 @@ test("ARCH-615 the receipt panel runs after both paid releases, only with receip
   assert.match(p, /fetch\(`\/jobs\/\$\{jobId\}\/receipt`\)/);
   assert.match(p, /RECEIPT_POLL_MAX/);
   assert.match(p, /r\.sig\.keyId/, "the key id is shown, so the owner can match it to desk.ps1 -ReceiptKey");
-  assert.match(p, /JSON\.stringify\(\{ receipt: r, publicKeyPem: j\.publicKeyPem, \.\.\.\(j\.ap2 \? \{ ap2: j\.ap2 \} : \{\}\) \}/, "ARCH-631: the signed quote rides along when there is one");
+  assert.match(p, /JSON\.stringify\(\{ receipt: r, publicKeyPem: j\.publicKeyPem, \.\.\.\(j\.ap2 \? \{ ap2: j\.ap2 \} : \{\}\), \.\.\.\(typeof j\.mandate === "string" \? \{ mandate: j\.mandate \} : \{\}\) \}/, "ARCH-631: the signed quote rides along when there is one; privateAI-design-36 ARCH-668: and the checkout mandate");
   assert.match(p, /a\.download = `chainaim-receipt-\$\{jobId\}\.json`/);
   assert.match(js, /pay\.replaceChildren\(\); proof\.replaceChildren\(\); rcpt\.replaceChildren\(\);/, "cleared on every new paid Ask");
 });

@@ -36,6 +36,19 @@ one READY table across both. Neither launcher is changed or renamed; each team k
                 UCP AP2 merchant_authorization. Prints the key id and the PUBLIC key only; a valid key already there is
                 kept; -Ap2KeyRotate replaces it. Writes the PUBLIC key as a JWK Set to config\ap2-public-key.jwk.json
                 (committed; the agent pins it). Runs on its own.
+  -SignerKeys [-SignerKeysRotateRequest]
+                privateAI-design-36 ARCH-664 (step 1b): put ChainAim's two signing keys in the SELLER folder
+                (<sellerSecretsDir>\signer.env, default C:\CHAINAIM-SELLER-SECRETS) and make the request key the data
+                plane uses to call ca-control-signer (same value in signer.env and <secretsDir>\signer-client.env).
+                The keys are COPIED from <secretsDir>\chainaim.env so their ids (and every receipt issued) stay valid;
+                chainaim.env is only read: removing its two lines is your step (MANUAL_SETUP.md). Prints key ids only.
+                Runs on its own. Then -All starts ca-control-signer in its own compose project (up.ps1 -Signer separate).
+  -MandateKey -MandateTenant ID [-MandateKeyRotate]
+                privateAI-design-36 ARCH-666: tenant ID's AP2 checkout mandate key (ES256): the private key into
+                <secretsDir>\agent-tenants.env (AP2_MANDATE_KEY_<ID>), the PUBLIC key into config\ap2-mandate-keys.json
+                (committed; ca-control-signer and verify-receipt check mandates with it). Runs on its own.
+  -Planes       report only: which container is data plane and which control plane, and that no data-plane container
+                holds a ChainAim signing key (checked by NAME in each container's environment; no value is read or printed)
   -RejudgeReceiver ACCOUNT  -RejudgeReason "TEXT"
                 after the start, clear FALSE reconcile mismatches in the NEAR admin UI (near-watch src/rejudge.ts
                 --all-mismatches; chainaim-adminUI-NEAR src/reconcile.ts rejudge). ACCOUNT is the pay-to you checked the
@@ -162,6 +175,12 @@ param(
   [switch]$Ap2Key,
   [switch]$Ap2KeyRotate,
   [string]$Ap2KeyName = "AP2_SIGNING_KEY",
+  [switch]$SignerKeys,
+  [switch]$SignerKeysRotateRequest,
+  [switch]$MandateKey,
+  [string]$MandateTenant = "",
+  [switch]$MandateKeyRotate,
+  [switch]$Planes,
   [switch]$NoBrowser,
   [string[]]$Logs = @(),
   [int]$LogLines = 40,
@@ -292,6 +311,12 @@ if (-not $All -and ($AllSkipTests -or $AllSkipSmoke -or $AllSmbSample)) { Stop-H
 if (@("private", "admin") -notcontains $ShipRepo) { Stop-Here "-ShipRepo must be private or admin" }
 if ($ShipRepo -ne "private" -and -not $Ship) { Stop-Here "-ShipRepo needs -Ship" }
 $otherModes = $Check -or $Stop -or $Test -or $Build -or $WithStub -or $Agent -or $Attest -or $Receipts -or $ReceiptKey -or $Ap2Key -or $All -or $Ship -or $Logs.Count -or $Memory -or $Smoke -or $SmbSample -or $ChiroSample -or $RejudgeReceiver -or $Calibrate -or $VerifyJob
+# privateAI-design-36: -SignerKeys, -MandateKey and -Planes each run on their own; their options only with them.
+$keyModes = @(@($SignerKeys, $MandateKey, $Planes) | Where-Object { $_ }).Count
+if ($keyModes -gt 1 -or ($keyModes -eq 1 -and ($otherModes -or $AgentAsk -or $VerifyReceipt))) { Stop-Here "-SignerKeys, -MandateKey and -Planes each run on their own: leave out the other mode switches" }
+if ($SignerKeysRotateRequest -and -not $SignerKeys) { Stop-Here "-SignerKeysRotateRequest needs -SignerKeys" }
+if (($MandateTenant -or $MandateKeyRotate) -and -not $MandateKey) { Stop-Here "-MandateTenant and -MandateKeyRotate need -MandateKey" }
+if ($MandateKey -and $MandateTenant -notmatch '^[a-z0-9_-]{1,32}$') { Stop-Here "-MandateKey needs -MandateTenant ID (a tenant folder under rig\tenants, e.g. t02)" }
 # -Calibrate (privateAI-design-34 ARCH-635) runs on its own too; its options are only valid with it.
 if ($Calibrate -and ($Check -or $Stop -or $Test -or $Build -or $WithStub -or $Agent -or $Attest -or $Receipts -or $ReceiptKey -or $Ap2Key -or $All -or $Ship -or $Logs.Count -or $Memory -or $Smoke -or $SmbSample -or $ChiroSample -or $RejudgeReceiver -or $AgentAsk -or $VerifyReceipt)) { Stop-Here "-Calibrate runs on its own: leave out the other mode switches" }
 if (-not $Calibrate -and ($CalibrateComputeUsdPerHour -or $CalibrateDryRun)) { Stop-Here "-CalibrateComputeUsdPerHour and -CalibrateDryRun need -Calibrate" }
@@ -498,7 +523,8 @@ if ($Calibrate) {
 function Invoke-Suites {
   Say "TEST" "terminal suites (each starts its own servers; near-watch path from config\local\repos.json)"
   # packages/receipt and packages/agent-policy: privateAI-design-32 ARCH-613..616 and ARCH-620..624; packages/ap2: design-33 ARCH-626; packages/offer: design-34 ARCH-634 (pure, no servers).
-  & node --test "packages/crossask/test/*.test.ts" "packages/receipt/test/*.test.ts" "packages/agent-policy/test/*.test.ts" "packages/ap2/test/*.test.ts" "packages/offer/test/*.test.ts" "packages/observer/test/*.test.ts" "scripts/test/*.test.ts" "services/gateway/test/*.test.ts" "test-console/test/*.test.ts" | Out-Host
+  # packages/signer + services/signer: privateAI-design-36 ARCH-660..668 (the control-plane signer and the checkout mandate).
+  & node --test "packages/crossask/test/*.test.ts" "packages/receipt/test/*.test.ts" "packages/agent-policy/test/*.test.ts" "packages/ap2/test/*.test.ts" "packages/offer/test/*.test.ts" "packages/observer/test/*.test.ts" "packages/signer/test/*.test.ts" "services/signer/test/*.test.ts" "scripts/test/*.test.ts" "services/gateway/test/*.test.ts" "test-console/test/*.test.ts" | Out-Host
   $a = $LASTEXITCODE
   & npm --prefix services\analyst test | Out-Host
   $b = $LASTEXITCODE
@@ -649,6 +675,13 @@ if (Test-Path $settingsPath) {
   $P = [pscustomobject]@{}
 }
 $secrets = if ($P.secretsDir) { [string]$P.secretsDir } else { "C:\PRIV-AI-SECRETS" }
+# privateAI-design-36 ARCH-664: the seller (control plane) keys live in their own folder; signer.mode auto|separate|in-console
+# (auto = separate once <sellerSecretsDir>\signer.env exists), signer.url = how the console API reaches the signer.
+$sellerSecrets = if ($P.sellerSecretsDir) { [string]$P.sellerSecretsDir } else { "C:\CHAINAIM-SELLER-SECRETS" }
+$signerMode = if ($P.signer -and $P.signer.mode) { [string]$P.signer.mode } else { "auto" }
+if (@("auto", "separate", "in-console") -notcontains $signerMode) { Stop-Here "$Settings signer.mode must be auto, separate or in-console" }
+$signerUrl = if ($P.signer -and $P.signer.url) { [string]$P.signer.url } else { "http://host.docker.internal:8780" }
+if ($sellerSecrets.TrimEnd("\") -ieq $secrets.TrimEnd("\")) { Stop-Here "$Settings sellerSecretsDir must be another folder than secretsDir: the point is two places" }
 $paid = -not ($P.paidJobs -and $P.paidJobs.enabled -eq $false)
 $admin = -not ($P.adminUi -and $P.adminUi.enabled -eq $false)
 $agentMode = if ($Agent) { "on" } elseif ($P.agent -and $P.agent.enabled -is [bool]) { $(if ($P.agent.enabled) { "on" } else { "off" }) } elseif ($P.agent -and $P.agent.enabled) { [string]$P.agent.enabled } else { "auto" }
@@ -673,6 +706,78 @@ if ($P.paidJobs -and $P.paidJobs.feePerModelCallUsd) { Say "NOTE" "$Settings has
 $receiptsMode = if ($Receipts) { "on" } elseif ($P.receipts -and $P.receipts.enabled -is [bool]) { $(if ($P.receipts.enabled) { "on" } else { "off" }) } elseif ($P.receipts -and $P.receipts.enabled) { [string]$P.receipts.enabled } else { "auto" }
 if (@("auto", "on", "off") -notcontains $receiptsMode) { Stop-Here "$Settings receipts.enabled must be auto, on or off" }
 if ($receiptsMode -eq "on" -and -not $paid) { Stop-Here "receipts need paid jobs on (paidJobs.enabled in $Settings): a receipt is for a paid job" }
+
+# ---------------------------------------------------------------- -SignerKeys: ChainAim's keys into the seller folder, then stop
+# privateAI-design-36 ARCH-664. The Node script does the file work; chainaim.env is only read (never edited).
+if ($SignerKeys) {
+  if (-not (Test-Path $secrets)) { Stop-Here "the secrets folder $secrets does not exist (secretsDir in $Settings)" }
+  $skArgs = @("scripts\signer-keys.ts", "signer", "--buyer-file", (Join-Path $secrets "chainaim.env"), "--seller-file", (Join-Path $sellerSecrets "signer.env"), "--client-file", (Join-Path $secrets "signer-client.env"))
+  if ($SignerKeysRotateRequest) { $skArgs += "--rotate-request-key" }
+  Say "RUN" "ChainAim's signing keys into $sellerSecrets\signer.env, request key into both folders; only key ids are printed"
+  & node @skArgs
+  if ($LASTEXITCODE) { Stop-Here "scripts\signer-keys.ts stopped (exit $LASTEXITCODE): its message is above" }
+  Say "NEXT" ".\test-console\desk.ps1 -All -AllSkipTests  (starts ca-control-signer in project chainaim-control-plane; the console API then holds no ChainAim key)"
+  exit 0
+}
+# ---------------------------------------------------------------- -MandateKey: a tenant's checkout mandate key, then stop
+if ($MandateKey) {
+  $agentEnv = Join-Path $secrets "agent-tenants.env"
+  if (-not (Test-Path $agentEnv)) { Stop-Here "$agentEnv does not exist (MANUAL_SETUP.md, Tab 03 agent mode, M2)" }
+  $mkArgs = @("scripts\signer-keys.ts", "mandate", "--agent-env-file", $agentEnv, "--tenant", $MandateTenant, "--tenants-dir", "rig\tenants", "--registry", "config\ap2-mandate-keys.json")
+  if ($MandateKeyRotate) { $mkArgs += "--rotate" }
+  Say "RUN" "tenant $MandateTenant checkout mandate key: private into $agentEnv, PUBLIC into config\ap2-mandate-keys.json"
+  & node @mkArgs
+  if ($LASTEXITCODE) { Stop-Here "scripts\signer-keys.ts stopped (exit $LASTEXITCODE): its message is above" }
+  Say "NEXT" ".\test-console\desk.ps1 -All -AllSkipTests  (the agent signs a checkout mandate per payment; ca-control-signer verifies it before the run)"
+  exit 0
+}
+# ---------------------------------------------------------------- -Planes: who is data plane, who is control plane
+# Environment variable NAMES only (docker inspect, values dropped in this script before anything is printed).
+$SellerKeyNames = @("AP2_SIGNING_KEY", "RECEIPT_SIGNING_KEY")
+function EnvNames([string]$container) {
+  $raw = @(Quiet { & docker inspect --format "{{range .Config.Env}}{{println .}}{{end}}" $container 2>$null })
+  $names = @($raw | ForEach-Object { $ix = ([string]$_).IndexOf("="); if ($ix -gt 0) { ([string]$_).Substring(0, $ix) } }); $raw = $null
+  return $names
+}
+function PlanesReport {
+  $rows = @(
+    @("ca-gateway", "data", "masks and restores; unmasked text stays here"), @("ca-presidio", "data", "finds personal data"),
+    @("ca-analyst", "data", "runs the exact query on your files"), @("ca-console-api", "data", "holds the question and the result"),
+    @("ca-agent", "data (buyer)", "the tenant's agent: tenant keys, signs the mandate"), @("ca-attest", "data", "checks NEAR AI attestation"),
+    @("ca-paywall", "control (local)", "verifies and settles the NEAR payment; still on this PC (Stage 3 moves it)"),
+    @("ca-control-signer", "control", "ChainAim's signer: prices, AP2 quote, mandate check, receipts"))
+  $bad = 0
+  # Before step 1b (no ca-control-signer) the keys are in the console API by design: said, not counted as a failure.
+  $separate = (Quiet { & docker inspect -f "{{.State.Running}}" ca-control-signer 2>$null }) -eq "true"
+  Write-Host ""
+  Write-Host "Planes on this PC (privateAI-design-36): environment variable NAMES only$(if (-not $separate) { '  [signer in the console API: run desk.ps1 -SignerKeys to split]' })"
+  foreach ($r in $rows) {
+    $running = (Quiet { & docker inspect -f "{{.State.Running}}" $r[0] 2>$null }) -eq "true"
+    if (-not $running) { Write-Host ("  {0,-18} {1,-16} {2,-6} {3}" -f $r[0], $r[1], "-", "not running"); continue }
+    $names = EnvNames $r[0]
+    $held = @($SellerKeyNames | Where-Object { $names -contains $_ })
+    if ($r[0] -eq "ca-control-signer") {
+      $ok = $held.Count -eq 2
+      Write-Host ("  {0,-18} {1,-16} {2,-6} {3}" -f $r[0], $r[1], $(if ($ok) { "OK" } else { "FAIL" }), "holds $($held -join ', ') ($($r[2]))")
+      if (-not $ok) { $bad++ }
+    } else {
+      $ok = $held.Count -eq 0
+      $tag = if ($ok) { "OK" } elseif ($separate) { "FAIL" } else { "INFO" }
+      Write-Host ("  {0,-18} {1,-16} {2,-6} {3}" -f $r[0], $r[1], $tag, $(if ($ok) { "no ChainAim signing key ($($r[2]))" } else { "holds $($held -join ', ') (run desk.ps1 -SignerKeys, then -All)" }))
+      if ($tag -eq "FAIL") { $bad++ }
+    }
+  }
+  $buyerEnv = Join-Path $secrets "chainaim.env"
+  $left = @()
+  if (Test-Path $buyerEnv) { foreach ($line in Get-Content $buyerEnv) { if ($line -match '^\s*(AP2_SIGNING_KEY|RECEIPT_SIGNING_KEY)\s*=') { $left += $Matches[1] } } }
+  if ($left.Count) { Write-Host ("  {0,-18} {1,-16} {2,-6} {3}" -f "buyer secrets", "data", "WARN", "$($left -join ', ') still in ${buyerEnv}: remove those lines (MANUAL_SETUP.md 2026-11-13 Signer split and checkout mandates, step 2)") }
+  else { Write-Host ("  {0,-18} {1,-16} {2,-6} {3}" -f "buyer secrets", "data", "OK", "$buyerEnv holds none of ChainAim's signing keys") }
+  $sk = HttpJson "http://127.0.0.1:8780/healthz"
+  if ($sk -and $sk.ok) { Write-Host ("  {0,-18} {1,-16} {2,-6} {3}" -f "signer keys", "control", "OK", "AP2 $($sk.ap2Kid)  receipt $($sk.receiptKeyId)  mandates $(if ($sk.mandates) { 'on' } else { 'off' })") }
+  Write-Host "  One PC: separation by design (own compose project, network chainaim-control, keys folder $sellerSecrets), not by hardware."
+  return $bad
+}
+if ($Planes) { $b = PlanesReport; if ($b) { Stop-Here "$b plane check(s) failed: see the FAIL lines above" }; exit 0 }
 
 # ---------------------------------------------------------------- -ReceiptKey: the receipt signing key, then stop
 # The Node script reads and writes chainaim.env; this script only passes the path, so it still never reads a secret value.
@@ -738,7 +843,8 @@ function Report {
     @("near-watch", "http://127.0.0.1:8790/healthz", $admin),
     @("NEAR admin UI", "http://127.0.0.1:8800/", $admin),
     @("agent (tab 03)", "http://127.0.0.1:8760/healthz", $agentOn),
-    @("attest (ca-attest)", "http://127.0.0.1:8770/healthz", ($attestMode -ne "off" -and $paid)))
+    @("attest (ca-attest)", "http://127.0.0.1:8770/healthz", ($attestMode -ne "off" -and $paid)),
+    @("control-signer", "http://127.0.0.1:8780/healthz", ($paid -and ($signerMode -eq "separate" -or ($signerMode -eq "auto" -and (Test-Path (Join-Path $sellerSecrets "signer.env")))))))
   $notes = @(); $bad = 0
   foreach ($r in $rows) {
     if (-not $r[2]) { Write-Host ("  {0,-20} off in {1}" -f $r[0], $Settings); continue }
@@ -794,6 +900,8 @@ function Report {
     elseif ($receiptsMode -eq "on") { Write-Host ("  {0,-20} {1,-5} {2}" -f "receipts", "DOWN", "required (-Receipts / receipts.enabled on) but the console API reports them off"); $bad++ }
     else { Write-Host ("  {0,-20} {1,-5} {2}" -f "receipts", "off", "no signing key yet: run .\test-console\desk.ps1 -ReceiptKey once, then start again") }
   } else { Write-Host ("  {0,-20} off in {1}" -f "receipts", $Settings) }
+  # privateAI-design-36: the planes, by environment variable name only.
+  if ($paid) { $bad += PlanesReport }
   foreach ($n in $notes) { Write-Host "  $n" }
   return $bad
 }
@@ -878,7 +986,12 @@ $privArgs.DefaultPayer = $defPayer
 # desk.json console.crossaskMaxPromptChars, else 16000. up.ps1 checks the range.
 $maxPrompt = if ($CrossaskMaxPromptChars -gt 0) { $CrossaskMaxPromptChars } elseif ($P.console -and $P.console.crossaskMaxPromptChars) { [int]$P.console.crossaskMaxPromptChars } else { 16000 }
 $privArgs.CrossaskMaxPromptChars = $maxPrompt
-Say "RUN" "test-console\up.ps1 -ReplaceRunning -PaidJobs $($privArgs.PaidJobs)$(if ($Build) { ' -Build' })$(if ($WithStub) { ' -Test' })$(if ($agentMode -ne 'auto') { ' -Agent ' + $agentMode })$(if ($attestMode -ne 'auto') { ' -Attest ' + $attestMode }) -AttestGpuCheck $attestGpu$(if ($receiptsMode -ne 'auto') { ' -Receipts ' + $receiptsMode }) -DefaultPayer $defPayer$(if ($defAnswer) { ' -DefaultAnswerModel ' + $defAnswer }) -CrossaskMaxPromptChars $maxPrompt"
+# privateAI-design-36 ARCH-664: where ChainAim signs (up.ps1 -Signer), the seller folder and the signer's URL.
+$privArgs.Signer = $signerMode
+$privArgs.SellerSecretsFile = Join-Path $sellerSecrets "signer.env"
+$privArgs.SignerClientFile = Join-Path $secrets "signer-client.env"
+$privArgs.SignerUrl = $signerUrl
+Say "RUN" "test-console\up.ps1 -ReplaceRunning -PaidJobs $($privArgs.PaidJobs)$(if ($Build) { ' -Build' })$(if ($WithStub) { ' -Test' })$(if ($agentMode -ne 'auto') { ' -Agent ' + $agentMode })$(if ($attestMode -ne 'auto') { ' -Attest ' + $attestMode }) -AttestGpuCheck $attestGpu$(if ($receiptsMode -ne 'auto') { ' -Receipts ' + $receiptsMode }) -DefaultPayer $defPayer$(if ($defAnswer) { ' -DefaultAnswerModel ' + $defAnswer }) -CrossaskMaxPromptChars $maxPrompt -Signer $signerMode -SignerUrl $signerUrl"
 & $privUp @privArgs
 if ($LASTEXITCODE) { Stop-Here "test-console\up.ps1 stopped (exit $LASTEXITCODE): its STOP line above names the fix" }
 

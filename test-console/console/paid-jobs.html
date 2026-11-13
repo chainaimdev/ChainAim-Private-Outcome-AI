@@ -219,12 +219,17 @@
       const byAgent = !agentCheck ? "" : agentCheck.ok ? ` · verified by ${agentCheck.who} ✓` : ` · ${agentCheck.who}'s check failed ✗`;
       // ARCH-631: the signed quote the receipt points at (--ap2 on only).
       const quoteHash = typeof r.body.merchantAuthSha256 === "string" ? ` · quote ${r.body.merchantAuthSha256.slice(0, 8)}…` : "";
-      head.textContent = `Signed receipt ✓ · ${r.body.datasetId}${r.body.templateLabel ? ` · "${r.body.templateLabel}"` : ""} · ${settled} · key id ${r.sig.keyId}${quoteHash}${byAgent}`;
-      head.title = "Signed by this console. It holds hashes of the files, query, result and model calls, never the question, rows or answer.";
+      // privateAI-design-36 ARCH-668: the buyer agent's checkout mandate the receipt records (verified by the signer before the run).
+      const m = r.body.mandate;
+      const mandateLine = m && typeof m.sha256 === "string" ? ` · mandate by tenant ${m.tenant} ${m.sha256.slice(0, 8)}…` : "";
+      // ARCH-663: who signed it: ChainAim's separate signer (ca-control-signer) or this console.
+      const signedBy = config.signer && config.signer.mode === "remote" ? "ChainAim's signer (a separate service)" : "this console";
+      head.textContent = `Signed receipt ✓ · ${r.body.datasetId}${r.body.templateLabel ? ` · "${r.body.templateLabel}"` : ""} · ${settled} · key id ${r.sig.keyId}${quoteHash}${mandateLine}${byAgent}`;
+      head.title = `Signed by ${signedBy}. It holds hashes of the files, query, result and model calls, never the question, rows or answer.`;
       const dl = document.createElement("button");
       dl.type = "button"; dl.className = "ghost"; dl.id = "xreceiptGo"; dl.textContent = "Download receipt";
       dl.onclick = () => {
-        const blob = new Blob([JSON.stringify({ receipt: r, publicKeyPem: j.publicKeyPem, ...(j.ap2 ? { ap2: j.ap2 } : {}) }, null, 2)], { type: "application/json" });
+        const blob = new Blob([JSON.stringify({ receipt: r, publicKeyPem: j.publicKeyPem, ...(j.ap2 ? { ap2: j.ap2 } : {}), ...(typeof j.mandate === "string" ? { mandate: j.mandate } : {}) }, null, 2)], { type: "application/json" });
         const a = document.createElement("a");
         a.href = URL.createObjectURL(blob); a.download = `chainaim-receipt-${jobId}.json`;
         document.body.append(a); a.click(); a.remove();
@@ -379,6 +384,9 @@
           const checks = Array.isArray(d.checks) ? d.checks.filter((c) => CHECK[c.check]).map((c) => `${CHECK[c.check](c)} ${c.ok ? "✓" : "✗"}`) : [];
           step(by(AGENT), `Spending policy: ${d.decision === "pay" ? "pay ✓" : d.decision === "refuse" ? "refused ✗" : `${d.decision} ✗`} · ${checks.join(" · ")}`);
         }
+        // privateAI-design-36 ARCH-666/668: the buyer side of the AP2 deal, and ChainAim's signer's check of it (from its receipt).
+        else if (type === "mandate_signed") step(by(AGENT), `Checkout mandate signed ✓ · tenant key ${String(d.kid).slice(0, 8)}… · permits exactly this signed quote, for this payment only`);
+        else if (type === "mandate_verified") step(by("ChainAim"), d.ok ? `Mandate verified by ChainAim's signer ✓ (before the job ran; recorded in the receipt) · ${String(d.sha256).slice(0, 12)}…` : `Mandate not confirmed by the receipt ✗: ${d.reason}`);
         else if (type === "signed") step(by(AGENT), `Payment signed by ${d.account} (ChainAim's relayer pays the gas)`);
         else if (type === "settled") { settled = d; step(by("NEAR"), "Settled on NEAR · ", explorerLink(d.network, d.transaction)); }
         else if (type === "released") { result = d.result; step(by("ChainAim"), `Result released: ${d.rows} row(s)`); }

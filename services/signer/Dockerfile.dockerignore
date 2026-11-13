@@ -1,0 +1,20 @@
+# Build context for services/signer/Dockerfile only. Everything is left out except what the Dockerfile copies; keys, data,
+# runs and the private data-source settings never enter the context.
+*
+!packages/crossask/package.json
+!packages/crossask/src/cost.ts
+!packages/receipt/package.json
+!packages/receipt/src
+!packages/ap2/package.json
+!packages/ap2/src
+!packages/offer/package.json
+!packages/offer/src
+!packages/signer/package.json
+!packages/signer/src
+!services/signer/package.json
+!services/signer/src
+!config
+config/local
+config/data-sources.json
+**/node_modules
+**/*.env

@@ -501,3 +501,57 @@ One step at a time; each ends with what you should see.
    paths and the owner's name removed; the judge files carry their timestamp in the name
    (docs/judge/sample-receipt-2026-11-13T0214Z.json = job 81ad24c5..., docs/judge/demo-script-2026-11-13T0230Z.md) and may
    move to .gitignore in a later check-in.
+
+## 2026-11-13 Signer split and checkout mandates (privateAI-design-36, v2.0.0)
+
+What changes on the PC: ChainAim's two signing keys move from the buyer-side folder to their own folder, read only by
+`ca-control-signer` (compose project `chainaim-control-plane`). The console API then holds no ChainAim key; it calls the
+signer with a request key. Each tenant that the agent pays for gets a checkout mandate key.
+
+Folders after the split (names only; values never leave the files):
+
+| Folder | File | Holds | Read by |
+|---|---|---|---|
+| `C:\PRIV-AI-SECRETS` (data plane, yours) | chainaim.env | OPENROUTER_API_KEY, BEDROCK_API_KEY, NEARAI_API_KEY (no longer AP2_SIGNING_KEY or RECEIPT_SIGNING_KEY) | gateway, agent's Bedrock key |
+| | agent-tenants.env | tenants' NEAR keys, and new AP2_MANDATE_KEY_T02 (desk.ps1 -MandateKey) | ca-agent |
+| | signer-client.env (new) | SIGNER_REQUEST_KEY | console API |
+| | near-testnet.env, paid-jobs.env, paid-jobs-settings.env, near-watch.env | unchanged (the paywall and relayer stay on the PC until Stage 3) | paywall, near-watch |
+| `C:\CHAINAIM-SELLER-SECRETS` (control plane, ChainAim's; desk.json sellerSecretsDir) | signer.env (new) | AP2_SIGNING_KEY, RECEIPT_SIGNING_KEY (copied, same key ids), SIGNER_REQUEST_KEY | ca-control-signer only |
+
+Steps (the AI gives them one at a time in chat, each with its expected result):
+
+1. `.\test-console\desk.ps1 -SignerKeys`
+   Expect: `OK AP2_SIGNING_KEY key id 83816e6f...: copied into C:\CHAINAIM-SELLER-SECRETS\signer.env`, the same for
+   `RECEIPT_SIGNING_KEY key id d27d1e9f...`, `OK SIGNER_REQUEST_KEY created ...`, and a `NEXT` line saying both keys are
+   still in chainaim.env. Only key ids are printed. The key ids must be 83816e6f... and d27d1e9f... (the pinned public
+   keys and every receipt issued so far stay valid).
+2. Remove the two lines from the buyer side by hand: open `C:\PRIV-AI-SECRETS\chainaim.env` in Notepad, delete the line
+   starting `AP2_SIGNING_KEY=` and the line starting `RECEIPT_SIGNING_KEY=`, save. Do not copy the values anywhere else
+   and do not paste them into a chat. (The copies in signer.env are the only ones from now on: back up that folder the way
+   you back up C:\PRIV-AI-SECRETS.)
+3. `.\test-console\desk.ps1 -MandateKey -MandateTenant t02`
+   Expect: `OK AP2_MANDATE_KEY_T02 (tenant t02, chainaim-t02-seller.testnet) key id <32 hex>: created in
+   C:\PRIV-AI-SECRETS\agent-tenants.env (not printed)` and `public key for t02 written to config\ap2-mandate-keys.json`.
+   Repeat for t01 / t03 if the demo uses them (a tenant without one cannot pay an estimate-first job while mandates are on).
+4. `.\test-console\desk.ps1 -Test`
+   Expect: `OK all terminal suites passed` (the root suites now include packages\signer and services\signer; the paywall
+   suite includes agent-mandate.test.ts).
+5. `.\test-console\desk.ps1 -All -AllSkipTests`
+   Expect from up.ps1: `OK signer separate: ca-control-signer (project chainaim-control-plane) holds ChainAim's keys from
+   ...signer.env`, `OK ca-control-signer answers`, `OK control plane: ca-control-signer on 127.0.0.1:8780 ... seller keys
+   removed from this process before the data plane starts`; no `WARN ... still in chainaim.env`. The READY table has a
+   `control-signer OK` row and the planes table below it.
+6. `.\test-console\desk.ps1 -Planes`
+   Expect: every data-plane container `OK no ChainAim signing key`; `ca-control-signer control OK holds AP2_SIGNING_KEY,
+   RECEIPT_SIGNING_KEY`; `buyer secrets OK`; `signer keys OK AP2 83816e6f... receipt d27d1e9f... mandates on`.
+7. Tab 03, Orion "Credit limit exposure", AI agent t02, Estimate first. Expect the new steps "Checkout mandate signed ✓"
+   (before "Payment signed") and "Mandate verified by ChainAim's signer ✓" (after the receipt check), and the receipt line
+   "mandate by tenant t02 ...". Then Download receipt and
+   `.\test-console\desk.ps1 -VerifyReceipt <the downloaded file>`: expect `... signed quote matches, checkout mandate matches`.
+
+For the judges: nothing to set up. They run the three README "Judges" commands with Node only; after the live run the
+sample receipt can be replaced by one that carries the mandate (then step 1 of the judge path also prints the mandate
+line), and `config\ap2-mandate-keys.json` (public keys, committed) is what verify-receipt checks it with.
+
+Optional, cloud signer (step 1c): docs/deploy/signer-cloud.md (Railway or AWS App Runner); then desk.json
+`"signer": { "mode": "separate", "url": "https://..." }`.

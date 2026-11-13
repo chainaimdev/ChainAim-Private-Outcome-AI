@@ -2,8 +2,7 @@
 
 Chat near-ai-impl-8, 2026-11-13 ~02:00Z. Status: BUILT (ARCH-650..653), see §5. Owner request 2026-11-13 01:48Z:
 "Please proceed from A to F" (the Entry A plan in DESIGN-REF/near-hackathon-session-2026-11-13-entry-a.md §5, kept
-local). Source of the observer idea: Wraps (XRPL hackathon, github.com/hrishabhayush/wraps), its "spy bot" that shows
-what an observer learns from x402 payments (chat "ref privacy projects-1").
+local).
 
 ## 1. Why
 
@@ -55,9 +54,14 @@ ARCH-653: DEMO.md "Refusal scene": a quote above the agent's per-job cap is refu
 | ARCH-650 observer view | built, tests pass in the VM (observer 11/11; console-paid-jobs 31 + 1 skip) |
 | ARCH-651 desk flag | built; desk.test +1; price effect to be seen live (MANUAL_SETUP 2026-11-13 step 3) |
 | ARCH-652 README judge path | built: scripts/observe-receipt.ts (+2 tests), docs/judge/sample-receipt-2026-11-13T0214Z.json, both commands OK on the sample; judge test command 471/471 |
-| ARCH-653 refusal scene + video script | written: docs/judge/demo-script-2026-11-13T0230Z.md; Scene 2 to be run by the owner (step 4) |
+| ARCH-653 refusal scene + video script | written: docs/judge/older/demo-script-2026-11-13T0230Z.md (superseded by docs/judge/demo-script-2026-11-13T0530Z.md); Scene 2 to be run by the owner (step 4) |
 
 Full VM run: 741 = 740 pass + 1 skip, 0 fail.
+
+Deployment fact (checked 2026-11-13 ~03:10Z, docker-compose.yml): the gateway (ca-gateway, 127.0.0.1:8720), Presidio
+(no published port), analyst, console and agent all run in Docker on the owner's PC; unmasked text never leaves the PC.
+"Trust me" infrastructure is therefore closed for the local deployment; the TEE gateway is for a hosted ChainAim
+gateway (README "Roadmap").
 
 Not done here (Entry A §6, after the hackathon): gateway in a TEE with a client measurement check, provable no-logs,
 buyer-side AP2 mandate, on-chain spending policy, blind-token credits.

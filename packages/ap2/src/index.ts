@@ -248,3 +248,6 @@ export function verifyMerchantAuthorization(
 export function merchantAuthSha256(merchantAuthorization: string): string {
   return createHash("sha256").update(merchantAuthorization, "utf8").digest("hex");
 }
+
+// privateAI-design-36 ARCH-665: the buyer side, the closed Checkout Mandate (mandate.ts).
+export * from "./mandate.ts";

@@ -1,0 +1,32 @@
+# ChainAim's CONTROL PLANE on this PC (privateAI-design-36 ARCH-664): ca-control-signer alone, in its own compose project
+# (chainaim-control-plane), on its own network (chainaim-control) and published on 127.0.0.1:8780 only. It is NOT on the
+# data plane's network chainaim-test: the console API reaches it the way it would reach a cloud signer, over a URL
+# (http://host.docker.internal:8780 here, https://... on Railway or AWS), with a request key.
+# Start it with test-console\up.ps1 -Signer separate (desk.ps1 -All does), not by hand: up.ps1 reads the seller keys from
+# C:\CHAINAIM-SELLER-SECRETS\signer.env, puts them in its own process for this one command only, and writes the command
+# (prices, terms link, mandate keys file) to runtime\compose\signer-commands.yml (no secrets):
+#   docker compose -p chainaim-control-plane -f services/signer/compose.yml -f runtime/compose/signer-commands.yml up -d
+# On one PC this is separation by design (own runtime, network, keys folder), not by hardware: docs/deploy/signer-cloud.md
+# moves the same image to a cloud server. Secrets are listed by NAME only; never run "docker compose config" or
+# "docker inspect" where others can read the output: both print the values.
+name: chainaim-control-plane
+
+networks:
+  chainaim-control:
+    name: chainaim-control
+
+services:
+  control-signer:
+    build: { context: ../.., dockerfile: services/signer/Dockerfile, labels: { chainaim.plane: control } }
+    image: chainaim-control-signer:local
+    container_name: ca-control-signer
+    labels: { chainaim.plane: control, chainaim.role: "ChainAim signer: prices, AP2 quotes, mandate checks, receipts" }
+    environment:
+      - SIGNER_REQUEST_KEY
+      - AP2_SIGNING_KEY
+      - RECEIPT_SIGNING_KEY
+    # The base command; up.ps1 writes the full one (catalog, fees, cost model, terms, mandate keys).
+    command: ["--host", "0.0.0.0", "--port", "8780"]
+    ports: ["127.0.0.1:8780:8780"]
+    networks: [chainaim-control]
+    restart: on-failure:3

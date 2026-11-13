@@ -22,6 +22,10 @@ COPY packages/offer/src packages/offer/src
 # privateAI-design-35 ARCH-650: GET /jobs/<id>/observer reads the settlement with packages/observer.
 COPY packages/observer/package.json packages/observer/package.json
 COPY packages/observer/src packages/observer/src
+# privateAI-design-36 ARCH-663: the signer's code (packages/signer) for --signer local and its request types; with
+# --signer remote (the compose default) no ChainAim key is in this container: ca-control-signer holds them.
+COPY packages/signer/package.json packages/signer/package.json
+COPY packages/signer/src packages/signer/src
 COPY services/web/src/balance.ts services/web/src/near-wallets.ts services/web/src/
 COPY config config
 COPY test-console/console test-console/console

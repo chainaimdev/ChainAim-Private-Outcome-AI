@@ -40,7 +40,8 @@ export type ReceiptCheck = {
 };
 
 export type ReceiptEvent =
-  | { type: "receipt_verified"; jobId: string; receiptId: string; keyId: string; settled: boolean; transaction?: string }
+  /** mandateSha256 (privateAI-design-36 ARCH-668): the checkout mandate the receipt records as verified, when it records one. */
+  | { type: "receipt_verified"; jobId: string; receiptId: string; keyId: string; settled: boolean; transaction?: string; mandateSha256?: string }
   | { type: "receipt_failed"; jobId: string; reason: string };
 
 /** What the agent itself knows about the job it paid for. */
@@ -116,8 +117,8 @@ export async function verifyPaidReceipt(check: ReceiptCheck, consoleUrl: string,
     const c = checkReceipt(a.receipt, check, paid);
     if (!c.ok) return failed(c.reason);
     if (!c.settled) { unsettled = a; lastProblem = "the receipt has no settlement yet"; continue; }
-    return { type: "receipt_verified", jobId: paid.jobId, receiptId: a.receipt.body.receiptId, keyId: check.keyId, settled: true, transaction: paid.transaction };
+    return { type: "receipt_verified", jobId: paid.jobId, receiptId: a.receipt.body.receiptId, keyId: check.keyId, settled: true, transaction: paid.transaction, ...(a.receipt.body.mandate ? { mandateSha256: a.receipt.body.mandate.sha256 } : {}) };
   }
-  if (unsettled) return { type: "receipt_verified", jobId: paid.jobId, receiptId: unsettled.receipt.body.receiptId, keyId: check.keyId, settled: false };
+  if (unsettled) return { type: "receipt_verified", jobId: paid.jobId, receiptId: unsettled.receipt.body.receiptId, keyId: check.keyId, settled: false, ...(unsettled.receipt.body.mandate ? { mandateSha256: unsettled.receipt.body.mandate.sha256 } : {}) };
   return failed(`no receipt after ${check.pollMax} tries ${check.pollMs} ms apart (last: ${lastProblem}); the console log names the reason as job_receipt_failed`);
 }

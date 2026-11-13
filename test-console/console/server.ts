@@ -175,15 +175,17 @@ import { NEAR_WALLETS, isNearWalletId } from "../../services/web/src/near-wallet
 import { analystClient, crossAsk, gatewayChat } from "../../packages/crossask/src/index.ts";
 import { RUN_LOG_MODES, RunLog, type RunLogMode } from "./run-log.ts";
 import { microsToUsd, quoteJob, USDC_DECIMALS } from "../../packages/crossask/src/cost.ts";
-import { JobStore, internalHandler, meterOf, paidJobsConfig, registerJob } from "./jobs.ts";
+import { JobStore, internalHandler, meterOf, paidJobsConfig, registerJob, type RunNotice } from "./jobs.ts";
 import { JobFeed, jobFeedConfig } from "./job-feed.ts";
 import { AttestClient, attestConfig } from "./attest.ts";
-import { calledModels, datasetFiles, datasetIdOf, receiptConfig, receiptOnRelease, ReceiptStore, routeOf, templateLabelOf } from "./receipt.ts";
+import { calledModels, datasetFiles, datasetIdOf, receiptConfig, receiptConfigRemote, receiptOnRelease, ReceiptStore, routeOf, templateLabelOf } from "./receipt.ts";
 import type { HeldJob, ReceiptHold } from "./jobs.ts";
-import { ap2Answer, ap2Config, signJobCheckout, ucpProfile, type Ap2Hold } from "./ap2.ts";
+import { ap2Answer, ap2Config, ap2ConfigRemote, ucpProfile, type Ap2Hold } from "./ap2.ts";
+import { RemoteSigner, signerClientConfig, SignerRefused, SignerUnavailable, waitForSignerKeys } from "./signer-client.ts";
+import { SellerSigner, type SignedQuote, type SignerApi } from "../../packages/signer/src/index.ts";
+import { parseMandateRegistry } from "../../packages/ap2/src/index.ts";
 import { filesRoot } from "../../packages/receipt/src/index.ts";
 import { observe, observerConfig, ObserverError } from "../../packages/observer/src/index.ts";
-import { quoteOffer } from "../../packages/offer/src/index.ts";
 import { attestedRoute, crossaskBasis, folderSize, offerModels, OfferStore, offerConfig, withinBasis, type OfferRequest } from "./offers.ts";
 
 const { values: flags } = parseArgs({
@@ -267,6 +269,15 @@ const { values: flags } = parseArgs({
     "ap2-key-env": { type: "string" },
     "ap2-alg": { type: "string" },
     "ap2-terms-url": { type: "string" },
+    // privateAI-design-36 ARCH-663 / ARCH-667: where the signing happens, and the buyer's checkout mandate.
+    signer: { type: "string" },
+    "signer-url": { type: "string" },
+    "signer-key-env": { type: "string" },
+    "signer-timeout-sec": { type: "string" },
+    "signer-start-wait-sec": { type: "string" },
+    "ap2-mandate": { type: "string" },
+    "mandate-keys": { type: "string" },
+    "mandate-audience": { type: "string" },
     mode: { type: "string", default: "all" },
     bind: { type: "string", default: "127.0.0.1" },
     api: { type: "string" },
@@ -285,7 +296,7 @@ const MODE = flags.mode as "all" | "ui" | "api";
 if (!["all", "ui", "api"].includes(MODE)) throw new Error(`--mode must be all, ui or api, got ${flags.mode}`);
 if (MODE === "ui") {
   // The ui process runs nothing of the backend; a backend flag here would be silently unused, so it is refused.
-  for (const name of ["paid-jobs", "job-feed-url", "pricing-catalog", "dataset-root", "attest-url", "receipts", "ap2", "price-round"] as const) {
+  for (const name of ["paid-jobs", "job-feed-url", "pricing-catalog", "dataset-root", "attest-url", "receipts", "ap2", "price-round", "signer", "signer-url", "ap2-mandate", "mandate-keys"] as const) {
     if (flags[name] !== undefined) throw new Error(`--${name} belongs to the api process, not --mode ui (use --paid-jobs-page on for the tab 03 pay box)`);
   }
   if (!flags.api) throw new Error("--mode ui needs --api URL: the console API, e.g. http://127.0.0.1:8735");
@@ -339,13 +350,30 @@ const ATTEST_CONFIG = MODE === "ui" ? undefined : attestConfig(flags, PAID_JOBS 
 // The finished result goes to near-watch as job_attested when the job feed is on (adminUI ARCH-501).
 const ATTEST = ATTEST_CONFIG ? new AttestClient(ATTEST_CONFIG, undefined, JOB_FEED ? (a) => JOB_FEED.attested(a) : undefined) : undefined;
 const JOBS = PAID_JOBS ? new JobStore(PAID_JOBS.max, PAID_JOBS.ttlMs, Date.now, JOB_FEED ? (j) => JOB_FEED.expired(j.jobId) : undefined) : undefined;
+/**
+ * privateAI-design-36 ARCH-663: --signer local (default) signs in this process with the keys of --ap2-key-env and
+ * --receipt-key-env; --signer remote leaves every ChainAim key in ca-control-signer, whose PUBLIC keys are read here once
+ * at start-up (it is retried for --signer-start-wait-sec, then start-up stops naming the URL).
+ */
+const SIGNER_CLIENT = MODE === "ui" || !PAID_JOBS ? undefined : signerClientConfig(flags, process.env);
+if (!PAID_JOBS && MODE !== "ui") for (const f of ["signer", "signer-url", "ap2-mandate", "mandate-keys"] as const) if (flags[f] !== undefined) throw new Error(`--${f} needs --paid-jobs on`);
+const REMOTE_SIGNER = SIGNER_CLIENT?.mode === "remote" ? new RemoteSigner(SIGNER_CLIENT) : undefined;
+const REMOTE_KEYS = REMOTE_SIGNER && SIGNER_CLIENT?.mode === "remote"
+  ? await waitForSignerKeys(REMOTE_SIGNER, SIGNER_CLIENT.startWaitMs).catch((e: unknown) => { throw new Error(`--signer remote: ${SIGNER_CLIENT.url}/.well-known/keys did not answer (${(e as Error).message}); start ca-control-signer first (desk.ps1 -All starts it)`); })
+  : undefined;
 /** Job Evidence Receipts (ARCH-613..616): undefined unless --receipts on; start-up stops here when the key variable is missing or not Ed25519. */
-const RECEIPT_CONFIG = MODE === "ui" ? undefined : receiptConfig(flags, process.env, PAID_JOBS !== undefined);
+const RECEIPT_CONFIG = MODE === "ui" ? undefined : REMOTE_KEYS ? receiptConfigRemote(flags, PAID_JOBS !== undefined, REMOTE_KEYS.receipt) : receiptConfig(flags, process.env, PAID_JOBS !== undefined);
 const RECEIPTS = RECEIPT_CONFIG ? new ReceiptStore(RECEIPT_CONFIG) : undefined;
 // ARCH-650: the observer view reads the settlement from the receipt, so it is on only with receipts.
 const OBSERVER = RECEIPTS ? observerConfig(flags) : undefined;
 /** AP2 signed quotes (privateAI-design-33 ARCH-628): undefined unless --ap2 on; start-up stops here when the key is missing or not P-256. */
-const AP2_CONFIG = MODE === "ui" ? undefined : ap2Config(flags, process.env, PAID_JOBS !== undefined);
+const AP2_CONFIG = MODE === "ui" ? undefined : REMOTE_KEYS ? ap2ConfigRemote(flags, PAID_JOBS !== undefined, REMOTE_KEYS.ap2) : ap2Config(flags, process.env, PAID_JOBS !== undefined);
+/** The console's hold of a signed quote (jobs.ts HeldJob.ap2) from the signer's answer. */
+function holdOf(q: SignedQuote): Ap2Hold {
+  return { checkout: q.checkout, merchantAuthorization: q.merchant_authorization, merchantAuthSha256: q.merchantAuthSha256, kid: q.kid };
+}
+/** A quote the signer could not be reached for is 502; one it refused (another amount, a field it does not take) 422. */
+const signFailStatus = (e: unknown): number => (e instanceof SignerUnavailable ? 502 : e instanceof SignerRefused ? 422 : 500);
 /** The paywall's release notice (jobs.ts internalHandler): the job feed's job_released, then the receipt, which is never awaited. */
 /**
  * ARCH-637/638: the paid release of an estimate-first offer, called by the paywall after it verified the payment and
@@ -355,9 +383,29 @@ const AP2_CONFIG = MODE === "ui" ? undefined : ap2Config(flags, process.env, PAI
  * the paywall settles nothing (design-32 ARCH-611). A good run becomes a held job (receipt, job feed, attestation as
  * for run-hold) and its result goes back; the buyer pays the estimate, the metered cost goes in the receipt (actualUsd).
  */
-async function runOffer(jobId: string): Promise<{ status: number; body: unknown }> {
+async function runOffer(jobId: string, notice?: RunNotice): Promise<{ status: number; body: unknown }> {
   const o = OFFERS?.get(jobId);
   if (!o || !PAID_JOBS || !JOBS || !OFFER_CONFIG) return { status: 404, body: { error: "no such offer (it expired or was never made)" } };
+  // ARCH-667: the buyer agent's checkout mandate, verified by ChainAim's signer before anything runs. A refused, missing
+  // (when required) or uncheckable mandate is 422 and a signer that cannot be reached 502: the paywall settles nothing.
+  let mandate: HeldJob["mandate"];
+  if (MANDATE_MODE !== "off" && o.ap2) {
+    const presented = notice?.checkoutMandate;
+    if (presented) {
+      if (!notice?.invoiceId) return { status: 422, body: { error: "the paid release names no invoice, so the checkout mandate cannot be checked", code: "mandate_scope_mismatch" } };
+      let v;
+      try { v = await SIGNER!.verifyMandate({ mandate: presented, jobId, nonce: notice.invoiceId, ap2: { checkout: o.ap2.checkout, merchant_authorization: o.ap2.merchantAuthorization } }); }
+      catch (e) { return { status: e instanceof SignerRefused ? 422 : 502, body: { error: `the checkout mandate could not be checked: ${(e as Error).message}` } }; }
+      if (!v.ok) {
+        console.log(JSON.stringify({ ts: new Date().toISOString(), route: "offer", event: "mandate_refused", offerId: jobId, code: v.code }));
+        return { status: 422, body: { error: `the checkout mandate was refused by ChainAim's signer (${v.code}): ${v.reason}`, code: v.code } };
+      }
+      mandate = { ref: { sha256: v.sha256, kid: v.kid, tenant: v.tenant, accountId: v.accountId, nonce: v.nonce }, presentation: presented };
+      console.log(JSON.stringify({ ts: new Date().toISOString(), route: "offer", event: "mandate_verified", offerId: jobId, kid: v.kid, tenant: v.tenant }));
+    } else if (MANDATE_MODE === "required") {
+      return { status: 422, body: { error: "a checkout mandate is required (mandate_required): the buyer's agent signs one per payment", code: "mandate_required" } };
+    }
+  }
   const { config, error } = readDataConfig();
   if (!config) return { status: 422, body: { error: `the job cannot run: ${error}` } };
   let now;
@@ -395,7 +443,7 @@ async function runOffer(jobId: string): Promise<{ status: number; body: unknown 
   }
   const { timings: _timings, ...result } = out;
   // Held a little past the offer's expiry, so a settlement that lands near it still finds the job to release.
-  JOBS.hold({ jobId, result, amount: o.amount, breakdown: o.quote.breakdown, expiresAt: Math.max(o.expiresAt, Date.now() + 120_000), ...(receiptHold ? { receipt: receiptHold } : {}), ...(o.ap2 ? { ap2: o.ap2 } : {}) });
+  JOBS.hold({ jobId, result, amount: o.amount, breakdown: o.quote.breakdown, expiresAt: Math.max(o.expiresAt, Date.now() + 120_000), ...(receiptHold ? { receipt: receiptHold } : {}), ...(o.ap2 ? { ap2: o.ap2 } : {}), ...(mandate ? { mandate } : {}) });
   OFFERS!.drop(jobId);
   // The feed: each step at its metered cost; the total is the estimate the buyer paid (near-watch reconciles on it).
   JOB_FEED?.quoted({ jobId, network: o.network, expiresAt: o.expiresAt, out, quote: { ...metered, totalUsd: o.quote.totalUsd, amount: o.amount }, ...(o.ap2 ? { ap2: { kid: o.ap2.kid, merchantAuthSha256: o.ap2.merchantAuthSha256 } } : {}) });
@@ -406,7 +454,7 @@ async function runOffer(jobId: string): Promise<{ status: number; body: unknown 
 function onJobReleased(jobId: string, job: HeldJob, notice: unknown): void {
   JOB_FEED?.released(jobId);
   if (!RECEIPTS || !RECEIPT_CONFIG) return;
-  receiptOnRelease({ store: RECEIPTS, cfg: RECEIPT_CONFIG, ...(ATTEST ? { attestation: (id: string) => ATTEST.get(id) } : {}) }, jobId, job, notice).then(
+  receiptOnRelease({ store: RECEIPTS, cfg: RECEIPT_CONFIG, ...(SIGNER ? { signer: SIGNER } : {}), ...(ATTEST ? { attestation: (id: string) => ATTEST.get(id) } : {}) }, jobId, job, notice).then(
     (r) => {
       if (!r) return;
       // Ids only.
@@ -532,6 +580,36 @@ const REPO = fileURLToPath(new URL("../../", import.meta.url));
  * estimate-first is allowed but config/cost-model.json is missing or invalid (desk.ps1 -Calibrate). OFFERS holds them.
  */
 const OFFER_CONFIG = MODE === "ui" ? undefined : offerConfig(flags, PAID_JOBS !== undefined, (f) => readFileSync(isAbsolute(f) ? f : join(REPO, f), "utf8"));
+/**
+ * ChainAim's signer (privateAI-design-36 ARCH-662/663): every price, signed quote, mandate check, receipt and settlement
+ * of a paid job goes through it. Remote: ca-control-signer, which prices with its own catalog, fees and cost model. Local:
+ * the same code (packages/signer) in this process, with this console's keys, prices and cost model.
+ */
+const SIGNER: SignerApi | undefined = !PAID_JOBS || MODE === "ui" ? undefined : REMOTE_SIGNER ?? new SellerSigner({
+  ...(AP2_CONFIG ? { ap2: AP2_CONFIG.signer } : {}),
+  ...(RECEIPT_CONFIG ? { receipt: RECEIPT_CONFIG.signer } : {}),
+  pricing: { prices: PAID_JOBS.prices, fees: PAID_JOBS.fees, round: PAID_JOBS.priceRound, ...(OFFER_CONFIG?.costModel ? { costModel: OFFER_CONFIG.costModel } : {}) },
+  termsUrl: AP2_CONFIG?.termsUrl ?? "",
+  ...(flags["mandate-keys"] !== undefined ? { mandates: {
+    registry: parseMandateRegistry(JSON.parse(readFileSync(isAbsolute(flags["mandate-keys"]) ? flags["mandate-keys"] : join(REPO, flags["mandate-keys"]), "utf8").replace(/^\uFEFF/, ""))),
+    aud: flags["mandate-audience"] ?? "chainaim", skewSec: 30, maxLifetimeSec: 900,
+  } } : {}),
+}).api();
+if (REMOTE_SIGNER && (flags["mandate-keys"] !== undefined || flags["mandate-audience"] !== undefined)) throw new Error("--mandate-keys / --mandate-audience are for --signer local: ca-control-signer holds its own mandate key registry");
+/**
+ * ARCH-667: --ap2-mandate off|optional|required. optional (default with --ap2 on): a checkout mandate the buyer's agent
+ * presents is verified by the signer before the run and refused when bad; a release without one runs as before (the tab 03
+ * wallet pays as a person). required: a release without a mandate is refused. Either way a refusal settles nothing. With
+ * no mandate key registry at the signer, optional turns off (said at start-up) and required stops start-up.
+ */
+const MANDATES_AT_SIGNER = REMOTE_KEYS ? REMOTE_KEYS.mandateAudience !== undefined : flags["mandate-keys"] !== undefined;
+const MANDATE_MODE: "off" | "optional" | "required" = (() => {
+  const raw = flags["ap2-mandate"] ?? (AP2_CONFIG ? "optional" : "off");
+  if (raw !== "off" && raw !== "optional" && raw !== "required") throw new Error(`--ap2-mandate must be off, optional or required, got ${raw}`);
+  if (raw !== "off" && !AP2_CONFIG) throw new Error("--ap2-mandate optional|required needs --ap2 on: a mandate permits a signed quote");
+  if (raw === "required" && !MANDATES_AT_SIGNER) throw new Error("--ap2-mandate required: the signer has no mandate key registry (--mandate-keys on the signer)");
+  return raw === "optional" && !MANDATES_AT_SIGNER ? "off" : raw;
+})();
 const OFFERS = OFFER_CONFIG?.costModel && PAID_JOBS ? new OfferStore(PAID_JOBS.max, Date.now, (o) => {
   JOB_FEED?.expired(o.offerId);
   console.log(JSON.stringify({ ts: new Date().toISOString(), route: "offer", event: "offer_expired", offerId: o.offerId }));
@@ -892,6 +970,8 @@ createServer(async (req, res) => {
     if (PAID_JOBS && JOBS && api === "jobs" && name === "config" && req.method === "GET") {
       if (!hostOk(req)) return dataJson(res, 403, { error: `open the console as http://127.0.0.1:${PORT}` });
       return dataJson(res, 200, { wallet: NEAR_WALLET, walletName: NEAR_WALLETS[NEAR_WALLET!].name, ttlMin: PAID_JOBS.ttlMs / 60_000, defaultPayer: DEFAULT_PAYER, attest: ATTEST ? { pollMs: ATTEST_POLL_MS, pollMax: ATTEST_POLL_MAX } : null, receipts: RECEIPTS !== undefined, observer: OBSERVER !== undefined,
+        // ARCH-663/667: where ChainAim's signer runs (its URL only, never its key) and whether checkout mandates are checked.
+        signer: SIGNER_CLIENT?.mode === "remote" ? { mode: "remote", url: SIGNER_CLIENT.url } : { mode: "local" }, mandates: MANDATE_MODE,
         // ARCH-642: the modes the pay box may offer and the default (estimate-first needs the cost model: OFFERS).
         offers: OFFER_CONFIG ? { mode: OFFERS ? OFFER_CONFIG.mode : "run-hold", modes: OFFER_CONFIG.modes.filter((m) => m === "run-hold" || OFFERS) } : { mode: "run-hold", modes: ["run-hold"] } });
     }
@@ -903,7 +983,9 @@ createServer(async (req, res) => {
       if (!receipt) return dataJson(res, 404, { error: "no receipt for this job: it is made once the job is paid and released" });
       // ARCH-631: with the signed quote the receipt points at (--ap2 on), so one download checks both.
       const quote = RECEIPTS.getQuote(url.pathname.split("/")[2]);
-      return dataJson(res, 200, { receipt, publicKeyPem: RECEIPTS.publicKeyPem(), ...(quote ? { ap2: quote } : {}) });
+      // ARCH-668: and the checkout mandate the receipt records, so verify-receipt re-checks the buyer's signature too.
+      const mandateToken = RECEIPTS.getMandate(url.pathname.split("/")[2]);
+      return dataJson(res, 200, { receipt, publicKeyPem: RECEIPTS.publicKeyPem(), ...(quote ? { ap2: quote } : {}), ...(mandateToken ? { mandate: mandateToken } : {}) });
     }
     // ARCH-650: what anyone reading NEAR learns about this job, from public RPC (no key; only the transaction hash and
     // the payer account, both already public, are sent).
@@ -947,8 +1029,9 @@ createServer(async (req, res) => {
       let basis, quote;
       try {
         basis = crossaskBasis(request, size, { maxPromptChars: CROSSASK_MAX_PROMPT, answerMaxPromptChars: CROSSASK_ANSWER_MAX_PROMPT, maxTokens: OFFER_CONFIG.maxTokens, sqlRetries: CROSSASK_RETRIES, answerMaxRows: CROSSASK_ROWS });
-        quote = quoteOffer(basis, PAID_JOBS.prices, PAID_JOBS.fees, OFFER_CONFIG.costModel, PAID_JOBS.priceRound);
-      } catch (e) { return dataJson(res, 422, { error: `no price for this job, so nothing can be paid: ${(e as Error).message}` }); }
+        // ARCH-662: priced by ChainAim's signer from these sizes and limits, never by this process's own arithmetic.
+        quote = await SIGNER!.price({ kind: "offer", basis });
+      } catch (e) { return dataJson(res, e instanceof SignerUnavailable ? 502 : 422, { error: `no price for this job, so nothing can be paid: ${(e as Error).message}` }); }
       const offerId = JOBS.newJobId();
       const expiresAt = JOBS.expiryFromNow();
       let offer;
@@ -958,8 +1041,8 @@ createServer(async (req, res) => {
       const route = routeOf(offerModels(basis));
       let ap2Hold: Ap2Hold | undefined;
       if (AP2_CONFIG) {
-        try { ap2Hold = signJobCheckout(AP2_CONFIG, { jobId: offerId, route, amount: quote.amount, expiresAt, offer, datasetId: datasetIdOf(b.datasetId, folder), mode: "estimate-first" }); }
-        catch (e) { return dataJson(res, 500, { error: `the estimate could not be signed, so nothing can be paid: ${(e as Error).message}` }); }
+        try { ap2Hold = holdOf(await SIGNER!.signQuote({ jobId: offerId, expiresAt, offer, pricing: { kind: "offer", basis }, route, datasetId: datasetIdOf(b.datasetId, folder), mode: "estimate-first" })); }
+        catch (e) { return dataJson(res, signFailStatus(e), { error: `the estimate could not be signed, so nothing can be paid: ${(e as Error).message}` }); }
       }
       const attested = attestedRoute(basis, PAID_JOBS.attestable);
       OFFERS.hold({ offerId, request, basis, quote, amount: quote.amount, expiresAt, network: offer.network, attested, ...(ap2Hold ? { ap2: ap2Hold } : {}) });
@@ -993,8 +1076,10 @@ createServer(async (req, res) => {
       // A job that did not produce a result is not sold (the free /crossask shows why).
       if (out.error || !out.result) return dataJson(res, 422, { error: "the job did not produce a result, so nothing can be paid; run it unpaid to see why" });
       let quote;
-      try { quote = quoteJob(meterOf(out.served), PAID_JOBS.prices, PAID_JOBS.fees, { round: PAID_JOBS.priceRound }); }
-      catch (e) { return dataJson(res, 422, { error: `no price for this job, so nothing can be paid: ${(e as Error).message}` }); }
+      const meter = meterOf(out.served);
+      // ARCH-662: the signer prices the metered calls (model ids and token counts only).
+      try { quote = await SIGNER!.price({ kind: "metered", meter }); }
+      catch (e) { return dataJson(res, e instanceof SignerUnavailable ? 502 : 422, { error: `no price for this job, so nothing can be paid: ${(e as Error).message}` }); }
       // ARCH-613: the files the job read, hashed now (before registering), so the receipt commits to the data as it was run.
       // A job no receipt can cover is not sold while receipts are on.
       let receiptFiles;
@@ -1030,10 +1115,10 @@ createServer(async (req, res) => {
       let ap2Hold: Ap2Hold | undefined;
       if (AP2_CONFIG) {
         try {
-          ap2Hold = signJobCheckout(AP2_CONFIG, { jobId, route, amount: quote.amount, expiresAt, offer,
-            ...(receiptHold ? { datasetId: receiptHold.datasetId, filesRoot: filesRoot(receiptHold.files) } : {}) });
+          ap2Hold = holdOf(await SIGNER!.signQuote({ jobId, expiresAt, offer, pricing: { kind: "metered", meter }, route,
+            ...(receiptHold ? { datasetId: receiptHold.datasetId, filesRoot: filesRoot(receiptHold.files) } : {}) }));
         } catch (e) {
-          return dataJson(res, 500, { error: `the quote could not be signed, so nothing can be paid: ${(e as Error).message}` });
+          return dataJson(res, signFailStatus(e), { error: `the quote could not be signed, so nothing can be paid: ${(e as Error).message}` });
         }
       }
       JOBS.hold({ jobId, result, amount: quote.amount, breakdown: quote.breakdown, expiresAt, ...(receiptHold ? { receipt: receiptHold } : {}), ...(ap2Hold ? { ap2: ap2Hold } : {}) });
@@ -1213,8 +1298,9 @@ createServer(async (req, res) => {
   if (PAID_JOBS && JOBS) {
     createServer(internalHandler(JOBS, PAID_JOBS.key, onJobReleased, OFFERS ? runOffer : undefined)).listen(PAID_JOBS.internalPort, PAID_JOBS.internalHost, () => {
       console.log(`[test-console] paid jobs on: internal listener http://${PAID_JOBS.internalHost}:${PAID_JOBS.internalPort}  key from ${PAID_JOBS.keyEnv}  ttl ${PAID_JOBS.ttlMs / 60_000} min  max ${PAID_JOBS.max}`);
-      if (AP2_CONFIG) console.log(`[test-console] ap2 on: signing key id ${AP2_CONFIG.signer.kid} (${AP2_CONFIG.alg}) from ${AP2_CONFIG.keyEnv}  price round ${PAID_JOBS.priceRound}  (GET /.well-known/ucp)`);
-      if (RECEIPT_CONFIG) console.log(`[test-console] receipts on: signing key id ${RECEIPT_CONFIG.signer.keyId}  -> ${RECEIPT_CONFIG.dir}  (GET /jobs/<id>/receipt)${JOB_FEED_CONFIG?.receipts ? "  job_receipt sent to near-watch" : ""}`);
+      if (SIGNER_CLIENT?.mode === "remote") console.log(`[test-console] signer remote: ChainAim's keys and prices at ${SIGNER_CLIENT.url} (ca-control-signer); this console holds no signing key; request key from ${SIGNER_CLIENT.keyEnv}`);
+      if (AP2_CONFIG) console.log(`[test-console] ap2 on: signing key id ${AP2_CONFIG.signer.kid} (${AP2_CONFIG.alg}) ${REMOTE_SIGNER ? "held by ca-control-signer" : `from ${AP2_CONFIG.keyEnv}`}  price round ${PAID_JOBS.priceRound}  (GET /.well-known/ucp)  checkout mandates ${MANDATE_MODE}`);
+      if (RECEIPT_CONFIG) console.log(`[test-console] receipts on: signing key id ${RECEIPT_CONFIG.signer.keyId}${REMOTE_SIGNER ? " held by ca-control-signer" : ""}  -> ${RECEIPT_CONFIG.dir}  (GET /jobs/<id>/receipt)${JOB_FEED_CONFIG?.receipts ? "  job_receipt sent to near-watch" : ""}`);
       if (OBSERVER) console.log(`[test-console] observer view on: GET /jobs/<id>/observer reads the settlement from public NEAR RPC (testnet ${OBSERVER.urls["near:testnet"].map((u) => new URL(u).host).join(" then ")})`);
       if (JOB_FEED_CONFIG) {
         const u = new URL(JOB_FEED_CONFIG.url);

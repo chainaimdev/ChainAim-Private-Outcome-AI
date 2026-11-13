@@ -1,0 +1,10 @@
+{
+  "name": "@chainaim/signer",
+  "version": "0.1.0",
+  "private": true,
+  "description": "ChainAim's seller-side signer core (privateAI-design-36 ARCH-660..668): prices a paid job itself from sizes, signs the AP2 merchant authorization (ES256), verifies the buyer agent's closed Checkout Mandate before the run, signs the Job Evidence Receipt and its settlement (Ed25519). Accepts ids, sizes, hashes and amounts only (allowlist). No runtime dependencies (node:crypto only).",
+  "type": "module",
+  "engines": { "node": ">=22.22" },
+  "exports": { ".": "./src/index.ts" },
+  "scripts": { "test": "node --test \"test/*.test.ts\"" }
+}

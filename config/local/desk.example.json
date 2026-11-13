@@ -1,14 +1,36 @@
 {
-  "notes": "Per-PC settings for test-console\\desk.ps1, the one command over both repositories' Docker launchers (privateAI-design-31 s5). Copy to config/local/desk.json (git-ignored). secretsDir holds near-testnet.env, near-watch.env, paid-jobs.env, chainaim.env (only checked to exist; never read by desk.ps1). adminUi.watch / gasPerPaymentNear go to the adminUI's nearadminup.ps1 (-Watch / -GasPerPaymentNear); without them it uses its committed config/near-watch-watch.conf. Prices are not here: test-console/up.ps1 reads config/paid-jobs-prices.conf or <secretsDir>/paid-jobs-settings.env. The adminUI checkout comes from config/local/repos.json (nearWatchDir).",
+  "notes": "Per-PC settings for test-console\\desk.ps1, the one command over both repositories' Docker launchers (privateAI-design-31 s5). Copy to config/local/desk.json (git-ignored). secretsDir holds near-testnet.env, near-watch.env, paid-jobs.env, chainaim.env (only checked to exist; never read by desk.ps1). adminUi.watch / gasPerPaymentNear go to the adminUI's nearadminup.ps1 (-Watch / -GasPerPaymentNear); without them it uses its committed config/near-watch-watch.conf. Prices are not here: test-console/up.ps1 reads config/paid-jobs-prices.conf or <secretsDir>/paid-jobs-settings.env. The adminUI checkout comes from config/local/repos.json (nearWatchDir). sellerSecretsDir (privateAI-design-36): ChainAim's own signing keys (signer.env, desk.ps1 -SignerKeys), kept apart from secretsDir. signer.mode auto|separate|in-console (auto: separate once sellerSecretsDir\\signer.env exists) and signer.url (how the console API reaches ca-control-signer; a cloud signer: https://...) go to up.ps1 -Signer / -SignerUrl.",
   "secretsDir": "C:\\PRIV-AI-SECRETS",
-  "paidJobs": { "enabled": true },
-  "agent": { "enabled": "auto", "tenants": "t01,t02,t03" },
-  "attest": { "enabled": "auto", "gpuCheck": "on" },
-  "receipts": { "enabled": "auto" },
+  "sellerSecretsDir": "C:\\CHAINAIM-SELLER-SECRETS",
+  "signer": {
+    "mode": "auto",
+    "url": "http://host.docker.internal:8780"
+  },
+  "paidJobs": {
+    "enabled": true
+  },
+  "agent": {
+    "enabled": "auto",
+    "tenants": "t01,t02,t03"
+  },
+  "attest": {
+    "enabled": "auto",
+    "gpuCheck": "on"
+  },
+  "receipts": {
+    "enabled": "auto"
+  },
   "adminUi": {
     "enabled": true,
-    "watch": ["buyer1=buyer=<buyer account>.testnet", "relayer=relayer=<relayer account>.testnet"],
+    "watch": [
+      "buyer1=buyer=<buyer account>.testnet",
+      "relayer=relayer=<relayer account>.testnet"
+    ],
     "gasPerPaymentNear": "0.000333"
   },
-  "console": { "defaultAnswerModel": "nearai/deepseek-v4.1-flash", "defaultPayer": "agent", "crossaskMaxPromptChars": 16000 }
+  "console": {
+    "defaultAnswerModel": "nearai/deepseek-v4.1-flash",
+    "defaultPayer": "agent",
+    "crossaskMaxPromptChars": 16000
+  }
 }

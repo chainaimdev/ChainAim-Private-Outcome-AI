@@ -12,7 +12,7 @@ import { readFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { ChatReply, CrossAskResult } from "../../packages/crossask/src/index.ts";
 import { parseDecimal, PRICE_ROUNDS, pricesFromCatalog, quoteJob, type Fees, type JobQuote, type MeterLine, type ModelPrice, type PriceRound } from "../../packages/crossask/src/cost.ts";
-import type { ReceiptFile } from "../../packages/receipt/src/index.ts";
+import type { ReceiptFile, ReceiptMandate } from "../../packages/receipt/src/index.ts";
 import type { Ap2Hold } from "./ap2.ts";
 
 export type PaidJobsFlags = {
@@ -117,7 +117,11 @@ export type ReceiptHold = {
   priceUsd: string; quoteBasis: Record<string, string | number | boolean>; actualUsd?: string;
 };
 /** ap2 (privateAI-design-33 ARCH-628): the signed UCP checkout of the quote, only with --ap2 on. */
-export type HeldJob = { jobId: string; result: CrossAskResult; amount: string; breakdown: JobQuote["breakdown"]; expiresAt: number; receipt?: ReceiptHold; ap2?: Ap2Hold };
+/**
+ * mandate (privateAI-design-36 ARCH-667/668): the buyer agent's checkout mandate that ChainAim's signer verified before the
+ * run (its record for the receipt and the presentation itself); only when one was presented.
+ */
+export type HeldJob = { jobId: string; result: CrossAskResult; amount: string; breakdown: JobQuote["breakdown"]; expiresAt: number; receipt?: ReceiptHold; ap2?: Ap2Hold; mandate?: { ref: ReceiptMandate; presentation: string } };
 
 /** Held results, in memory only, removed on release or expiry. */
 export class JobStore {
@@ -176,7 +180,23 @@ function readSmallJson(req: IncomingMessage, max: number): Promise<unknown> {
  * offer. A job already held under that id (a release whose settlement failed and is retried) answers its held result and
  * is not run again; otherwise run() runs the offer and answers {status, body} (200 {jobId, result} after holding it).
  */
-export type RunOffer = (jobId: string) => Promise<{ status: number; body: unknown }>;
+export type RunOffer = (jobId: string, notice?: RunNotice) => Promise<{ status: number; body: unknown }>;
+/**
+ * privateAI-design-36 ARCH-667: what the paywall forwards with a paid release of an estimate-first offer: the invoice id the
+ * verified payment names and, when the buyer's agent sent one, its AP2 checkout mandate (header x-ap2-checkout-mandate).
+ * The paywall checks neither: ChainAim's signer verifies the mandate before the run. Malformed members are dropped here
+ * (and a required mandate is then missing: refused, nothing settles).
+ */
+export type RunNotice = { invoiceId?: string; checkoutMandate?: string };
+/** The largest run notice body: a checkout mandate is far below this. */
+export const RUN_NOTICE_MAX_BYTES = 32_768;
+export function parseRunNotice(body: unknown): RunNotice | undefined {
+  const b = body as Record<string, unknown> | null;
+  if (typeof b !== "object" || b === null) return undefined;
+  const invoiceId = typeof b.invoiceId === "string" && /^[A-Za-z0-9_-]{1,100}$/.test(b.invoiceId) ? b.invoiceId : undefined;
+  const checkoutMandate = typeof b.checkoutMandate === "string" && b.checkoutMandate.length <= 16_384 && /^[A-Za-z0-9_.~-]+$/.test(b.checkoutMandate) ? b.checkoutMandate : undefined;
+  return { ...(invoiceId ? { invoiceId } : {}), ...(checkoutMandate ? { checkoutMandate } : {}) };
+}
 export function internalHandler(store: JobStore, key: string, onReleased?: (jobId: string, job: HeldJob, notice: unknown) => void, run?: RunOffer): (req: IncomingMessage, res: ServerResponse) => void {
   const want = Buffer.from(key, "utf8");
   return (req, res) => {
@@ -186,13 +206,14 @@ export function internalHandler(store: JobStore, key: string, onReleased?: (jobI
     if (!m) { req.resume(); return send(res, 404, { error: "not found" }); }
     const jobId = m[1];
     if (m[2] === "/run") {
-      req.resume();
-      if (req.method !== "POST" || !run || !JOB_ID.test(jobId)) return send(res, 404, { error: "not found" });
-      const held = store.get(jobId);
-      if (held) return send(res, 200, { jobId, result: held.result });
-      void run(jobId).then((r) => send(res, r.status, r.body), (e) => {
-        console.error(JSON.stringify({ ts: new Date().toISOString(), event: "offer_run_failed", jobId, reason: String((e as Error).message ?? e).slice(0, 200) }));
-        send(res, 500, { error: "the job could not be run" });
+      if (req.method !== "POST" || !run || !JOB_ID.test(jobId)) { req.resume(); return send(res, 404, { error: "not found" }); }
+      void readSmallJson(req, RUN_NOTICE_MAX_BYTES).then((body) => {
+        const held = store.get(jobId);
+        if (held) return send(res, 200, { jobId, result: held.result });
+        run(jobId, parseRunNotice(body)).then((r) => send(res, r.status, r.body), (e) => {
+          console.error(JSON.stringify({ ts: new Date().toISOString(), event: "offer_run_failed", jobId, reason: String((e as Error).message ?? e).slice(0, 200) }));
+          send(res, 500, { error: "the job could not be run" });
+        });
       });
       return;
     }

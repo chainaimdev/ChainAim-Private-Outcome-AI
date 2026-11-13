@@ -42,6 +42,19 @@ this PC (server.ts --mode ui, which forwards every call to the console API in Do
                                                 line, when -PaidJobs is off or no key is found (desk.ps1 -Ap2Key makes one);
                                                 -Ap2 on stops instead, -Ap2 off turns it off. -Ap2KeyName NAME (default
                                                 AP2_SIGNING_KEY), -Ap2TermsUrl URL: the checkout's terms_of_service link.
+  -Signer auto|separate|in-console              where ChainAim's signing happens (privateAI-design-36 ARCH-664).
+                                                separate: ca-control-signer in its OWN compose project
+                                                (chainaim-control-plane, network chainaim-control, port 127.0.0.1:8780)
+                                                with the seller keys from -SellerSecretsFile; the console API runs
+                                                --signer remote and holds no ChainAim key (only the request key from
+                                                -SignerClientFile). in-console: the keys from -SecretsFile in the console,
+                                                as before. auto (default): separate when -SellerSecretsFile exists
+                                                (desk.ps1 -SignerKeys makes it), else in-console with an INFO line.
+                                                -SignerUrl URL: how the console API reaches the signer (default
+                                                http://host.docker.internal:8780; a cloud signer: https://...), -SignerPort N.
+                                                -MandateKeys FILE: the tenants' PUBLIC mandate keys (default
+                                                config\ap2-mandate-keys.json, desk.ps1 -MandateKey); present = the signer
+                                                checks the agent's checkout mandate before each run (ARCH-667).
   -OfferMode auto|estimate-first|run-hold  [-OfferModes LIST]
                                                 tab 03 paid jobs (privateAI-design-34 D4/D5): estimate-first = price from
                                                 sizes, no work until the buyer pays; run-hold = run, quote, hold, pay to
@@ -135,7 +148,13 @@ param(
   [int]$CrossaskMaxPromptChars = 16000,
   [int]$AttestPort = 8770,
   [string]$AttestCatalog = "config\generated\catalog.local.json",
-  [string]$StateFile = "runtime\compose\last-start.json"
+  [string]$StateFile = "runtime\compose\last-start.json",
+  [ValidateSet("auto", "separate", "in-console")][string]$Signer = "auto",
+  [string]$SellerSecretsFile = "C:\CHAINAIM-SELLER-SECRETS\signer.env",
+  [string]$SignerClientFile = "C:\PRIV-AI-SECRETS\signer-client.env",
+  [string]$SignerUrl = "http://host.docker.internal:8780",
+  [int]$SignerPort = 8780,
+  [string]$MandateKeys = "config\ap2-mandate-keys.json"
 )
 $ErrorActionPreference = "Stop"
 $repo = [IO.Path]::GetFullPath((Split-Path $PSScriptRoot -Parent))
@@ -238,6 +257,28 @@ try {
   $ap2Key = if (Test-Path $SecretsFile) { (Read-EnvFile $SecretsFile ('^' + $Ap2KeyName + '$')).Values[$Ap2KeyName] } else { $null }
   $ap2KeyFrom = $SecretsFile
   if (-not $ap2Key) { $ap2Key = (Get-ContainerEnv "ca-console-api")["AP2_SIGNING_KEY"]; $ap2KeyFrom = "the running ca-console-api" }
+  # privateAI-design-36 ARCH-664: where ChainAim signs. separate = ca-control-signer with the seller keys from its own folder;
+  # the console API then gets neither key (the two read just above are dropped) and talks to the signer with the request key.
+  if ($Signer -eq "auto") {
+    if (Test-Path $SellerSecretsFile) { $Signer = "separate" }
+    else { $Signer = "in-console"; Say "INFO" "signer in the console API (as before): no $SellerSecretsFile yet (run .\test-console\desk.ps1 -SignerKeys once to split ChainAim's keys out; MANUAL_SETUP.md 2026-11-13 Signer split)" }
+  }
+  $sellerKeys = $null; $signerReqKey = $null
+  if ($Signer -eq "separate") {
+    if (-not (Test-Path $SellerSecretsFile)) { Stop-Here "-Signer separate needs $SellerSecretsFile (desk.ps1 -SignerKeys makes it)" }
+    if (-not (Test-Path $SignerClientFile)) { Stop-Here "-Signer separate needs $SignerClientFile with SIGNER_REQUEST_KEY (desk.ps1 -SignerKeys makes it)" }
+    $sellerKeys = (Read-EnvFile $SellerSecretsFile '^(AP2_SIGNING_KEY|RECEIPT_SIGNING_KEY|SIGNER_REQUEST_KEY)$').Values
+    foreach ($need in @("AP2_SIGNING_KEY", "RECEIPT_SIGNING_KEY", "SIGNER_REQUEST_KEY")) { if (-not $sellerKeys[$need]) { Stop-Here "$SellerSecretsFile has no $need (desk.ps1 -SignerKeys)" } }
+    $signerReqKey = (Read-EnvFile $SignerClientFile '^SIGNER_REQUEST_KEY$').Values["SIGNER_REQUEST_KEY"]
+    if (-not $signerReqKey -or $signerReqKey -ne $sellerKeys["SIGNER_REQUEST_KEY"]) { Stop-Here "SIGNER_REQUEST_KEY in $SignerClientFile is missing or not the one in $SellerSecretsFile (values not printed): run .\test-console\desk.ps1 -SignerKeys again" }
+    if ($SignerUrl -notmatch '^https?://[^\s/]+(:\d+)?/?$') { Stop-Here "-SignerUrl must be http(s)://host[:port], got $SignerUrl" }
+    # The keys still sitting in the buyer-side file are reported by NAME (MANUAL_SETUP 1b step: remove those two lines).
+    $leftover = if (Test-Path $SecretsFile) { @((Read-EnvFile $SecretsFile '^(AP2_SIGNING_KEY|RECEIPT_SIGNING_KEY)$').Values.Keys) } else { @() }
+    if ($leftover.Count) { Say "WARN" "$($leftover -join ', ') still in $SecretsFile (not used now; remove those lines so this side holds none of ChainAim's keys)" }
+    $receiptKey = $sellerKeys["RECEIPT_SIGNING_KEY"]; $receiptKeyFrom = "$SellerSecretsFile (ca-control-signer)"
+    $ap2Key = $sellerKeys["AP2_SIGNING_KEY"]; $ap2KeyFrom = "$SellerSecretsFile (ca-control-signer)"
+    Say "OK" "signer separate: ca-control-signer (project chainaim-control-plane) holds ChainAim's keys from $SellerSecretsFile; the console API reaches it at $SignerUrl with the request key from $SignerClientFile (values not printed)"
+  }
   $keyFile = Join-Path $PSScriptRoot "local-gateway-key.txt"
   if (-not (Test-Path $keyFile)) { Stop-Here "Missing $keyFile (the gateway key the console, gateway and paywall share)." }
   Set-Secret "CHAINAIM_GATEWAY_KEY" ((Get-Content -Raw $keyFile).Trim())
@@ -370,8 +411,11 @@ try {
   if ($Receipts -eq "on") {
     if ($PaidJobs -ne "on") { Stop-Here "-Receipts on needs -PaidJobs on: a receipt is for a paid job" }
     if (-not $receiptKey) { Stop-Here "-Receipts on needs $ReceiptKeyName in ${SecretsFile}: run .\test-console\desk.ps1 -ReceiptKey once" }
-    Set-Secret "RECEIPT_SIGNING_KEY" $receiptKey
-    $consoleCmd += @("--receipts=on", "--receipt-key-env=RECEIPT_SIGNING_KEY", "--receipt-dir=/receipts")
+    if ($Signer -eq "separate") { $consoleCmd += @("--receipts=on", "--receipt-dir=/receipts") }
+    else {
+      Set-Secret "RECEIPT_SIGNING_KEY" $receiptKey
+      $consoleCmd += @("--receipts=on", "--receipt-key-env=RECEIPT_SIGNING_KEY", "--receipt-dir=/receipts")
+    }
     # near-watch accepts job_receipt since adminUI ARCH-701 (design-33 section 7): the admin Jobs tab shows each receipt.
     if ($consoleCmd -contains "--job-feed-url=$JobFeedUrl") { $consoleCmd += "--job-feed-receipts=on" }
     Say "OK" "receipts on: the console signs one after each paid job; key from $receiptKeyFrom (not printed), kept on volume chainaim-console-receipts"
@@ -387,8 +431,11 @@ try {
     if ($PaidJobs -ne "on") { Stop-Here "-Ap2 on needs -PaidJobs on: the signed quote is a paid job's quote" }
     if (-not $ap2Key) { Stop-Here "-Ap2 on needs $Ap2KeyName in ${SecretsFile}: run .\test-console\desk.ps1 -Ap2Key once" }
     if ($Ap2TermsUrl -notmatch '^https?://') { Stop-Here "-Ap2TermsUrl must be an http(s) URL" }
-    Set-Secret "AP2_SIGNING_KEY" $ap2Key
-    $consoleCmd += @("--ap2=on", "--ap2-key-env=AP2_SIGNING_KEY", "--ap2-alg=ES256", "--ap2-terms-url=$Ap2TermsUrl", "--price-round=cent")
+    if ($Signer -eq "separate") { $consoleCmd += @("--ap2=on", "--ap2-alg=ES256", "--price-round=cent") }
+    else {
+      Set-Secret "AP2_SIGNING_KEY" $ap2Key
+      $consoleCmd += @("--ap2=on", "--ap2-key-env=AP2_SIGNING_KEY", "--ap2-alg=ES256", "--ap2-terms-url=$Ap2TermsUrl", "--price-round=cent")
+    }
     # near-watch accepts job_quoted.ap2 since adminUI ARCH-702: the admin Jobs tab shows the signed quote's key id.
     if ($consoleCmd -contains "--job-feed-url=$JobFeedUrl") { $consoleCmd += "--job-feed-ap2=on" }
     if ($agentCmd) { $agentCmd += @("--ap2-verify=on", "--ap2-public-key=/app/config/ap2-public-key.jwk.json") }
@@ -412,7 +459,26 @@ try {
     Say "OK" "tab 03 offers: default $om; buyers may pick $oms"
   }
   $ap2Key = $null
-  $port = "127.0.0.1:${ApiPort}:${ApiPort}"
+  # ARCH-667: the tenants' PUBLIC mandate keys (committed). With them the signer verifies the agent's checkout mandate
+  # before each estimate-first run; the agent signs one per payment.
+  $mkPath = Join-Path $repo $MandateKeys
+  $mandatesOn = ($Ap2 -eq "on") -and (Test-Path $mkPath)
+  if ($Ap2 -eq "on" -and -not $mandatesOn) { Say "INFO" "checkout mandates off: no $MandateKeys (run .\test-console\desk.ps1 -MandateKey -MandateTenant t02 once)" }
+  if ($mandatesOn -and $Signer -ne "separate") { $consoleCmd += "--mandate-keys=/app/$($MandateKeys.Replace('\', '/'))" }
+  if ($mandatesOn -and $agentCmd) { $agentCmd += @("--ap2-mandate=on", "--mandate-audience=chainaim") }
+  # ARCH-664: ca-control-signer, its own compose project, network and port; started (and checked) before the data plane.
+  $signerCmd = $null
+  if ($Signer -eq "separate") {
+    if ($PaidJobs -ne "on") { Stop-Here "-Signer separate needs -PaidJobs on (the signer signs paid jobs)" }
+    $signerCmd = @("--host=0.0.0.0", "--port=8780", "--pricing-catalog=/app/$cat",
+      "--fee-per-model-call-usd=$($ps['FEE_PER_MODEL_CALL_USD'])", "--fee-analyst-usd=$($ps['FEE_ANALYST_USD'])", "--near-gas-fee-usd=$($ps['NEAR_GAS_FEE_USD'])",
+      "--margin-pct=$($ps['MARGIN_PCT'])", "--min-price-usd=$($ps['MIN_PRICE_USD'])", "--terms-url=$Ap2TermsUrl",
+      "--cost-model=$(if (Test-Path (Join-Path $repo 'config\cost-model.json')) { '/app/config/cost-model.json' } else { 'none' })",
+      "--mandate-keys=$(if ($mandatesOn) { '/app/' + $MandateKeys.Replace('\', '/') } else { 'none' })", "--mandate-audience=chainaim")
+    if (-not $mandatesOn) { $signerCmd = @($signerCmd | Where-Object { $_ -ne "--mandate-audience=chainaim" }) }
+    $consoleCmd += @("--signer=remote", "--signer-url=$($SignerUrl.TrimEnd('/'))", "--signer-key-env=SIGNER_REQUEST_KEY", "--signer-start-wait-sec=60")
+    Set-Secret "SIGNER_REQUEST_KEY" $signerReqKey
+  }
   $override = [ordered]@{ services = [ordered]@{ gateway = [ordered]@{ command = @($gwCmd) }; "console-api" = [ordered]@{ command = $consoleCmd; ports = @($port) } } }
   if ($agentCmd) { $override.services["agent"] = [ordered]@{ command = $agentCmd; ports = @("127.0.0.1:${AgentPort}:${AgentPort}") } }
   if ($attestCmd) { $override.services["attest"] = [ordered]@{ command = $attestCmd; ports = @("127.0.0.1:${AttestPort}:${AttestPort}") } }
@@ -442,6 +508,21 @@ try {
   # Always --build (Docker's cache makes it quick) unless -NoBuild: the images then match this checkout's code.
   if ($Build -and $NoBuild) { Stop-Here "-Build and -NoBuild together: pick one" }
   if ($NoBuild) { Say "INFO" "-NoBuild: starting the images already built; they may hold older code than this checkout" }
+  if ($signerCmd) {
+    # The seller keys exist in this process only for this one command, then are removed before the data plane starts.
+    $sigFile = Join-Path $outDir "signer-commands.yml"
+    $sigOverride = [ordered]@{ services = [ordered]@{ "control-signer" = [ordered]@{ command = $signerCmd; ports = @("127.0.0.1:${SignerPort}:8780") } } }
+    [IO.File]::WriteAllText($sigFile, ($sigOverride | ConvertTo-Json -Depth 6), (New-Object Text.UTF8Encoding($false)))
+    foreach ($k in @("AP2_SIGNING_KEY", "RECEIPT_SIGNING_KEY")) { Set-Item -Path "env:$k" -Value $sellerKeys[$k] }
+    try {
+      & docker @(@("compose", "-p", "chainaim-control-plane", "-f", "services/signer/compose.yml", "-f", $sigFile, "up", "-d") + $(if (-not $NoBuild) { @("--build") } else { @() }))
+      $sigCode = $LASTEXITCODE
+    } finally { foreach ($k in @("AP2_SIGNING_KEY", "RECEIPT_SIGNING_KEY")) { Remove-Item "env:$k" -ErrorAction SilentlyContinue } }
+    $sellerKeys = $null
+    if ($sigCode -ne 0) { Stop-Here "ca-control-signer did not start (docker compose -p chainaim-control-plane); see the message above" }
+    if (-not (Wait-Http "http://127.0.0.1:$SignerPort/healthz" @{} "ca-control-signer")) { Stop-Here "ca-control-signer did not answer: docker logs ca-control-signer --tail 20" }
+    Say "OK" "control plane: ca-control-signer on 127.0.0.1:$SignerPort (project chainaim-control-plane); seller keys removed from this process before the data plane starts"
+  }
   $upArgs = $composeArgs + @("up", "-d") + $(if (-not $NoBuild) { @("--build") } else { @() })
   & docker @upArgs
   if ($LASTEXITCODE -ne 0) { Stop-Here "docker compose up failed; see the message above. Rollback: DOCKERIZE-PLAN.md section 8." }

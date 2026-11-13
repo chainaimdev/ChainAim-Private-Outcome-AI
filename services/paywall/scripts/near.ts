@@ -94,6 +94,11 @@ export type NearPayOptions = {
    * one (the agent passes what the console signed). The message carries mandate_scope_mismatch.
    */
   requireOffer?: { payTo: string; asset: string; amount: string };
+  /**
+   * privateAI-design-36 ARCH-666: headers for the paid request, made from the offer right before the payment is signed (the
+   * agent's AP2 checkout mandate, bound to the offer's invoice id). A throw stops the payment: nothing is signed or paid.
+   */
+  headersFor?: (offer: { invoiceId?: string; amount: string; payTo: string; asset: string }) => Record<string, string>;
 };
 
 /** What payAndFetchNear returned: Paid, with amount the USDC decimal signed for (as RLUSD is on the XRPL rail), and units the same in base units. */
@@ -149,6 +154,11 @@ export async function payAndFetchNear(url: string, init: { method: string; heade
     if (invoiceId !== undefined) options.onStep?.(s, { invoiceId, amount: usdc, network: offer.network, ...extra });
   };
   step("quoted");
+  let extra: Record<string, string> = {};
+  if (options.headersFor) {
+    try { extra = options.headersFor({ ...(invoiceId !== undefined ? { invoiceId } : {}), amount: offer.amount, payTo: offer.payTo, asset: offer.asset }); }
+    catch (e) { throw new SetupError((e as Error).message); }
+  }
   const signedDelegateAction = await buyer.signer.createSignedDelegateAction({ x402Version: 2, paymentRequirements: offer as never });
   let decoded;
   try {
@@ -165,7 +175,7 @@ export async function payAndFetchNear(url: string, init: { method: string; heade
   step("signed");
   const resource = typeof required.resource === "object" && required.resource !== null ? (required.resource as Record<string, unknown>) : undefined;
   step("sent");
-  const response = await fetch(url, { ...init, headers: { ...init.headers, "PAYMENT-SIGNATURE": nearPaymentHeader(offer, signedDelegateAction, resource) } });
+  const response = await fetch(url, { ...init, headers: { ...init.headers, ...extra, "PAYMENT-SIGNATURE": nearPaymentHeader(offer, signedDelegateAction, resource) } });
   const receiptHeader = response.headers.get("payment-response");
   let receipt: Paid["receipt"];
   if (receiptHeader) {

@@ -52,6 +52,13 @@
  * --ap2-public-key PATH    the pinned JWK Set (default config/ap2-public-key.jwk.json at the repository root, committed;
  *                          exported by desk.ps1 -Ap2Key). A key the console sends or publishes is never used
  * --ap2-skew-sec N         clock skew allowed on the signed quote's expiry (default 30)
+ * --ap2-mandate on|off     privateAI-design-36 ARCH-666: sign a closed AP2 Checkout Mandate for each estimate-first quote
+ *                          ChainAim signed, with the tenant's mandate key (AP2_MANDATE_KEY_<TENANT> in the env file;
+ *                          desk.ps1 -MandateKey), nonce = the payment's invoice id; it goes with the paid release and
+ *                          ChainAim's signer verifies it before the run (default off; needs --ap2-verify on). A tenant with
+ *                          no key cannot pay such a job (refused, nothing signed)
+ * --mandate-audience ID    the business id the mandate is addressed to (default chainaim; the signer's --mandate-audience)
+ * --mandate-lifetime-sec N how long a mandate is valid (default 300; the signer accepts at most its --mandate-max-lifetime-sec)
  * --run-timeout-sec N      a run is cancelled if not signed by then (default 300)
  * --body-max-bytes N       largest POST /run body (default 65536)
  *
@@ -68,6 +75,7 @@ import { BedrockModel } from "@strands-agents/sdk";
 import { SpendLedger } from "../../../packages/agent-policy/src/index.ts";
 import { loadPinnedKey, type ReceiptCheck } from "./agent-receipt.ts";
 import { loadPinnedJwks, type Ap2Check } from "./agent-ap2.ts";
+import { loadMandateKeys, mandateKeyVariable, type MandateSigner } from "./agent-mandate.ts";
 import { AccountQueue, OFFER_MODES, loadAgentTenants, loadPolicies, parseRunRequest, payingNetwork, policyViews, publicTenants, runAgentJob, SetupError, sseFrame, type AgentPolicy, type AgentTenant, type OfferMode } from "./agent-jobs-core.ts";
 import { presidioClient, PROMPT_SCANNERS, PromptScan, type PromptScanner } from "./prompt-scan.ts";
 
@@ -107,6 +115,9 @@ const { values } = parseArgs({
     "offer-mode": { type: "string", default: "estimate-first" },
     "ap2-public-key": { type: "string", default: join(REPO, "config", "ap2-public-key.jwk.json") },
     "ap2-skew-sec": { type: "string", default: "30" },
+    "ap2-mandate": { type: "string", default: "off" },
+    "mandate-audience": { type: "string", default: "chainaim" },
+    "mandate-lifetime-sec": { type: "string", default: "300" },
     "receipt-poll-ms": { type: "string", default: "1000" },
     "receipt-poll-max": { type: "string", default: "15" },
     "run-timeout-sec": { type: "string", default: "300" },
@@ -191,6 +202,18 @@ if (ap2On) {
   }
 }
 
+// ARCH-666: the tenants' checkout mandate keys, read once from this environment (the mounted env file).
+const mandateOn = onOff("ap2-mandate", values["ap2-mandate"]);
+if (mandateOn && !ap2Check) fail("--ap2-mandate on needs --ap2-verify on: the mandate permits a quote the agent has verified");
+const mandateAud = values["mandate-audience"];
+if (!/^[\x21-\x7E]{1,200}$/.test(mandateAud)) fail("--mandate-audience must be 1 to 200 printable characters");
+const mandateLifetimeSec = whole("mandate-lifetime-sec", values["mandate-lifetime-sec"], 30, 3600);
+let mandates: MandateSigner | undefined;
+if (mandateOn) {
+  try { mandates = { keys: loadMandateKeys(values["agent-tenants"].split(",").map((t) => t.trim()).filter(Boolean), process.env), aud: mandateAud, lifetimeSec: mandateLifetimeSec }; }
+  catch (e) { fail(`--ap2-mandate on: ${(e as Error).message} (desk.ps1 -MandateKey -MandateTenant <id> makes one)`); }
+}
+
 let tenants: AgentTenant[];
 let network: string;
 let scan: PromptScan | undefined;
@@ -272,7 +295,7 @@ createServer(async (req, res) => {
       res.on("close", () => { if (!finished) stop.abort(); });
       const timer = setTimeout(() => stop.abort(), runTimeoutMs);
       try {
-        await runAgentJob(run, { tenants: byId, console: consoleUrl, paywall: paywallUrl, scan, promptMask, makeModel, maxTurns, ...(maxAmount ? { maxAmount } : {}), ...(policy ? { policy } : {}), ...(receiptCheck ? { receiptCheck } : {}), ...(ap2Check ? { ap2Check } : {}), queue, tenantLabel, log, defaultOfferMode },
+        await runAgentJob(run, { tenants: byId, console: consoleUrl, paywall: paywallUrl, scan, promptMask, makeModel, maxTurns, ...(maxAmount ? { maxAmount } : {}), ...(policy ? { policy } : {}), ...(receiptCheck ? { receiptCheck } : {}), ...(ap2Check ? { ap2Check } : {}), ...(mandates ? { mandates } : {}), queue, tenantLabel, log, defaultOfferMode },
           (e) => { if (!res.writableEnded && !res.destroyed) res.write(sseFrame(e)); }, stop.signal);
       } catch (e) {
         if (!res.writableEnded && !res.destroyed) res.write(sseFrame({ type: "error", reason: `the agent service failed: ${e instanceof Error ? e.message : String(e)}` }));
@@ -300,6 +323,9 @@ createServer(async (req, res) => {
   console.log(ap2Check
     ? `[agent] signed-quote check on: each quote is verified with the pinned AP2 key ${ap2Check.kids.join(", ")} from ${ap2Check.keyPath} before the policy (skew ${ap2Check.skewSec} s)`
     : "[agent] signed-quote check off (--ap2-verify off)");
+  console.log(mandates
+    ? `[agent] checkout mandates on: audience ${mandates.aud}, ${mandates.lifetimeSec} s; tenants with a mandate key: ${[...mandates.keys].map(([t, k]) => `${t} (${k.kid})`).join(", ") || "none"}${tenantIds.filter((t) => !mandates!.keys.has(t)).length ? `; without (cannot pay such a job): ${tenantIds.filter((t) => !mandates!.keys.has(t)).map((t) => `${t} ${mandateKeyVariable(t)}`).join(", ")}` : ""}`
+    : "[agent] checkout mandates off (--ap2-mandate off)");
   console.log(receiptCheck
     ? `[agent] receipt check on: each paid job's receipt is verified with the pinned key ${receiptCheck.keyId} from ${receiptCheck.keyPath} (asked ${receiptPollMax} times, ${receiptPollMs} ms apart)`
     : "[agent] receipt check off (--receipt-verify off)");

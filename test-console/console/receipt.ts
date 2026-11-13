@@ -14,6 +14,8 @@ import type { ChatReply } from "../../packages/crossask/src/index.ts";
 import { USDC_DECIMALS } from "../../packages/crossask/src/cost.ts";
 import type { HeldJob } from "./jobs.ts";
 import type { JobAttestation } from "./attest.ts";
+import type { SignerApi } from "../../packages/signer/src/index.ts";
+import { remoteReceiptSigner } from "./signer-client.ts";
 import {
   addSettlement,
   filesRoot,
@@ -23,6 +25,7 @@ import {
   signReceipt,
   type ReceiptCall,
   type ReceiptFile,
+  type ReceiptMandate,
   type ReceiptSigner,
   type Settlement,
   type SignedReceipt,
@@ -46,6 +49,23 @@ export function receiptConfig(flags: ReceiptFlags, env: Record<string, string | 
   if (!Number.isInteger(maxFiles) || maxFiles < 1 || maxFiles > 100_000) throw new Error(`--receipt-max-files must be a whole number from 1 to 100000, got ${raw}`);
   const dir = flags["receipt-dir"] ?? join("runtime", "receipts");
   return { signer: signerFromEnv(env, keyEnv), dir, maxFiles };
+}
+
+/**
+ * privateAI-design-36 ARCH-663: with --signer remote the receipt key is in ca-control-signer, never here: the config carries
+ * only its public half (from the signer's /.well-known/keys) and the folder. --receipt-key-env belongs to --signer local.
+ */
+export function receiptConfigRemote(flags: ReceiptFlags, paidJobsOn: boolean, publicKey: { keyId: string; publicKeyPem: string } | undefined): ReceiptConfig | undefined {
+  const mode = flags.receipts ?? "off";
+  if (mode !== "on" && mode !== "off") throw new Error(`--receipts must be on or off, got ${mode}`);
+  if (mode === "off") return undefined;
+  if (!paidJobsOn) throw new Error("--receipts on needs --paid-jobs on (a receipt is for a paid job)");
+  if (flags["receipt-key-env"] !== undefined) throw new Error("--receipt-key-env is for --signer local: with --signer remote the receipt key stays in ca-control-signer");
+  if (!publicKey) throw new Error("--receipts on: ca-control-signer publishes no receipt key");
+  const raw = flags["receipt-max-files"] ?? "500";
+  const maxFiles = Number(raw);
+  if (!Number.isInteger(maxFiles) || maxFiles < 1 || maxFiles > 100_000) throw new Error(`--receipt-max-files must be a whole number from 1 to 100000, got ${raw}`);
+  return { signer: remoteReceiptSigner(publicKey), dir: flags["receipt-dir"] ?? join("runtime", "receipts"), maxFiles };
 }
 
 /** SHA-256 of one file, streamed (data files can be large). */
@@ -117,15 +137,22 @@ export type ReceiptInput = {
   evidenceBundleSha256?: string;
   /** ARCH-631: the signed quote's merchant_authorization hash (--ap2 on only). */
   merchantAuthSha256?: string;
+  /** privateAI-design-36 ARCH-668: the checkout mandate ChainAim's signer verified before the run. */
+  mandate?: ReceiptMandate;
   createdAt: string;
 };
 
-export async function buildReceipt(input: ReceiptInput, cfg: ReceiptConfig): Promise<SignedReceipt> {
+/** What a remote-signed receipt carries beside its body: the signer re-checks both against the body (ARCH-668). */
+export type ReceiptBinding = { signer: SignerApi; ap2?: { checkout: Record<string, unknown>; merchant_authorization: string }; mandate?: string };
+
+/**
+ * The receipt body from the job's ids, hashes and amounts, signed in this process (cfg.signer, --signer local) or, with
+ * `bind`, by ChainAim's signer (ARCH-663), which checks the body against its allowlist and the signed quote and mandate.
+ */
+export async function buildReceipt(input: ReceiptInput, cfg: ReceiptConfig, bind?: ReceiptBinding): Promise<SignedReceipt> {
   if (input.files === undefined && input.folder === undefined) throw new Error("a receipt needs the dataset folder or its files");
   const files = input.files ?? (await datasetFiles(input.folder!, cfg.maxFiles));
-  return signReceipt(
-    {
-      v: 1,
+  const body = {
       receiptId: sha256Hex(`${input.jobId}:${input.quoteId}:${input.createdAt}`).slice(0, 32),
       jobId: input.jobId,
       quoteId: input.quoteId,
@@ -140,6 +167,7 @@ export async function buildReceipt(input: ReceiptInput, cfg: ReceiptConfig): Pro
       calls: receiptCalls(input.served, input.attestStatusOf),
       ...(input.evidenceBundleSha256 ? { evidenceBundleSha256: input.evidenceBundleSha256 } : {}),
       ...(input.merchantAuthSha256 ? { merchantAuthSha256: input.merchantAuthSha256 } : {}),
+      ...(input.mandate ? { mandate: input.mandate } : {}),
       price: {
         amountUnits: input.amountUnits,
         usdcDecimals: input.usdcDecimals,
@@ -148,9 +176,10 @@ export async function buildReceipt(input: ReceiptInput, cfg: ReceiptConfig): Pro
         ...(input.actualUsd !== undefined ? { actualUsd: input.actualUsd } : {}),
       },
       createdAt: input.createdAt,
-    },
-    cfg.signer,
-  );
+      v: 1 as const,
+    };
+  if (bind) return bind.signer.signReceipt({ body, ...(bind.ap2 ? { ap2: bind.ap2 } : {}), ...(bind.mandate ? { mandate: bind.mandate } : {}) });
+  return signReceipt(body, cfg.signer);
 }
 
 const JOB_ID = /^[0-9a-f]{32}$/;
@@ -159,6 +188,7 @@ const JOB_ID = /^[0-9a-f]{32}$/;
 export class ReceiptStore {
   private readonly mem = new Map<string, SignedReceipt>();
   private readonly quotes = new Map<string, { checkout: Record<string, unknown>; merchant_authorization: string }>();
+  private readonly mandates = new Map<string, string>();
   private readonly cfg: ReceiptConfig;
 
   constructor(cfg: ReceiptConfig) {
@@ -217,6 +247,38 @@ export class ReceiptStore {
     const q = JSON.parse(readFileSync(p, "utf8")) as { checkout: Record<string, unknown>; merchant_authorization: string };
     this.quotes.set(jobId, q);
     return q;
+  }
+
+  /**
+   * ARCH-668: the checkout mandate presentation the receipt's mandate.sha256 points at, kept beside it as
+   * <dir>/<jobId>.mandate.json, so one download lets anyone re-check it (scripts/verify-receipt.ts). A token, no content.
+   */
+  putMandate(jobId: string, mandate: string): void {
+    const p = `${this.path(jobId).replace(/\.json$/, "")}.mandate.json`;
+    writeFileSync(`${p}.tmp`, JSON.stringify({ mandate }, null, 2));
+    renameSync(`${p}.tmp`, p);
+    this.mandates.set(jobId, mandate);
+  }
+
+  getMandate(jobId: string): string | undefined {
+    const m = this.mandates.get(jobId);
+    if (m) return m;
+    const p = `${this.path(jobId).replace(/\.json$/, "")}.mandate.json`;
+    if (!existsSync(p)) return undefined;
+    const v = (JSON.parse(readFileSync(p, "utf8")) as { mandate?: unknown }).mandate;
+    if (typeof v !== "string") return undefined;
+    this.mandates.set(jobId, v);
+    return v;
+  }
+
+  /** ARCH-663: stores the receipt ChainAim's signer settled, once, in place of the unsettled one with the same signature. */
+  putSettled(r: SignedReceipt): SignedReceipt {
+    const cur = this.get(r.body.jobId);
+    if (!cur) throw new Error("no receipt for this job");
+    if (cur.settlement) throw new Error("this receipt already carries a settlement");
+    if (cur.sig.value !== r.sig.value || !r.settlement) throw new Error("the settled receipt is not this job's receipt");
+    this.write(r);
+    return r;
   }
 
   /** Appends the settlement (ARCH-616) once; a second settlement for the same job is refused. */
@@ -305,6 +367,8 @@ export type ReleaseReceiptDeps = {
   /** ca-attest's result for the job when attestation is on (attest.ts AttestClient.get). */
   attestation?: (jobId: string) => JobAttestation | undefined;
   now?: () => number;
+  /** ARCH-663: ChainAim's signer (in-process or ca-control-signer); absent = signed with cfg.signer in this process. */
+  signer?: SignerApi;
 };
 
 /**
@@ -335,12 +399,17 @@ export async function receiptOnRelease(deps: ReleaseReceiptDeps, jobId: string, 
       quoteBasis: hold.quoteBasis,
       ...(hold.actualUsd !== undefined ? { actualUsd: hold.actualUsd } : {}),
       ...(job.ap2 ? { merchantAuthSha256: job.ap2.merchantAuthSha256 } : {}),
+      ...(job.mandate ? { mandate: job.mandate.ref } : {}),
       createdAt: new Date(now()).toISOString(),
     },
     deps.cfg,
+    deps.signer ? { signer: deps.signer, ...(job.ap2 ? { ap2: { checkout: job.ap2.checkout, merchant_authorization: job.ap2.merchantAuthorization } } : {}), ...(job.mandate ? { mandate: job.mandate.presentation } : {}) } : undefined,
   );
   deps.store.put(receipt);
   if (job.ap2) deps.store.putQuote(jobId, { checkout: job.ap2.checkout, merchant_authorization: job.ap2.merchantAuthorization });
+  if (job.mandate) deps.store.putMandate(jobId, job.mandate.presentation);
   const settlement = parseSettlement(notice, now);
-  return settlement ? deps.store.settle(jobId, settlement) : receipt;
+  if (!settlement) return receipt;
+  if (deps.signer) return deps.store.putSettled(await deps.signer.settle({ receipt, settlement }));
+  return deps.store.settle(jobId, settlement);
 }
