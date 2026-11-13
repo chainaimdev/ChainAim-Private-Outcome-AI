@@ -87,3 +87,13 @@ test("ARCH-635b: a version 2 model prices the analyst as base + per MB, both rai
   assert.equal(worstCase(b, CM).extras.some((e) => e.name === "analystBase" || e.name === "gatewayBase"), false);
   assert.match(quoteOffer(b, PRICES, FEES, v2).amount, /^\d+0000$/);
 });
+
+test("ARCH-635d: each line is raised by its own unit's safety", () => {
+  const cm = parseCostModel({ ...CM_RAW, version: 2, safetyPctByUnit: { presidio: "50", analyst: "0", gateway: "100" }, units: { ...CM_RAW.units, analystBaseUsd: "0.001", gatewayBaseUsd: "0.0005" } });
+  const b = { kind: "crossask" as const, model: MODEL, phrase: "llm" as const, userSql: true, totalBytes: 1024 * 1024, files: 1, maxPromptChars: 8000, answerMaxPromptChars: 1024, maxTokens: 512, sqlRetries: 1, answerMaxRows: 50 };
+  const e = Object.fromEntries(worstCase(b, cm).extras.map((x) => [x.name, x.usd]));
+  assert.equal(e.analyst, "0.002000000000", "0.002 x 1 MB, analyst safety 0");
+  assert.equal(e.analystBase, "0.001000000000");
+  assert.equal(e.gatewayBase, "0.001000000000", "0.0005 x 1 call x 2 (gateway safety 100 %)");
+  assert.equal(worstCase({ kind: "scan", textBytes: 2048 }, cm).extras[0].usd, "0.000300000000", "0.0001 x 2 KB x 1.5 (presidio)");
+});

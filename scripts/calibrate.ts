@@ -281,7 +281,8 @@ export async function run(argv: string[], out: (s: string) => void = (s) => proc
   const qChars = samples.flatMap((x) => (x.kind === "call" && /\|query/.test(x.group) ? [x.promptChars] : []));
   if (qChars.length) out(`  largest query prompt ${Math.max(...qChars)} characters (the console's --crossask-max-prompt-chars caps it; offers price each query call at that cap)`);
   out(`  model call ${m.units.gatewayBaseUsd} USD/call + ${m.units.gatewayPerKbPromptUsd} USD/KB prompt (prompts ${made.observed.gatewayPromptBytes.join(" to ")} B)`);
-  out(`  safety ${m.safetyPct} %  tokensPerByte ${m.tokensPerByte} (observed max ${made.observed.tokensPerByteObservedMax})  bytesPerChar ${m.bytesPerChar}  (${Math.round((Date.now() - started.getTime()) / 1000)} s${waits ? `, ${waits} rate-limit wait(s)` : ""})`);
+  out(`  safety per line: presidio ${m.safetyPctByUnit.presidio} %, analyst ${m.safetyPctByUnit.analyst} %, model call ${m.safetyPctByUnit.gateway} % (widest overall ${m.safetyPct} %, ${made.observed.spreadGroup})`);
+  out(`  tokensPerByte ${m.tokensPerByte} (observed max ${made.observed.tokensPerByteObservedMax})  bytesPerChar ${m.bytesPerChar}  (${Math.round((Date.now() - started.getTime()) / 1000)} s${waits ? `, ${waits} rate-limit wait(s)` : ""})`);
   return 0;
 }
 

@@ -35,6 +35,8 @@ export type CostModel = {
   units: { presidioPerKbUsd: string; analystBaseUsd: string; analystPerMbUsd: string; gatewayBaseUsd: string; gatewayPerKbPromptUsd: string };
   /** Raises the time-derived lines only (presidio, analyst, gateway), never the model tokens. */
   safetyPct: string;
+  /** ARCH-635d: each line's own safety (calibration measures each unit's spread); absent in older files: safetyPct for all. */
+  safetyPctByUnit: { presidio: string; analyst: string; gateway: string };
 };
 
 const DEC = (v: unknown, what: string): string => {
@@ -42,6 +44,14 @@ const DEC = (v: unknown, what: string): string => {
   parseDecimal(v, `cost model ${what}`);
   return v;
 };
+
+/** safetyPctByUnit as written, or safetyPct for every unit when the file has none (files before ARCH-635d). */
+function byUnit(v: unknown, all: string): CostModel["safetyPctByUnit"] {
+  if (v === undefined) return { presidio: all, analyst: all, gateway: all };
+  const o = v as Record<string, unknown>;
+  if (typeof o !== "object" || o === null) throw new Error("cost model safetyPctByUnit must be an object");
+  return { presidio: DEC(o.presidio, "safetyPctByUnit.presidio"), analyst: DEC(o.analyst, "safetyPctByUnit.analyst"), gateway: DEC(o.gateway, "safetyPctByUnit.gateway") };
+}
 
 /** The cost model from its JSON, checked field by field; the message names the field, never guesses a value. */
 export function parseCostModel(raw: unknown): CostModel {
@@ -59,6 +69,7 @@ export function parseCostModel(raw: unknown): CostModel {
     tokensPerByte: tpb, bytesPerChar: bpc,
     units: { presidioPerKbUsd: DEC(u.presidioPerKbUsd, "units.presidioPerKbUsd"), analystBaseUsd: o.version === 1 ? "0" : DEC(u.analystBaseUsd, "units.analystBaseUsd"), analystPerMbUsd: DEC(u.analystPerMbUsd, "units.analystPerMbUsd"), gatewayBaseUsd: o.version === 1 ? "0" : DEC(u.gatewayBaseUsd, "units.gatewayBaseUsd"), gatewayPerKbPromptUsd: DEC(u.gatewayPerKbPromptUsd, "units.gatewayPerKbPromptUsd") },
     safetyPct: DEC(o.safetyPct, "safetyPct"),
+    safetyPctByUnit: byUnit(o.safetyPctByUnit, DEC(o.safetyPct, "safetyPct")),
   };
 }
 
@@ -114,15 +125,15 @@ export function worstCase(b: OfferBasis, cm: CostModel): { meter: MeterLine[]; e
   checkBasis(b);
   const KB = 1024, MB = 1024 * 1024;
   if (b.kind === "scan" || b.kind === "mask") {
-    return { meter: [], extras: [{ name: "presidio", usd: perUnit(cm.units.presidioPerKbUsd, b.textBytes, KB, cm.safetyPct) }] };
+    return { meter: [], extras: [{ name: "presidio", usd: perUnit(cm.units.presidioPerKbUsd, b.textBytes, KB, cm.safetyPctByUnit.presidio) }] };
   }
   if (b.kind === "chat") {
     return {
       meter: [{ model: b.model, promptTokens: ceilMul(b.promptBytes, cm.tokensPerByte), completionTokens: b.maxTokens }],
       extras: [
-        { name: "presidio", usd: perUnit(cm.units.presidioPerKbUsd, b.promptBytes, KB, cm.safetyPct) },
-        { name: "gateway", usd: perUnit(cm.units.gatewayPerKbPromptUsd, b.promptBytes, KB, cm.safetyPct) },
-        ...baseLine("gatewayBase", cm.units.gatewayBaseUsd, 1, cm.safetyPct),
+        { name: "presidio", usd: perUnit(cm.units.presidioPerKbUsd, b.promptBytes, KB, cm.safetyPctByUnit.presidio) },
+        { name: "gateway", usd: perUnit(cm.units.gatewayPerKbPromptUsd, b.promptBytes, KB, cm.safetyPctByUnit.gateway) },
+        ...baseLine("gatewayBase", cm.units.gatewayBaseUsd, 1, cm.safetyPctByUnit.gateway),
       ],
     };
   }
@@ -136,11 +147,11 @@ export function worstCase(b: OfferBasis, cm: CostModel): { meter: MeterLine[]; e
   return {
     meter,
     extras: [
-      { name: "analyst", usd: perUnit(cm.units.analystPerMbUsd, b.totalBytes, MB, cm.safetyPct) },
-      { name: "gateway", usd: perUnit(cm.units.gatewayPerKbPromptUsd, queryBytes * queries + (answer ? answerBytes : 0), KB, cm.safetyPct) },
+      { name: "analyst", usd: perUnit(cm.units.analystPerMbUsd, b.totalBytes, MB, cm.safetyPctByUnit.analyst) },
+      { name: "gateway", usd: perUnit(cm.units.gatewayPerKbPromptUsd, queryBytes * queries + (answer ? answerBytes : 0), KB, cm.safetyPctByUnit.gateway) },
       // ARCH-635b/c: the fixed time of the analyst run and of each model call, raised by the same safety; none for version 1.
-      ...baseLine("analystBase", cm.units.analystBaseUsd, 1, cm.safetyPct),
-      ...baseLine("gatewayBase", cm.units.gatewayBaseUsd, meter.length, cm.safetyPct),
+      ...baseLine("analystBase", cm.units.analystBaseUsd, 1, cm.safetyPctByUnit.analyst),
+      ...baseLine("gatewayBase", cm.units.gatewayBaseUsd, meter.length, cm.safetyPctByUnit.gateway),
     ],
   };
 }

@@ -65,3 +65,6 @@ __pycache__/
 
 # console run log (privateAI-design-31 s3): can hold result rows in full mode
 test-console/runs/
+
+# Chat session hand-off notes (owner 2026-11-13): local working notes, never published
+DESIGN-REF/near-hackathon-session-*.md

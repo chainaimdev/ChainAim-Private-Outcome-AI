@@ -119,3 +119,48 @@ test("ARCH-638 answerMaxPromptChars: not even one row fits, so no model is asked
   assert.equal(r.answer, null);
   assert.match(r.error ?? "", /over the 600 an answer request may have/);
 });
+
+// Owner calibration run 2026-11-12: nemotron guessed ERPNext field names ("paid_amount", "total_amount") on every retry.
+const erpTables = [
+  { table: "sales_invoice", file: "si.csv", rows: 5, columns: [{ name: "name" }, { name: "customer" }, { name: "grand_total" }, { name: "outstanding_amount" }] },
+  { table: "customer", file: "c.csv", rows: 3, columns: [{ name: "name" }, { name: "credit_limit" }] },
+];
+const binderDeps = (err: string, sent: Msg[][]): CrossAskDeps => {
+  let calls = 0;
+  return {
+    analyst: async (route) => {
+      if (route === "relations") return { schema: "TABLE sales_invoice, customer", relations: [], tables: erpTables };
+      if (calls++ === 0) throw new Error(err);
+      return { columns: ["n"], rows: [{ n: 1 }], truncated: false };
+    },
+    chat: async (messages) => { sent.push(messages.map((m) => ({ ...m }))); return { text: "```sql\nSELECT sum(si.\"total_amount\") AS n FROM \"sales_invoice\" AS si JOIN customer c ON c.\"name\" = si.\"customer\"\n```" }; },
+  };
+};
+const free = { folder: "/x", question: "Total?", model: "m/q", phrase: "none" as const, sqlRetries: 1, answerMaxRows: 10 };
+
+test("a column the table does not have: the retry lists that table's real columns (alias resolved from FROM / JOIN)", async () => {
+  const sent: Msg[][] = [];
+  const r = await crossAsk(free, binderDeps('analyst /sql: the query failed: Binder Error: Table "si" does not have a column named "total_amount"', sent));
+  assert.equal(r.error, undefined);
+  const retry = sent[1].at(-1)!.content;
+  assert.match(retry, /"total_amount" is not a column of sales_invoice\. sales_invoice has only these columns: "name", "customer", "grand_total", "outstanding_amount"\./);
+  assert.equal(/credit_limit/.test(retry), false, "only the table the alias names");
+});
+
+test("a column no table in the query has: the retry lists the columns of every table the query reads", async () => {
+  const sent: Msg[][] = [];
+  await crossAsk(free, binderDeps('Binder Error: Referenced column "total_order_amount" not found in FROM clause!', sent));
+  const retry = sent[1].at(-1)!.content;
+  assert.match(retry, /"total_order_amount" is not a column of any table the query reads\. sales_invoice has only these columns: .*customer has only these columns: "name", "credit_limit"\./);
+});
+
+test("other errors, or tables without column lists, add no hint (the retry is as before)", async () => {
+  const a: Msg[][] = [];
+  await crossAsk(free, binderDeps("Parser Error: syntax error at or near \")\"", a));
+  assert.equal(/has only these columns/.test(a[1].at(-1)!.content), false);
+  const b: Msg[][] = [];
+  const d = binderDeps('Binder Error: Table "si" does not have a column named "x"', b);
+  const plain: CrossAskDeps = { ...d, analyst: async (route, body) => (route === "relations" ? { schema: "s", relations: [], tables: ["sales_invoice"] } : d.analyst(route, body)) };
+  await crossAsk(free, plain);
+  assert.equal(/has only these columns/.test(b[1].at(-1)!.content), false);
+});

@@ -19,6 +19,9 @@
  * case seen: an offer is firm, so a slow run must still be covered.
  *   safetyPct      the largest run-to-run spread seen for the same work (same group: max / min - 1), in whole percent UP:
  *                  a run as much slower again as the worst spread observed is still covered. Needs 2+ runs per group.
+ *   safetyPctByUnit (ARCH-635d) the same per unit (presidio, analyst, gateway = model calls), each from its own groups,
+ *                  so a cold Presidio run no longer raises the analyst and model lines; a unit with no work measured
+ *                  twice takes safetyPct.
  *   bytesPerChar   max UTF-8 bytes per UTF-16 unit over the prompts sent (crossask's maxPromptChars counts UTF-16 units)
  *   tokensPerByte  "bound" (default, design-32 --tokens-per-byte 1): 1, valid only when every observed call has
  *                  promptTokens <= promptBytes (V-P4); "observed": the largest ratio seen, rounded UP to 4 decimals.
@@ -49,6 +52,8 @@ export type CalibrationObserved = {
   samples: { presidio: number; analyst: number; call: number };
   presidioMsPerKbMax: string; analystBaseMs: string; analystMsPerMb: string; analystSizes: number[]; gatewayBaseMs: string; gatewayMsPerKb: string; gatewayPromptBytes: [number, number];
   spreadMaxPct: string; spreadGroup: string;
+  /** Where each unit's safety came from: its own work measured twice, or the widest spread overall (none of its own). */
+  safetyFrom: Record<"presidio" | "analyst" | "gateway", "own" | "overall">;
   tokensPerByteObservedMax: string | null; callsWithUsage: number;
   bytesPerCharObservedMax: string;
 };
@@ -109,15 +114,24 @@ export function costModelFrom(samples: readonly CalibrationSample[], o: Calibrat
   const groups = new Map<string, Ratio[]>();
   for (const s of samples) { const k = `${s.kind}|${s.group}`; groups.set(k, [...(groups.get(k) ?? []), rate(s)]); }
   let spread: Ratio | null = null, spreadGroup = "";
+  // ARCH-635d: each unit's own widest spread too (presidio, analyst, call), so one unit's cold run raises only its own line
+  const unitSpread = new Map<string, Ratio>();
   for (const [k, rs] of groups) {
     if (rs.length < 2) continue;
     const hi = maxRatio(rs), lo = rs.reduce((m, r) => (gt(m, r) ? r : m));
     if (lo.a === 0n) continue; // a 0 ms run has no ratio to compare with
     const s = { a: hi.a * lo.b - lo.a * hi.b, b: lo.a * hi.b }; // hi/lo - 1
     if (!spread || gt(s, spread)) { spread = s; spreadGroup = k; }
+    const kind = k.split("|")[0];
+    if (!unitSpread.has(kind) || gt(s, unitSpread.get(kind)!)) unitSpread.set(kind, s);
   }
   if (!spread) throw new Error("no work was measured twice (run each at least 2 times, --runs 2 or more): safetyPct comes from the run-to-run spread");
-  const safetyPct = ((spread.a * 100n + spread.b - 1n) / spread.b).toString();
+  const pct = (r: Ratio) => ((r.a * 100n + r.b - 1n) / r.b).toString();
+  const safetyPct = pct(spread);
+  // a unit with no work measured twice takes the widest spread of all (never less than what was seen)
+  const safetyFrom: Record<"presidio" | "analyst" | "gateway", "own" | "overall"> = { presidio: "own", analyst: "own", gateway: "own" };
+  const unitPct = (kind: string, name: "presidio" | "analyst" | "gateway") => { const r = unitSpread.get(kind); if (!r) safetyFrom[name] = "overall"; return pct(r ?? spread!); };
+  const safetyPctByUnit = { presidio: unitPct("presidio", "presidio"), analyst: unitPct("analyst", "analyst"), gateway: unitPct("call", "gateway") };
 
   // bytes per UTF-16 unit, at least 1
   const bpc = maxRatio(calls.map((s) => ({ a: BigInt(s.promptBytes), b: BigInt(s.promptChars) })));
@@ -136,7 +150,7 @@ export function costModelFrom(samples: readonly CalibrationSample[], o: Calibrat
 
   const model = parseCostModel({
     version: 2, calibratedAt: o.calibratedAt, machine: o.machine, source: o.source, tokensPerByte, bytesPerChar,
-    units: { presidioPerKbUsd: usd(presMax), analystBaseUsd: usd(fit.base), analystPerMbUsd: usd({ a: fit.slope.a * MB, b: fit.slope.b }), gatewayBaseUsd: usd(gw.base), gatewayPerKbPromptUsd: usd({ a: gw.slope.a * KB, b: gw.slope.b }) }, safetyPct,
+    units: { presidioPerKbUsd: usd(presMax), analystBaseUsd: usd(fit.base), analystPerMbUsd: usd({ a: fit.slope.a * MB, b: fit.slope.b }), gatewayBaseUsd: usd(gw.base), gatewayPerKbPromptUsd: usd({ a: gw.slope.a * KB, b: gw.slope.b }) }, safetyPct, safetyPctByUnit,
   });
   const msDec = (r: Ratio) => upDec(r.a, r.b, 3n);
   return {
@@ -145,7 +159,7 @@ export function costModelFrom(samples: readonly CalibrationSample[], o: Calibrat
       samples: { presidio: pres.length, analyst: ana.length, call: calls.length },
       presidioMsPerKbMax: msDec(presMax), analystBaseMs: msDec(fit.base), analystMsPerMb: msDec({ a: fit.slope.a * MB, b: fit.slope.b }), analystSizes: fit.sizes,
       gatewayBaseMs: msDec(gw.base), gatewayMsPerKb: msDec({ a: gw.slope.a * KB, b: gw.slope.b }), gatewayPromptBytes: [gw.sizes[0], gw.sizes.at(-1)!],
-      spreadMaxPct: upDec(spread.a * 100n, spread.b, 2n), spreadGroup,
+      spreadMaxPct: upDec(spread.a * 100n, spread.b, 2n), spreadGroup, safetyFrom,
       tokensPerByteObservedMax: tpbObserved, callsWithUsage: withUsage.length,
       bytesPerCharObservedMax: upDec(bpc.a, bpc.b, 4n),
     },

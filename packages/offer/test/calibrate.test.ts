@@ -114,3 +114,22 @@ test("ARCH-635 ARCH-634: a calibrated model prices an offer through quoteOffer (
   assert.match(q.amount, /^\d+0000$/, "whole cents for AP2");
   assert.ok(Number(q.totalUsd) >= 0.01);
 });
+
+test("ARCH-635d: each unit's safety is its own widest spread; a unit with no repeated work takes the overall one", () => {
+  const { model, observed } = costModelFrom(SAMPLES, OPT);
+  // presidio 12/10 = 20 %, analyst 110/100 = 10 % (beats 210/200 = 5 %), model calls 500/400 = 25 %
+  assert.deepEqual(model.safetyPctByUnit, { presidio: "20", analyst: "10", gateway: "25" });
+  assert.equal(model.safetyPct, "25", "the widest of all stays as before");
+  assert.deepEqual(observed.safetyFrom, { presidio: "own", analyst: "own", gateway: "own" });
+  // a cold first Presidio run (owner run 2026-11-12: 113 ms then 37 ms) raises only the Presidio line
+  const cold = costModelFrom([...SAMPLES, { kind: "presidio", group: "scan|1kb", op: "scan", bytes: 1024, ms: 31 }], OPT).model;
+  assert.deepEqual(cold.safetyPctByUnit, { presidio: "210", analyst: "10", gateway: "25" });
+  // the analyst measured once per size: it takes the overall widest spread, said so in the observed block
+  const once = costModelFrom(SAMPLES.filter((s, i) => !(s.kind === "analyst" && (i === 3 || i === 5))), OPT);
+  assert.equal(once.model.safetyPctByUnit.analyst, "25");
+  assert.equal(once.observed.safetyFrom.analyst, "overall");
+  // a file written before ARCH-635d (no safetyPctByUnit) uses safetyPct for every line, as it did
+  const { safetyPctByUnit: _drop, ...older } = JSON.parse(JSON.stringify(model));
+  assert.deepEqual(parseCostModel(older).safetyPctByUnit, { presidio: "25", analyst: "25", gateway: "25" });
+  assert.throws(() => parseCostModel({ ...older, safetyPctByUnit: { presidio: "1", analyst: "x", gateway: "1" } }), /safetyPctByUnit\.analyst/);
+});

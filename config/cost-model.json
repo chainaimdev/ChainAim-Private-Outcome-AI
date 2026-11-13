@@ -1,41 +1,51 @@
 {
   "version": 2,
-  "calibratedAt": "2026-11-12T23:50:31.880Z",
+  "calibratedAt": "2026-11-13T00:39:04.507Z",
   "machine": "CHAINAIMMAIN",
-  "source": "desk.ps1 -Calibrate run of 2026-11-12 over sample datasets smb-fin-1, smb-erp-fin; model bedrock/nemotron-nano-3-30b, answer bedrock/nemotron-nano-3-30b; 3 runs; compute 0.40 USD/h",
+  "source": "desk.ps1 -Calibrate run of 2026-11-13 over sample datasets smb-fin-1, smb-erp-fin; model bedrock/nemotron-nano-3-30b, answer bedrock/nemotron-nano-3-30b; 3 runs; compute 0.40 USD/h",
   "tokensPerByte": "1",
   "bytesPerChar": "1",
   "units": {
-    "presidioPerKbUsd": "0.000012555556",
-    "analystBaseUsd": "0.000110852353",
-    "analystPerMbUsd": "0.000460609492",
-    "gatewayBaseUsd": "0.000326777778",
-    "gatewayPerKbPromptUsd": "0.000000000000"
+    "presidioPerKbUsd": "0.000009666667",
+    "analystBaseUsd": "0.000066050078",
+    "analystPerMbUsd": "0.000551753426",
+    "gatewayBaseUsd": "0.000324938272",
+    "gatewayPerKbPromptUsd": "0.000000375621"
   },
-  "safetyPct": "206",
+  "safetyPct": "136",
+  "safetyPctByUnit": {
+    "presidio": "136",
+    "analyst": "77",
+    "gateway": "81"
+  },
   "observed": {
     "samples": {
       "presidio": 18,
       "analyst": 27,
-      "call": 30
+      "call": 44
     },
-    "presidioMsPerKbMax": "113.000",
-    "analystBaseMs": "997.672",
-    "analystMsPerMb": "4145.486",
+    "presidioMsPerKbMax": "87.000",
+    "analystBaseMs": "594.451",
+    "analystMsPerMb": "4965.781",
     "analystSizes": [
       5395,
       2054495
     ],
-    "gatewayBaseMs": "2941.000",
-    "gatewayMsPerKb": "0.000",
+    "gatewayBaseMs": "2924.445",
+    "gatewayMsPerKb": "3.381",
     "gatewayPromptBytes": [
-      502,
-      10599
+      534,
+      12593
     ],
-    "spreadMaxPct": "205.41",
+    "spreadMaxPct": "135.14",
     "spreadGroup": "presidio|scan|1kb",
-    "tokensPerByteObservedMax": "0.6082",
-    "callsWithUsage": 30,
+    "safetyFrom": {
+      "presidio": "own",
+      "analyst": "own",
+      "gateway": "own"
+    },
+    "tokensPerByteObservedMax": "0.7151",
+    "callsWithUsage": 44,
     "bytesPerCharObservedMax": "1.0000"
   }
 }

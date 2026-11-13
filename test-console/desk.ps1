@@ -592,12 +592,23 @@ if ($Ship) {
     Say "OK" "all terminal suites passed"
   }
   if ($ShipDryRun) { Say "OK" "-ShipDryRun: nothing staged, committed or pushed"; Set-Location $repo; exit 0 }
-  $addArgs = @("add", "--") + $want
-  Quiet { & git @addArgs }
-  if ($LASTEXITCODE) { Stop-Here "git add failed (exit $LASTEXITCODE): nothing committed" }
+  # A removal already staged (git rm --cached; 2026-11-13: a file then git-ignored) is in the index as it should be
+  # committed: git add refuses an ignored path, and a commit naming it would take the file still on disk instead. So such
+  # paths are not added again, the commit takes the index with --include, and anything else already staged must be listed.
+  $stagedDel = @($status | Where-Object { "$_".StartsWith("D ") } | ForEach-Object { "$_".Substring(3).Trim('"') })
+  $stagedOther = @($status | Where-Object { "$_"[0] -ne ' ' -and "$_"[0] -ne '?' -and -not "$_".StartsWith("D ") } | ForEach-Object { $p = "$_".Substring(3); if ($p -match ' -> ') { $p = ($p -split ' -> ')[-1] }; $p.Trim('"') })
+  $notListed = @(@($stagedDel) + @($stagedOther) | Where-Object { $want -notcontains $_ })
+  if ($notListed.Count) { Stop-Here ("already staged but not in this commit's list: " + ($notListed -join ", ") + "; list them in -ShipFiles or unstage them by hand; nothing committed") }
+  $addPaths = @($want | Where-Object { $stagedDel -notcontains $_ })
+  if ($addPaths.Count) {
+    $addArgs = @("add", "--") + $addPaths
+    Quiet { & git @addArgs }
+    if ($LASTEXITCODE) { Stop-Here "git add failed (exit $LASTEXITCODE): nothing committed" }
+  }
   $commitArgs = @("commit", "-m", $ShipMessage)
   if ($ShipTrailer) { $commitArgs += @("-m", $ShipTrailer) }
-  $commitArgs += @("--") + $want
+  # --include: the listed paths plus the index (the staged removals above); with only removals, the index alone
+  if ($addPaths.Count) { $commitArgs += @("--include", "--") + $addPaths }
   Quiet { & git @commitArgs }
   if ($LASTEXITCODE) { Stop-Here "git commit failed (exit $LASTEXITCODE): the files stay staged; nothing pushed" }
   Say "OK" "committed $("$(Quiet { & git log --oneline -1 2>$null })".Trim())"

@@ -218,10 +218,45 @@ export type CrossAskResult = {
   timings?: CrossAskTimings;
 };
 
+/**
+ * A failed query that named a column the table does not have (DuckDB binder: 'Table "s" does not have a column named "x"',
+ * 'Referenced column "x" not found in FROM clause'): the retry names the real columns of the tables the query used, so the
+ * model picks a listed column instead of guessing another (owner calibration run 2026-11-12: nemotron guessed ERPNext
+ * field names three times in a row). Table names only from the query's FROM / JOIN; at most 80 columns a table; nothing
+ * but names already in the schema the model was sent. Not a match: no hint.
+ */
+const MAX_HINT_COLUMNS = 80;
+function columnHint(error: string, sql: string, tables: unknown): string | undefined {
+  if (!Array.isArray(tables)) return undefined;
+  const known = new Map<string, string[]>();
+  for (const t of tables) if (t && typeof t === "object" && typeof (t as { table?: unknown }).table === "string" && Array.isArray((t as { columns?: unknown }).columns))
+    known.set((t as { table: string }).table.toLowerCase(), ((t as { columns: { name?: unknown }[] }).columns).map((c) => c?.name).filter((n): n is string => typeof n === "string"));
+  if (!known.size) return undefined;
+  const aliasMiss = error.match(/Table "([^"]+)" does not have a column named "([^"]+)"/);
+  const refMiss = error.match(/Referenced column "([^"]+)" not found/);
+  if (!aliasMiss && !refMiss) return undefined;
+  // FROM / JOIN <table> [AS] <alias>, the table optionally quoted
+  const used = new Map<string, string>(); // alias or name (lower case) -> table (lower case)
+  for (const m of sql.matchAll(/\b(?:from|join)\s+"?([A-Za-z_][\w]*)"?(?:\s+(?:as\s+)?"?([A-Za-z_]\w*)"?)?/gi)) {
+    const table = m[1].toLowerCase();
+    if (!known.has(table)) continue;
+    used.set(table, table);
+    if (m[2] && !/^(on|where|join|left|right|inner|outer|full|cross|group|order|limit|using|natural)$/i.test(m[2])) used.set(m[2].toLowerCase(), table);
+  }
+  const list = (table: string) => `${table} has only these columns: ${known.get(table)!.slice(0, MAX_HINT_COLUMNS).map((c) => `"${c}"`).join(", ")}${known.get(table)!.length > MAX_HINT_COLUMNS ? ", ..." : ""}`;
+  if (aliasMiss) {
+    const table = used.get(aliasMiss[1].toLowerCase());
+    return table ? `"${aliasMiss[2]}" is not a column of ${table}. ${list(table)}.` : undefined;
+  }
+  const tablesUsed = [...new Set(used.values())];
+  return tablesUsed.length ? `"${refMiss![1]}" is not a column of any table the query reads. ${tablesUsed.map(list).join(". ")}.` : undefined;
+}
+
 export const SQL_SYSTEM = [
   "You write DuckDB SQL for a question about the tables below.",
   "Reply with exactly one SELECT (or WITH ... SELECT) statement inside a ```sql block, and nothing else.",
   "Use only the listed tables and columns. Write every column name in double quotes exactly as listed.",
+  "A column that is not in a table's list does not exist in that table, whatever the source system usually calls it (an export renames and drops fields): use the listed column that means it.",
   "To combine files, join ONLY on relations marked key; for VARCHAR keys compare upper(trim(a.\"x\")) = upper(trim(b.\"y\")).",
   "Never join two tables on a relation marked category or many-to-many: every row would be repeated and counts and sums multiplied.",
   "When you need totals from two tables that share only such a column, aggregate each table first (GROUP BY that column) and join the aggregates.",
@@ -317,7 +352,8 @@ export async function crossAsk(input: CrossAskInput, deps: CrossAskDeps): Promis
       const fed = input.retryErrorMaxChars && error.length > input.retryErrorMaxChars ? `${error.slice(0, input.retryErrorMaxChars)} ...(error cut)` : error;
       if (input.sql) break; // the person's own query: report the error, no model
       const repeated = out.attempts.slice(0, -1).some((a) => a.sql === sql);
-      messages.push({ role: "user", content: `That query failed: ${fed}\n${repeated ? "It is the same query as before. Write a different, simpler one: no WITHIN GROUP, check that every parenthesis is closed. " : ""}Fix it. Reply with one SELECT statement in a \`\`\`sql block only.` });
+      const hint = columnHint(error, sql ?? "", rel.tables);
+      messages.push({ role: "user", content: `That query failed: ${fed}\n${hint ? `${hint}\n` : ""}${repeated ? "It is the same query as before. Write a different, simpler one: no WITHIN GROUP, check that every parenthesis is closed. " : ""}Fix it. Reply with one SELECT statement in a \`\`\`sql block only.` });
     }
   }
   if (!out.result) { out.error = out.attempts.at(-1)?.error ?? "no query ran"; return out; }

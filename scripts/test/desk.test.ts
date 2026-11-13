@@ -183,8 +183,13 @@ test("-Ship: test, commit and push in one command (owner, 2026-11-07); refuses b
   assert.ok(code.indexOf("-Ship runs on its own") < code.indexOf("if ($Logs.Count)"), "options checked before anything runs");
   assert.ok(s.indexOf("rev-list --count \"HEAD..") < s.indexOf("Invoke-Suites"), "behind the remote: stop before testing");
   assert.ok(s.indexOf("Invoke-Suites") < s.indexOf("@(\"add\""), "tests before anything is staged");
-  assert.match(s, /\$commitArgs \+= @\("--"\) \+ \$want/, "commits only the listed paths");
-  assert.match(s, /\$addArgs = @\("add", "--"\) \+ \$want/);
+  // 2026-11-13: a removal staged by hand (git rm --cached of a now git-ignored file) is not added again (git add refuses an
+  // ignored path) and is committed from the index with --include; anything staged but not listed stops the ship
+  assert.match(s, /\$addPaths = @\(\$want \| Where-Object \{ \$stagedDel -notcontains \$_ \}\)/);
+  assert.match(s, /\$addArgs = @\("add", "--"\) \+ \$addPaths/);
+  assert.match(s, /\$commitArgs \+= @\("--include", "--"\) \+ \$addPaths/, "commits the listed paths and the staged removals");
+  assert.match(s, /already staged but not in this commit's list/, "only the listed paths: a staged path not listed stops it");
+  assert.ok(s.indexOf("already staged but not in this commit's list") < s.indexOf("@(\"add\""), "checked before anything is staged");
   assert.ok(!/add -A|add \.|"-A"|--force|push -f|reset|checkout|pull|stash/.test(s), "never force, pull, reset, checkout or stash");
   assert.ok(!/docker|Stop-Process/.test(s), "touches no service");
   assert.match(code, /function Invoke-Suites \{/);
