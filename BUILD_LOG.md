@@ -1513,3 +1513,21 @@ Built in the AI's workspace on a snapshot of the owner's repo (main = e8626e8, v
 - Calibration 2026-11-12T23:50Z (v2): analyst 997.7 ms/run + 4145 ms/MB; model call 2941 ms/call; safety 206 %; 12 ERP free runs
   skipped. Orion "Credit limit exposure" quoted 0.02 (was 0.09), auto-paid by t02, settled, released, receipt verified.
   Job 881a595613102e8140d7332b86f4a969.
+
+## 2026-11-13 ~01:50-02:45Z - privateAI-design-35 A-F (observer view, query-cap flag, judge path, demo script)
+
+- A ARCH-650: observer.ts + observer.test.ts (11); server.ts route/flags/config; paid-jobs.html observerPanel; fixture
+  test-console/test/fixtures/x402-near-payment.json copied from adminUI near-watch (public testnet data: H3ZFsVY1...).
+  RPC `tx` checked live with the payer as sender_account_id (archival-rpc.testnet: same answer as with the relayer).
+  console-paid-jobs ARCH-615 test extended: local JSON-RPC server, 404 before release, no RPC call before a settlement, 409 for a
+  transaction moving another payer's tokens, one `tx` call with only hash + payer. ARCH-112 config shape now has observer:false.
+- C ARCH-651: up.ps1 / desk.ps1 -CrossaskMaxPromptChars, desk.example.json console.crossaskMaxPromptChars 16000; desk.test +1.
+- B ARCH-652: scripts/observe-receipt.ts + scripts/test/observe-receipt.test.ts (2, local JSON-RPC server); docs/judge/sample-receipt.json
+  (v1.9.0 job ee216e7c...: verify-receipt OK, observe-receipt OK 0.04 on chain). README judge section; judge step 3 = 471/471.
+- D/E ARCH-653: docs/judge/demo-script.md (labels checked against paid-jobs.html and agent-ask.ts output).
+- F scan of the new/changed public files: "HIPAA" and "every AI call attested" only in the wording rules; no PRIVATE KEY / sk- /
+  AKIA patterns; the fixture's ed25519 strings are public chain keys and signatures. Pre-existing in README: local paths naming
+  C:\SATHYA\... and C:\PRIV-AI-SECRETS (owner decides).
+- Suites (VM, NODE_PATH=/tmp/duck/node_modules): crossask+receipt+agent-policy+ap2+offer+scripts+gateway+test-console 741 =
+  740 pass + 1 skip, 0 fail. Not run here: paywall, analyst (unchanged).
+- 2026-11-13 ~02:40Z ship stop at check-deps ([direction] scripts -> test-console; [cycle]; [stale-allow] caused by the same edge): observer moved to packages/observer; check-deps OK, suites 741 (740 + 1 skip).

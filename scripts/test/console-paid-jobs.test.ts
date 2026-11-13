@@ -265,15 +265,32 @@ describe("ARCH-615 ARCH-616 Job Evidence Receipts on the real console", () => {
   test("ARCH-615 ARCH-616: --receipts on: after release the receipt is served, verifies against the released result and carries the settlement", async () => {
     const port = await freePort(), iport = await freePort();
     const signing = generateKeyPairSync("ed25519").privateKey.export({ type: "pkcs8", format: "pem" }).toString();
+    // privateAI-design-35 ARCH-650: a local NEAR RPC (real HTTP, JSON-RPC) answering with the recorded x402 payment
+    // (packages/observer/test/fixtures/x402-near-payment.json), so the observer route runs route -> RPC -> decode for real.
+    const fx = JSON.parse(readFileSync(join(ROOT, "packages/observer/test/fixtures/x402-near-payment.json"), "utf8")) as { txStatus: unknown };
+    const rpcCalls: string[] = [];
+    const rpcSrv = createServer((req, res) => {
+      let b = ""; req.on("data", (d) => (b += d)); req.on("end", () => {
+        const m = JSON.parse(b) as { method: string; params: unknown };
+        rpcCalls.push(`${m.method} ${JSON.stringify(m.params)}`);
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify(m.method === "tx" ? { jsonrpc: "2.0", id: 1, result: fx.txStatus } : { jsonrpc: "2.0", id: 1, result: { header: { height: 1, timestamp_nanosec: "1762264350000000000" } } }));
+      });
+    });
+    await new Promise<void>((ok) => rpcSrv.listen(0, "127.0.0.1", () => ok()));
+    const rpcUrl = `http://127.0.0.1:${(rpcSrv.address() as AddressInfo).port}`;
     // Ready only once the receipts line is out too: it is logged after the internal-listener line and may arrive in a later chunk.
-    const c = await start(consoleArgs(port, iport, { receipts: "on", "receipt-dir": join(dir, "receipts") }), (o) => consoleReady(port)(o) && o.includes("receipts on: signing key id"), { PAID_JOBS_KEY: JOBS_KEY, RECEIPT_SIGNING_KEY: signing }, "the console");
+    const c = await start(consoleArgs(port, iport, { receipts: "on", "receipt-dir": join(dir, "receipts"), "observer-rpc-testnet": rpcUrl, "observer-rpc-fallback-testnet": "none" }), (o) => consoleReady(port)(o) && o.includes("receipts on: signing key id") && o.includes("observer view on"), { PAID_JOBS_KEY: JOBS_KEY, RECEIPT_SIGNING_KEY: signing }, "the console");
     try {
       assert.equal(c.out().includes("PRIVATE KEY"), false, "the key is never printed");
       assert.equal(JSON.parse((await call(port, "GET", "/jobs/config")).text).receipts, true);
+      assert.equal(JSON.parse((await call(port, "GET", "/jobs/config")).text).observer, true);
       const r = await ask({ folder: data, question: QUESTION, model: MODEL, phrase: "none", datasetId: "orders-demo", templateLabel: "Count orders" }, port);
       assert.equal(r.status, 200, r.text);
       const { jobId } = JSON.parse(r.text);
       assert.equal((await call(port, "GET", `/jobs/${jobId}/receipt`)).status, 404, "no receipt before the job is released");
+      assert.equal((await call(port, "GET", `/jobs/${jobId}/observer`)).status, 404, "no observer view before the job is released");
+      assert.equal(rpcCalls.length, 0, "no RPC call before there is a settlement");
       const held = JSON.parse((await call(iport, "GET", `/internal/jobs/${jobId}`, { "x-jobs-key": JOBS_KEY })).text);
       const notice = { transaction: "4ZqX9vYbT8cTq2b7hS3dK1mN6pR5sU8wXyZaBcDeFgH", network: "near:testnet", payer: "t02.testnet", invoiceId: "ABCDEF0123456789ABCDEF0123456789" };
       const rel = await call(iport, "POST", `/internal/jobs/${jobId}/released`, { "x-jobs-key": JOBS_KEY, "content-type": "application/json" }, JSON.stringify(notice));
@@ -295,7 +312,15 @@ describe("ARCH-615 ARCH-616 Job Evidence Receipts on the real console", () => {
       assert.ok(/"event":"job_receipt"/.test(c.out()));
       assert.equal(c.out().includes(MARKER), false, "no data in the console log");
       assert.equal((await call(port, "GET", `/jobs/${"0".repeat(32)}/receipt`)).status, 404);
-    } finally { await stop(c); }
+      // ARCH-650: the route reads the settlement's transaction by its payer; the recorded transaction moves another
+      // account's tokens than this receipt's payer (t02.testnet), so it is refused as not this job's payment.
+      const ob = await call(port, "GET", `/jobs/${jobId}/observer`);
+      assert.equal(ob.status, 409, ob.text);
+      assert.match(JSON.parse(ob.text).error, /moves chainaim-buyer-seller\.testnet's tokens, but the receipt names t02\.testnet/);
+      assert.equal(rpcCalls.length, 1);
+      assert.match(rpcCalls[0], new RegExp(`^tx \\{"tx_hash":"${notice.transaction}","sender_account_id":"t02\\.testnet","wait_until":"FINAL"\\}$`), "only the public hash and payer are sent");
+      for (const leak of [MARKER, QUESTION, jobId]) assert.equal(rpcCalls[0].includes(leak), false, leak);
+    } finally { await stop(c); rpcSrv.close(); }
   });
 
   test("ARCH-614: --receipts on refuses to start without the signing key, naming the variable only", async () => {
@@ -386,7 +411,7 @@ describe("ARCH-101 / ARCH-112 the page and the relay", () => {
     // defaultPayer (owner 2026-11-07): "me" unless the console runs with --default-payer agent
     // receipts (privateAI-design-32 ARCH-615): false unless the console runs with --receipts on
     // offers (privateAI-design-34 ARCH-642): estimate-first by default, since the repository has config/cost-model.json
-    assert.deepEqual(JSON.parse(cfg.text), { wallet: "intear-wallet", walletName: "Intear Wallet", ttlMin: 15, defaultPayer: "me", attest: null, receipts: false, offers: { mode: "estimate-first", modes: ["estimate-first", "run-hold"] } });
+    assert.deepEqual(JSON.parse(cfg.text), { wallet: "intear-wallet", walletName: "Intear Wallet", ttlMin: 15, defaultPayer: "me", attest: null, receipts: false, observer: false, offers: { mode: "estimate-first", modes: ["estimate-first", "run-hold"] } });
   });
 
   test("ARCH-112: the release relay adds no gateway key and logs neither the payment nor the result", async () => {

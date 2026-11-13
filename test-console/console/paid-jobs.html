@@ -85,7 +85,10 @@
   // Signed Job Evidence Receipt of the paid job (ARCH-615): filled after the release, only when the console has receipts on.
   const rcpt = document.createElement("div");
   rcpt.id = "xreceipt";
-  box.append(label, modeBox, who, info, pay, proof, rcpt);
+  // Observer view (privateAI-design-35 ARCH-650): what anyone reading NEAR learns about the job, after the release.
+  const obs = document.createElement("div");
+  obs.id = "xobserver";
+  box.append(label, modeBox, who, info, pay, proof, rcpt, obs);
   ask.closest(".row-actions").after(box);
 
   let config = null;
@@ -232,6 +235,52 @@
     ask();
   }
 
+  /**
+   * ARCH-650: the payment's public footprint. The line says the limit plainly; the button asks GET /jobs/<id>/observer,
+   * which reads the settlement transaction from public NEAR RPC (as anyone could) and lists what the chain does not carry.
+   */
+  const OBSERVER_LINE = "Your content stays private: it was de-identified before any model saw it, every NEAR AI call is attested, and nothing about it goes on chain. Only the payment is on NEAR, like any transfer: who paid, how much and when.";
+  function observerPanel(jobId) {
+    obs.replaceChildren();
+    if (!config || config.observer !== true || !/^[0-9a-f]{32}$/.test(jobId)) return;
+    const line = document.createElement("p"); line.className = "muted"; line.id = "xobserverLine";
+    line.textContent = OBSERVER_LINE;
+    const go = document.createElement("button");
+    go.type = "button"; go.className = "ghost"; go.id = "xobserverGo"; go.textContent = "What the chain shows";
+    const out = document.createElement("div"); out.id = "xobserverOut";
+    obs.append(line, go, out);
+    let n = 0;
+    const show = (v) => {
+      const t = document.createElement("table"); t.className = "kv result-kv observer";
+      const row = (k, ...cells) => { const tr = document.createElement("tr"); const th = document.createElement("th"); th.textContent = k; const td = document.createElement("td"); td.append(...cells); tr.append(th, td); t.append(tr); };
+      row("Paid by", v.payer);
+      if (v.relayer) row("Sent by (relayer, pays the gas)", v.relayer);
+      row("Paid to", v.payTo);
+      row("Amount", `${v.amount} USDC${v.succeeded ? "" : " (the transfer FAILED on chain)"}`);
+      row("When", v.blockTime ? `${v.blockTime}${v.blockHeight !== null ? ` · block ${v.blockHeight}` : ""}` : "not given by the RPC node (see the explorer)");
+      row("Token contract", v.token);
+      if (v.memo) row("Memo", v.memo);
+      row("Transaction", explorerLink(v.network, v.transaction));
+      const not = document.createElement("p"); not.className = "muted";
+      not.textContent = `Not on the chain: ${v.notOnChain.join("; ")}. Read from ${new URL(v.rpcUrl).host}, a public NEAR RPC, with no ChainAim key.`;
+      out.replaceChildren(t, not);
+    };
+    const ask = async () => {
+      n++;
+      go.disabled = true; out.replaceChildren("Reading the transaction from public NEAR RPC…");
+      let r = null, j = null;
+      try { r = await fetch(`/jobs/${jobId}/observer`); j = await r.json(); } catch { j = null; }
+      if (r && r.ok && j && typeof j.payer === "string") { go.disabled = false; show(j); return; }
+      // 404/409 right after the release: the receipt or its settlement is still being attached.
+      if (r && (r.status === 404 || r.status === 409) && n < RECEIPT_POLL_MAX) { setTimeout(ask, RECEIPT_POLL_MS); return; }
+      go.disabled = false;
+      const e = document.createElement("p"); e.className = "err";
+      e.textContent = `Could not read the chain: ${(j && j.error) || (r ? `HTTP ${r.status}` : "the console did not answer")}`;
+      out.replaceChildren(e);
+    };
+    go.onclick = () => { n = 0; ask(); };
+  }
+
   const explorerLink = (network, transaction) => {
     const link = document.createElement("a");
     link.href = `https://${network === "near:mainnet" ? "" : "testnet."}nearblocks.io/txns/${transaction}`;
@@ -348,6 +397,7 @@
     }
     if (result !== undefined && settled && ranJob) attestPanel(ranJob);
     if (result !== undefined && settled && ranJob) receiptPanel(ranJob, receiptCheck);
+    if (result !== undefined && settled && ranJob) observerPanel(ranJob);
     if (result === undefined || !settled) throw new Error(`The agent's steps ended before the result arrived${settled ? ` (transaction ${settled.transaction}: it was paid)` : ""}.`);
     info.replaceChildren(`Paid ${Number(quoted?.totalUsd)} USDC by the AI agent from ${t.accountId} on ${settled.network} · transaction `, explorerLink(settled.network, settled.transaction));
     info.className = "muted";
@@ -479,6 +529,7 @@
           info.className = "muted";
           attestPanel(job.jobId);
           receiptPanel(job.jobId);
+          observerPanel(job.jobId);
           resolve(r.result);
         } catch (e) { pay.replaceChildren(); reject(e); }
       };
@@ -489,7 +540,7 @@
   const free = postData;
   postData = async (url, body) => {
     if (url !== "/crossask" || !tick.checked) return free(url, body);
-    pay.replaceChildren(); proof.replaceChildren(); rcpt.replaceChildren();
+    pay.replaceChildren(); proof.replaceChildren(); rcpt.replaceChildren(); obs.replaceChildren();
     const sent = withReceiptFields(body);
     if (agentChosen()) return agentStep(sent);
     const job = await free(modeChosen() === "estimate-first" ? "/offers" : "/jobs/crossask", sent);

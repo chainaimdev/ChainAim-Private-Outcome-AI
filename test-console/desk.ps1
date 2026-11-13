@@ -100,7 +100,9 @@ one READY table across both. Neither launcher is changed or renamed; each team k
                 (verify_ar_ap.py). Same seed, same files. Changes only those two files and their _answer-key.
   Stray words are refused (no positional parameters), so a typo such as "-Check memor" stops instead of running -Logs.
   -All  [-AllSkipTests] [-AllSkipSmoke] [-AllSmbSample [-SmbSeed 1]] [-Windows analyst,console-api] [the -Smoke... options]
-        [-Agent] [-Attest] [-Build]
+        [-Agent] [-Attest] [-Build] [-CrossaskMaxPromptChars N]
+                -CrossaskMaxPromptChars N: tab 03's query prompt cap, which prices a quote's query calls (privateAI-design-35
+                ARCH-651; default desk.json console.crossaskMaxPromptChars, else 16000; up.ps1 checks 2000..200000).
                 everything in one command (owner, 2026-11-07), in this order, stopping at the first failure:
                 1. terminal suites: scripts\check-deps.ts and the -Test suites (no containers needed);
                    with -AllSmbSample, then this script's own -SmbSample (smb-fin-1 receivables, payables and answer key
@@ -206,6 +208,7 @@ param(
   [string]$AgentAnswerModel = "default",
   [string]$AgentQueryModel = "default",
   [string]$OfferMode = "estimate-first",
+  [int]$CrossaskMaxPromptChars = 0,
   [string]$VerifyReceipt = "",
   [string]$VerifyResult = "auto",
   [string]$VerifyJob = "",
@@ -495,7 +498,7 @@ if ($Calibrate) {
 function Invoke-Suites {
   Say "TEST" "terminal suites (each starts its own servers; near-watch path from config\local\repos.json)"
   # packages/receipt and packages/agent-policy: privateAI-design-32 ARCH-613..616 and ARCH-620..624; packages/ap2: design-33 ARCH-626; packages/offer: design-34 ARCH-634 (pure, no servers).
-  & node --test "packages/crossask/test/*.test.ts" "packages/receipt/test/*.test.ts" "packages/agent-policy/test/*.test.ts" "packages/ap2/test/*.test.ts" "packages/offer/test/*.test.ts" "scripts/test/*.test.ts" "services/gateway/test/*.test.ts" "test-console/test/*.test.ts" | Out-Host
+  & node --test "packages/crossask/test/*.test.ts" "packages/receipt/test/*.test.ts" "packages/agent-policy/test/*.test.ts" "packages/ap2/test/*.test.ts" "packages/offer/test/*.test.ts" "packages/observer/test/*.test.ts" "scripts/test/*.test.ts" "services/gateway/test/*.test.ts" "test-console/test/*.test.ts" | Out-Host
   $a = $LASTEXITCODE
   & npm --prefix services\analyst test | Out-Host
   $b = $LASTEXITCODE
@@ -871,7 +874,11 @@ $defPayer = if ($P.console -and $P.console.defaultPayer) { [string]$P.console.de
 if (@("me", "agent") -notcontains $defPayer) { Stop-Here "$Settings console.defaultPayer must be me or agent" }
 if ($defAnswer) { $privArgs.DefaultAnswerModel = $defAnswer }
 $privArgs.DefaultPayer = $defPayer
-Say "RUN" "test-console\up.ps1 -ReplaceRunning -PaidJobs $($privArgs.PaidJobs)$(if ($Build) { ' -Build' })$(if ($WithStub) { ' -Test' })$(if ($agentMode -ne 'auto') { ' -Agent ' + $agentMode })$(if ($attestMode -ne 'auto') { ' -Attest ' + $attestMode }) -AttestGpuCheck $attestGpu$(if ($receiptsMode -ne 'auto') { ' -Receipts ' + $receiptsMode }) -DefaultPayer $defPayer$(if ($defAnswer) { ' -DefaultAnswerModel ' + $defAnswer })"
+# privateAI-design-35 ARCH-651: tab 03's query prompt cap (prices each query call of a quote); -CrossaskMaxPromptChars, else
+# desk.json console.crossaskMaxPromptChars, else 16000. up.ps1 checks the range.
+$maxPrompt = if ($CrossaskMaxPromptChars -gt 0) { $CrossaskMaxPromptChars } elseif ($P.console -and $P.console.crossaskMaxPromptChars) { [int]$P.console.crossaskMaxPromptChars } else { 16000 }
+$privArgs.CrossaskMaxPromptChars = $maxPrompt
+Say "RUN" "test-console\up.ps1 -ReplaceRunning -PaidJobs $($privArgs.PaidJobs)$(if ($Build) { ' -Build' })$(if ($WithStub) { ' -Test' })$(if ($agentMode -ne 'auto') { ' -Agent ' + $agentMode })$(if ($attestMode -ne 'auto') { ' -Attest ' + $attestMode }) -AttestGpuCheck $attestGpu$(if ($receiptsMode -ne 'auto') { ' -Receipts ' + $receiptsMode }) -DefaultPayer $defPayer$(if ($defAnswer) { ' -DefaultAnswerModel ' + $defAnswer }) -CrossaskMaxPromptChars $maxPrompt"
 & $privUp @privArgs
 if ($LASTEXITCODE) { Stop-Here "test-console\up.ps1 stopped (exit $LASTEXITCODE): its STOP line above names the fix" }
 

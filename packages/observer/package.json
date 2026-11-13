@@ -1,0 +1,10 @@
+{
+  "name": "@chainaim/observer",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Observer view (privateAI-design-35 ARCH-650): what anyone reading NEAR learns about one paid job, read from public NEAR RPC with no key. Used by the console (GET /jobs/<id>/observer) and scripts/observe-receipt.ts. No runtime dependencies (fetch only).",
+  "type": "module",
+  "engines": { "node": ">=22.22" },
+  "exports": { ".": "./src/index.ts" },
+  "scripts": { "test": "node --test \"test/*.test.ts\"" }
+}

@@ -1,18 +1,63 @@
-# ChainAim Private AI
+# ChainAim Private AI: Outcome AI
 
-Private AI questions on your own files, paid per use in stablecoins. Every piece of text is scanned and masked
-**before** it reaches any model, the model answers on masked text, and the real values are put back only on your side.
+**Pay for verified outcomes, not tokens. Private by design, proven on NEAR.**
 
-- **Mask first, always.** Presidio plus ChainAim's own patterns find names, accounts, IDs, health data and cards. A
-  residual check refuses (HTTP 422) anything that still looks personal. If the scanner is down, nothing is sent (fail closed).
-- **Any model, by name or by zone.** Local models, OpenRouter free models, or Amazon Bedrock (Nemotron, Sydney). Health
-  data and `chainaim/auto` can be pinned to local zones only.
-- **Exact answers from your files.** The analyst (DuckDB) relates CSV/TSV files and runs one read-only SQL query; the
-  model only writes the query from headers and words the answer.
-- **Pay per use with x402.** USDC on **NEAR** (Intear wallet, relayer pays the gas) or RLUSD on the **XRP Ledger**.
-  Tab 03 paid jobs: the job runs first, you see one total price, you pay, then the result is released.
+A business can ask AI about its own books without handing over its data, trusting numbers a model made up, or signing an
+open-ended bill. Every step leaves proof that anyone can check: an attested model call, a signed price, a signed
+receipt and a settlement on NEAR.
+
+## What makes it different
+
+- **Your data never reaches a model in the clear.** Presidio plus ChainAim's own patterns find names, accounts, IDs,
+  health data and cards, and mask them before any model sees the text. A residual check refuses (HTTP 422) anything that
+  still looks personal; if the scanner is down, nothing is sent (fail closed). Real values are put back only on your side.
+- **Numbers you can trust.** The analyst (DuckDB) computes the answer with one exact, read-only query on your files; the
+  model only writes the query from column names and words the result, and every figure in its wording is checked
+  against the computed result.
+- **A firm price before any work.** Estimate first: the price is set from the files' sizes, signed by ChainAim (AP2
+  merchant authorization), and the job runs only after payment. A failed job is never charged. Template questions cost
+  0.01 to 0.02 USDC.
+- **Proof, not promises.** Each NEAR AI call runs in a hardware-sealed enclave (Intel TDX, NVIDIA GPU) and its
+  attestation is verified for the job. Every paid job ends with an Ed25519-signed receipt that binds the files, query,
+  result, model calls, price and NEAR settlement, as hashes only: the receipt never holds the data.
+- **AI agents that buy safely.** A company's AI agent checks ChainAim's signed quote against its own spending mandate
+  (per job, per day, auto-approve limit, attested route only), pays in USDC on NEAR and verifies the receipt. Offered a
+  route that is not attested, it refuses before anything is signed or paid.
+- **Privacy you can check, edge included.** No question, file, query, result or answer ever goes on chain. The payment
+  is an ordinary NEAR USDC transfer, so, as with any on-chain payment, its payer, amount and time are public; tab 03's
+  "What the chain shows" displays exactly that for each job, read from public NEAR RPC.
+- **Pay per use, on NEAR or the XRP Ledger.** USDC on **NEAR** (Intear wallet or an AI agent; a relayer pays the gas) or
+  RLUSD on the **XRP Ledger**, over x402.
+- **Any model, by name or by zone.** NEAR AI (attested), local models, OpenRouter, or Amazon Bedrock. Health data and
+  `chainaim/auto` can be pinned to local zones only.
 - **Live operations.** Every payment and paid job is reported to the NEAR admin UI
   ([chainaim-adminUI-NEAR](https://github.com/chainaimdev/chainaim-adminUI-NEAR)), which reconciles it with the chain.
+
+## Judges: verify it yourself, no keys
+
+Needs only Node.js 22.22 or later and this repository (no `npm install`, no account, no key). Run from the repository root.
+
+```powershell
+# 1. A real paid job (testnet, 2026-11-13: an AI agent paid 0.02 USDC for "Credit limit exposure"): its signed receipt,
+#    checked offline against the pinned public key (config/receipt-public-key.pem), with the AP2 signed quote it points at
+#    (config/ap2-public-key.jwk.json).
+node scripts/verify-receipt.ts --file docs/judge/sample-receipt-2026-11-13T0214Z.json --result none
+#    expected last line: OK      receipt valid: signed by the pinned key d27d1e9f..., settlement signed too, signed quote matches
+
+# 2. The same job's payment, read from NEAR the way anyone can: who paid, how much and when, and that the content is not there.
+node scripts/observe-receipt.ts --file docs/judge/sample-receipt-2026-11-13T0214Z.json
+#    expected last line: OK      the chain shows this receipt's payment (0.02, as the receipt's price for job 81ad24c5...)
+
+# 3. The masking, pricing, receipt, AP2 and observer tests (no service needed; 471 pass on 2026-11-13).
+node --test "packages/receipt/test/*.test.ts" "packages/ap2/test/*.test.ts" "packages/offer/test/*.test.ts" "packages/observer/test/*.test.ts" "test-console/test/*.test.ts" "services/gateway/test/*.test.ts"
+```
+
+The demo scenes (a paid outcome; the agent refusing a route that is not attested) and the 1-minute video script:
+[docs/judge/demo-script-2026-11-13T0230Z.md](docs/judge/demo-script-2026-11-13T0230Z.md).
+
+`--result none`: the released result (the answer) is not published; with it, step 1 also checks the receipt's result
+hash. The sample receipt names the dataset `smb-erp-fin` and the template "Credit limit exposure": the demo ERPNext books in
+`sample-data/smb-2-erp-fin/erpnext/orion` (demo customers, no real company).
 
 ## How to run it
 
@@ -20,15 +65,15 @@ Full commands with expected output: **[cmd.md](cmd.md)**. This repo runs togethe
 [chainaim-adminUI-NEAR](https://github.com/chainaimdev/chainaim-adminUI-NEAR).
 
 **1. One-time setup (once per PC):** [cmd.md PART 1](cmd.md) — tools, clone both repos, packages, the local gateway key,
-the secrets files in `C:\PRIV-AI-SECRETS`, the gateway's model mode, and the first start
+the secrets files in your secrets folder (outside the repository), the gateway's model mode, and the first start
 (`.\test-console\up.ps1 -ReplaceRunning -Build -PayTo <XRPL pay-to>`). The admin UI repo's one-time setup comes first.
 
 **2. Run all containers and both UIs (every day):** two commands, in this order.
 
 ```powershell
-cd C:\SATHYA\CHAINAIM3003\mcp-servers\chainaim-adminUI-NEAR
+cd <your-folder>\chainaim-adminUI-NEAR
 .\nearadminup.ps1              # ca-near-watch + admin UI http://127.0.0.1:8800
-cd C:\SATHYA\CHAINAIM3003\mcp-servers\chainiam-private-ai
+cd <your-folder>\chainaim-private-ai
 .\test-console\up.ps1          # six backend containers + console UI http://127.0.0.1:8730
 ```
 
@@ -44,7 +89,7 @@ Tab 03 agent mode (on by default when `agent-tenants.env` and a Bedrock key exis
 ## What a teammate needs
 
 The code, the team prices and the watch list are in the two repos. Keys and data are **not** (by design): the owner
-shares the values privately, each teammate puts them in `C:\PRIV-AI-SECRETS` (names in [cmd.md](cmd.md) A4).
+shares the values privately, each teammate puts them in their own secrets folder, outside the repository (names in [cmd.md](cmd.md) A4).
 
 | Need | For | Where |
 |---|---|---|
@@ -55,7 +100,7 @@ shares the values privately, each teammate puts them in `C:\PRIV-AI-SECRETS` (na
 | `paid-jobs.env`, `near-watch.env` | paid jobs, payment claims, job feed | generated on the PC (cmd.md A4, admin UI cmd.md A3) |
 | An Intear Wallet TestNet account with TestNet USDC | paying by hand ("Me — Intear Wallet") | wallet.intear.tech, USDC from faucet.circle.com |
 | `agent-tenants.env`: the tenants' NEAR keys | agent mode only | shared by the owner (cmd.md A4) |
-| Data files in `C:\PRIV-AI-DATA` | tab 03 on your own data | copied by the teammate |
+| Data files in your data folder (`up.ps1 -PrivDataDir`) | tab 03 on your own data | copied by the teammate |
 
 Everything below is what runs and why.
 
@@ -83,7 +128,7 @@ Browser ── 8730 UI (PC) ──▶ console-api ──▶ analyst            (
 paywall, console-api ──▶ near-watch (claims, job events) ──▶ admin UI 8800
 ```
 
-Your data folder `C:\PRIV-AI-DATA` is mounted **read-only** into console-api and the analyst; the folder picker shows
+Your data folder (`up.ps1 -PrivDataDir`) is mounted **read-only** into console-api and the analyst; the folder picker shows
 it as `/data/priv-ai-data/...`. Data, secrets and program output are never in git or in an image.
 
 ## Prices
@@ -104,7 +149,7 @@ Team paid-job prices (`config/paid-jobs-prices.conf`), used automatically by `te
 | `MARGIN_PCT` | 20 |
 | `MIN_PRICE_USD` | 0.01 |
 
-One PC can use other prices with `C:\PRIV-AI-SECRETS\paid-jobs-settings.env` (same names; it wins when present).
+One PC can use other prices with `paid-jobs-settings.env` in its secrets folder (same names; it wins when present).
 
 ## Repository layout
 

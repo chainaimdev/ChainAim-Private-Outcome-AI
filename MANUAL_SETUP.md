@@ -483,3 +483,21 @@ stay off. The file is measured on this PC, never typed in.
    the analyst with no model. A free question whose model-written query fails is printed as `SKIP` and left out; any other
    failure writes nothing. The run prints "largest query prompt N characters": `--crossask-max-prompt-chars` (console)
    could be set a little above N, which lowers the price of free questions (a larger prompt is then refused, not charged).
+
+## Hackathon entry: observer view, judge path, demo (privateAI-design-35, 2026-11-13)
+
+One step at a time; each ends with what you should see.
+
+1. Restart with the new console flags: `.\test-console\desk.ps1 -All -AllSkipTests`.
+   Expect the RUN line to end with `-CrossaskMaxPromptChars 16000`, and the console log to show
+   `observer view on: GET /jobs/<id>/observer reads the settlement from public NEAR RPC (testnet rpc.testnet.fastnear.com then archival-rpc.testnet.near.org)`.
+2. Tab 03, Orion (Small Biz Financials - 2 (ERPNext)), "Credit limit exposure", AI agent t02, Estimate first. Expect 0.02,
+   paid, then under the receipt the line "Your content stays private: ... Only the payment is on NEAR ..." and the button "What the chain shows";
+   pressing it shows paid by chainaim-t02-seller.testnet, the relayer, paid to, 0.02 USDC, the time, and "Not on the chain: ...".
+3. Same tab, a free question (no template) with the nearai models: expect about 0.04 (was 0.06).
+4. Read t02's policy line under "Who pays?": it should end with "· attested NEAR AI route only". Then run Scene 2 of
+   docs/judge/demo-script-2026-11-13T0230Z.md; expect `FAIL    not paid (refused)` and `attested route ✗`, no transaction.
+5. Disclosure review before publishing (done 2026-11-13 ~02:30Z): README rewritten to lead with what it achieves, absolute
+   paths and the owner's name removed; the judge files carry their timestamp in the name
+   (docs/judge/sample-receipt-2026-11-13T0214Z.json = job 81ad24c5..., docs/judge/demo-script-2026-11-13T0230Z.md) and may
+   move to .gitignore in a later check-in.

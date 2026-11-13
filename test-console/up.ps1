@@ -49,6 +49,11 @@ this PC (server.ts --mode ui, which forwards every call to the console API in Do
                                                 config\cost-model.json exists (desk.ps1 -Calibrate), else run-hold with an
                                                 INFO line. -OfferModes: the modes buyers may pick (default both when the
                                                 default is estimate-first; estimate-first alone hides the choice).
+  -CrossaskMaxPromptChars N                     the longest prompt a tab 03 query call may send (privateAI-design-35
+                                                ARCH-651; default 16000, 2000..200000), passed to the console as
+                                                --crossask-max-prompt-chars. An estimate-first quote prices each query call
+                                                at this size, so a lower cap is a lower firm price; a folder whose prompt
+                                                needs more is refused before the run ("prompt too large"), never cut.
   .\test-console\down.ps1                       stop the UI and the compose stack (volumes kept)
 
 What it takes, from files outside the repository (NAME=value; values are never printed or written anywhere):
@@ -127,6 +132,7 @@ param(
   [string]$Ap2TermsUrl = "https://github.com/chainaimdev/chainaim-private-ai/blob/main/LICENSE",
   [ValidateSet("auto", "estimate-first", "run-hold")][string]$OfferMode = "auto",
   [string]$OfferModes = "",
+  [int]$CrossaskMaxPromptChars = 16000,
   [int]$AttestPort = 8770,
   [string]$AttestCatalog = "config\generated\catalog.local.json",
   [string]$StateFile = "runtime\compose\last-start.json"
@@ -295,6 +301,9 @@ try {
     $consoleCmd += "--default-answer-model=$DefaultAnswerModel"
   }
   if ($DefaultPayer -ne "me") { $consoleCmd += "--default-payer=$DefaultPayer" }
+  # ARCH-651: the query prompt cap is always passed, so the price a quote shows follows this script, not the console default.
+  if ($CrossaskMaxPromptChars -lt 2000 -or $CrossaskMaxPromptChars -gt 200000) { Stop-Here "-CrossaskMaxPromptChars must be from 2000 to 200000, got $CrossaskMaxPromptChars" }
+  $consoleCmd += "--crossask-max-prompt-chars=$CrossaskMaxPromptChars"
   if ($PaidJobs -eq "on") {
     $consoleCmd += @("--paid-jobs=on", "--jobs-internal-host=0.0.0.0", "--jobs-internal-port=8731", "--pricing-catalog=/app/$cat",
       "--fee-per-model-call-usd=$($ps['FEE_PER_MODEL_CALL_USD'])", "--fee-analyst-usd=$($ps['FEE_ANALYST_USD'])", "--near-gas-fee-usd=$($ps['NEAR_GAS_FEE_USD'])",

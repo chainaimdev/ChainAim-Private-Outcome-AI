@@ -109,6 +109,17 @@
  *   --receipt-max-files N       a dataset with more files is not sold (no receipt can cover it; default 500)
  *   --job-feed-receipts on|off  also send job_receipt to near-watch (default off: near-watch must accept the event first)
  *   --job-feed-ap2 on|off       also send the signed quote's key id and hash on job_quoted (default off; near-watch ARCH-702)
+ *   Observer view (privateAI-design-35 ARCH-650; needs --receipts on): GET /jobs/<id>/observer reads the job's settlement
+ *   transaction from public NEAR RPC, as anyone could, and answers what the chain shows (payer, relayer, pay-to, amount,
+ *   time) and the fixed list of what it does not (packages/observer). No key; nothing about the job's content is sent.
+ *   --observer on|off                     default on (only with receipts: the settlement is read from the receipt)
+ *   --observer-rpc-testnet URL            default https://rpc.testnet.fastnear.com
+ *   --observer-rpc-fallback-testnet URL   asked when the first does not know the transaction (default
+ *                                         https://archival-rpc.testnet.near.org; none = no fallback)
+ *   --observer-rpc-mainnet URL            default https://rpc.mainnet.fastnear.com
+ *   --observer-rpc-fallback-mainnet URL   default https://archival-rpc.mainnet.near.org
+ *   --observer-timeout-ms N               one RPC call (default 15000, 1000..120000)
+ *   --observer-token-decimals N           the paid token's decimals (default 6, NEAR USDC)
  *   AP2 signed quotes (privateAI-design-33 ARCH-628; off unless --ap2 on, which needs --paid-jobs on and implies
  *   --price-round cent): each quoted job is written as a UCP checkout (2026-08-25) and signed as an AP2 merchant
  *   authorization (detached JWS, ES256, packages/ap2); held with the job and answered as ap2 {checkout,
@@ -171,6 +182,7 @@ import { calledModels, datasetFiles, datasetIdOf, receiptConfig, receiptOnReleas
 import type { HeldJob, ReceiptHold } from "./jobs.ts";
 import { ap2Answer, ap2Config, signJobCheckout, ucpProfile, type Ap2Hold } from "./ap2.ts";
 import { filesRoot } from "../../packages/receipt/src/index.ts";
+import { observe, observerConfig, ObserverError } from "../../packages/observer/src/index.ts";
 import { quoteOffer } from "../../packages/offer/src/index.ts";
 import { attestedRoute, crossaskBasis, folderSize, offerModels, OfferStore, offerConfig, withinBasis, type OfferRequest } from "./offers.ts";
 
@@ -243,6 +255,13 @@ const { values: flags } = parseArgs({
     "receipt-dir": { type: "string", default: fileURLToPath(new URL("../../runtime/receipts", import.meta.url)) },
     "receipt-max-files": { type: "string" },
     "job-feed-receipts": { type: "string" },
+    observer: { type: "string", default: "on" },
+    "observer-rpc-testnet": { type: "string", default: "https://rpc.testnet.fastnear.com" },
+    "observer-rpc-fallback-testnet": { type: "string", default: "https://archival-rpc.testnet.near.org" },
+    "observer-rpc-mainnet": { type: "string", default: "https://rpc.mainnet.fastnear.com" },
+    "observer-rpc-fallback-mainnet": { type: "string", default: "https://archival-rpc.mainnet.near.org" },
+    "observer-timeout-ms": { type: "string", default: "15000" },
+    "observer-token-decimals": { type: "string", default: "6" },
     "job-feed-ap2": { type: "string" },
     ap2: { type: "string" },
     "ap2-key-env": { type: "string" },
@@ -323,6 +342,8 @@ const JOBS = PAID_JOBS ? new JobStore(PAID_JOBS.max, PAID_JOBS.ttlMs, Date.now, 
 /** Job Evidence Receipts (ARCH-613..616): undefined unless --receipts on; start-up stops here when the key variable is missing or not Ed25519. */
 const RECEIPT_CONFIG = MODE === "ui" ? undefined : receiptConfig(flags, process.env, PAID_JOBS !== undefined);
 const RECEIPTS = RECEIPT_CONFIG ? new ReceiptStore(RECEIPT_CONFIG) : undefined;
+// ARCH-650: the observer view reads the settlement from the receipt, so it is on only with receipts.
+const OBSERVER = RECEIPTS ? observerConfig(flags) : undefined;
 /** AP2 signed quotes (privateAI-design-33 ARCH-628): undefined unless --ap2 on; start-up stops here when the key is missing or not P-256. */
 const AP2_CONFIG = MODE === "ui" ? undefined : ap2Config(flags, process.env, PAID_JOBS !== undefined);
 /** The paywall's release notice (jobs.ts internalHandler): the job feed's job_released, then the receipt, which is never awaited. */
@@ -870,7 +891,7 @@ createServer(async (req, res) => {
     }
     if (PAID_JOBS && JOBS && api === "jobs" && name === "config" && req.method === "GET") {
       if (!hostOk(req)) return dataJson(res, 403, { error: `open the console as http://127.0.0.1:${PORT}` });
-      return dataJson(res, 200, { wallet: NEAR_WALLET, walletName: NEAR_WALLETS[NEAR_WALLET!].name, ttlMin: PAID_JOBS.ttlMs / 60_000, defaultPayer: DEFAULT_PAYER, attest: ATTEST ? { pollMs: ATTEST_POLL_MS, pollMax: ATTEST_POLL_MAX } : null, receipts: RECEIPTS !== undefined,
+      return dataJson(res, 200, { wallet: NEAR_WALLET, walletName: NEAR_WALLETS[NEAR_WALLET!].name, ttlMin: PAID_JOBS.ttlMs / 60_000, defaultPayer: DEFAULT_PAYER, attest: ATTEST ? { pollMs: ATTEST_POLL_MS, pollMax: ATTEST_POLL_MAX } : null, receipts: RECEIPTS !== undefined, observer: OBSERVER !== undefined,
         // ARCH-642: the modes the pay box may offer and the default (estimate-first needs the cost model: OFFERS).
         offers: OFFER_CONFIG ? { mode: OFFERS ? OFFER_CONFIG.mode : "run-hold", modes: OFFER_CONFIG.modes.filter((m) => m === "run-hold" || OFFERS) } : { mode: "run-hold", modes: ["run-hold"] } });
     }
@@ -883,6 +904,21 @@ createServer(async (req, res) => {
       // ARCH-631: with the signed quote the receipt points at (--ap2 on), so one download checks both.
       const quote = RECEIPTS.getQuote(url.pathname.split("/")[2]);
       return dataJson(res, 200, { receipt, publicKeyPem: RECEIPTS.publicKeyPem(), ...(quote ? { ap2: quote } : {}) });
+    }
+    // ARCH-650: what anyone reading NEAR learns about this job, from public RPC (no key; only the transaction hash and
+    // the payer account, both already public, are sent).
+    if (PAID_JOBS && api === "jobs" && req.method === "GET" && /^\/jobs\/[0-9a-f]{32}\/observer$/.test(url.pathname)) {
+      if (!hostOk(req)) return dataJson(res, 403, { error: `open the console as http://127.0.0.1:${PORT}` });
+      if (!RECEIPTS || !OBSERVER) return dataJson(res, 404, { error: "the observer view is off: it needs --receipts on and --observer on" });
+      const receipt = RECEIPTS.get(url.pathname.split("/")[2]);
+      if (!receipt) return dataJson(res, 404, { error: "no receipt for this job: it is made once the job is paid and released" });
+      if (!receipt.settlement) return dataJson(res, 409, { error: "the settlement is not attached to the receipt yet" });
+      try {
+        return dataJson(res, 200, await observe(receipt.settlement, OBSERVER));
+      } catch (e) {
+        const status = e instanceof ObserverError ? e.status : 502;
+        return dataJson(res, status, { error: (e as Error).message });
+      }
     }
     // Run, meter, quote, hold, register: the page gets the cost and the job id, never the result.
     // ARCH-636: an estimate-first offer. Sizes only: the folder's data files are stat()ed, never opened; no model,
@@ -1179,6 +1215,7 @@ createServer(async (req, res) => {
       console.log(`[test-console] paid jobs on: internal listener http://${PAID_JOBS.internalHost}:${PAID_JOBS.internalPort}  key from ${PAID_JOBS.keyEnv}  ttl ${PAID_JOBS.ttlMs / 60_000} min  max ${PAID_JOBS.max}`);
       if (AP2_CONFIG) console.log(`[test-console] ap2 on: signing key id ${AP2_CONFIG.signer.kid} (${AP2_CONFIG.alg}) from ${AP2_CONFIG.keyEnv}  price round ${PAID_JOBS.priceRound}  (GET /.well-known/ucp)`);
       if (RECEIPT_CONFIG) console.log(`[test-console] receipts on: signing key id ${RECEIPT_CONFIG.signer.keyId}  -> ${RECEIPT_CONFIG.dir}  (GET /jobs/<id>/receipt)${JOB_FEED_CONFIG?.receipts ? "  job_receipt sent to near-watch" : ""}`);
+      if (OBSERVER) console.log(`[test-console] observer view on: GET /jobs/<id>/observer reads the settlement from public NEAR RPC (testnet ${OBSERVER.urls["near:testnet"].map((u) => new URL(u).host).join(" then ")})`);
       if (JOB_FEED_CONFIG) {
         const u = new URL(JOB_FEED_CONFIG.url);
         console.log(`[test-console] job feed on: ${u.origin}${u.pathname}  key from ${JOB_FEED_CONFIG.keyEnv}  expiry check every ${JOB_FEED_CONFIG.expiryCheckSec} s`);

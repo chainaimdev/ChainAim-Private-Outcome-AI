@@ -417,3 +417,17 @@ test("privateAI-design-34 ARCH-636 ARCH-642: up.ps1 -OfferMode auto (estimate-fi
   const a = code.slice(code.indexOf("if ($AgentAsk) {"), code.indexOf("if ($VerifyJob) {"));
   assert.match(a, /\$askArgs \+= @\("--offer-mode", \$OfferMode\)/);
 });
+
+test("privateAI-design-35 ARCH-651: -CrossaskMaxPromptChars (default desk.json console.crossaskMaxPromptChars, else 16000) goes to up.ps1, which checks 2000..200000 and always passes --crossask-max-prompt-chars to the console", () => {
+  assert.match(ps, /\[int\]\$CrossaskMaxPromptChars = 0,/);
+  assert.match(ps, /\$maxPrompt = if \(\$CrossaskMaxPromptChars -gt 0\) \{ \$CrossaskMaxPromptChars \} elseif \(\$P\.console -and \$P\.console\.crossaskMaxPromptChars\) \{ \[int\]\$P\.console\.crossaskMaxPromptChars \} else \{ 16000 \}/);
+  assert.match(ps, /\$privArgs\.CrossaskMaxPromptChars = \$maxPrompt/);
+  assert.equal(ex.console.crossaskMaxPromptChars, 16000, "the example settings show the key");
+  const up = readFileSync(new URL("../../test-console/up.ps1", import.meta.url), "utf8");
+  assert.match(up, /\[int\]\$CrossaskMaxPromptChars = 16000,/);
+  assert.match(up, /if \(\$CrossaskMaxPromptChars -lt 2000 -or \$CrossaskMaxPromptChars -gt 200000\) \{ Stop-Here/);
+  assert.match(up, /\$consoleCmd \+= "--crossask-max-prompt-chars=\$CrossaskMaxPromptChars"/);
+  // Passed outside the paid-jobs block: the free /crossask and the quote use the same cap.
+  const at = up.indexOf('$consoleCmd += "--crossask-max-prompt-chars');
+  assert.ok(at > 0 && at < up.indexOf('if ($PaidJobs -eq "on") {\n    $consoleCmd += @("--paid-jobs=on"'), "before, not inside, the paid-jobs block");
+});

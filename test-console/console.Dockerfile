@@ -19,6 +19,9 @@ COPY packages/ap2/src packages/ap2/src
 # privateAI-design-34 ARCH-636: estimate-first offers price with packages/offer (and config/cost-model.json, under config).
 COPY packages/offer/package.json packages/offer/package.json
 COPY packages/offer/src packages/offer/src
+# privateAI-design-35 ARCH-650: GET /jobs/<id>/observer reads the settlement with packages/observer.
+COPY packages/observer/package.json packages/observer/package.json
+COPY packages/observer/src packages/observer/src
 COPY services/web/src/balance.ts services/web/src/near-wallets.ts services/web/src/
 COPY config config
 COPY test-console/console test-console/console

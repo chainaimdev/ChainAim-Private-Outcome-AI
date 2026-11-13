@@ -1,0 +1,149 @@
+{
+  "receipt": {
+    "body": {
+      "v": 1,
+      "receiptId": "48de7ec86bd2d2264951fffbb686ea8f",
+      "jobId": "81ad24c5bc1871349e389af13f546383",
+      "quoteId": "81ad24c5bc1871349e389af13f546383",
+      "route": "nearai/deepseek-v4.1-flash",
+      "datasetId": "smb-erp-fin",
+      "files": [
+        {
+          "name": "orion.erpnext-data.json",
+          "bytes": 2054495,
+          "sha256": "e7e825633bfc15c11f74f1862f05317c9b2fd97560eabe6465fa3ec33773c819"
+        }
+      ],
+      "filesRoot": "00a5fa1b483454f19ca4894e11c9065fee937ccdf4f731866ecfefbfc27f385f",
+      "templateLabel": "Credit limit exposure",
+      "sqlSha256": "43a544e22fe21b6aed14ec9d28960bf9215dd857816a3f1740bc7aa9b5ff50df",
+      "resultSha256": "924e6421ddda350bc6e757f4ea62decec5dc2874ea7e5dff5b08c35d0c2dec06",
+      "calls": [
+        {
+          "servedModel": "deepseek-ai/DeepSeek-V4.1-Flash-1017",
+          "zone": "private-cloud",
+          "chatId": "chatcmpl-0cc69d31-3ebe-46df-b2b9-51f242f472e5",
+          "reqSha256": "9a6779fd694539ea84727c2928e349d262739d95d8f7198d3ab6e3113a783401",
+          "respSha256": "a0230e41971aa406f8ba801310283377f7840c2836021a7e44719f3fa91bd274",
+          "attestStatus": "verified"
+        }
+      ],
+      "merchantAuthSha256": "cae5ce41647f37f4e07cd4087c0b1a268b3182bf8b030538d8df84d20c5d9da0",
+      "price": {
+        "amountUnits": "20000",
+        "usdcDecimals": 6,
+        "priceUsd": "0.020000",
+        "quoteBasis": {
+          "pricing": "estimate-first",
+          "phrase": "llm",
+          "userSql": true,
+          "sqlRetries": 1,
+          "answerMaxRows": 50,
+          "maxPromptChars": 16000,
+          "maxTokens": 2048,
+          "files": 1,
+          "totalBytes": 2054495,
+          "calls": 1
+        },
+        "actualUsd": "0.010000"
+      },
+      "createdAt": "2026-11-13T02:14:48.898Z"
+    },
+    "sig": {
+      "alg": "ed25519",
+      "keyId": "d27d1e9f17a0104e34c46cf3e5233f23",
+      "value": "w4u3Wir2IFzZa0JKnGyhydsUAxFACHxCYgRtG1AeK7t39EDXYX5GHpEE8oUyyfcZ14ffL0icKqqxY6BSMXwoCw=="
+    },
+    "settlement": {
+      "network": "near:testnet",
+      "transaction": "CGxBarfQAWkgXeMvUnrWyBwWv2fWtteotbXDH1ntHH3t",
+      "invoiceId": "03CE96C0A500456B8152B722CDA56B5C",
+      "payer": "chainaim-t02-seller.testnet",
+      "settledAt": "2026-11-13T02:14:48.902Z"
+    },
+    "settlementSig": {
+      "alg": "ed25519",
+      "keyId": "d27d1e9f17a0104e34c46cf3e5233f23",
+      "value": "QS7RoLXGHeya3n8d521L0M4YlH+hx+bnCkYshbHnRabgQyz9ccyzFkamkJ4pXIlpZUXyYVEfThYorpXzzB7yCA=="
+    }
+  },
+  "publicKeyPem": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAu52WygjV0Ee9cVxv8bjpN8PxfQMkI7yiJKxZ7iQSKYA=\n-----END PUBLIC KEY-----\n",
+  "ap2": {
+    "checkout": {
+      "ucp": {
+        "version": "2026-08-25",
+        "capabilities": {
+          "dev.ucp.shopping.checkout": [
+            {
+              "version": "2026-08-25"
+            }
+          ],
+          "dev.ucp.common.payment.ap2_mandate": [
+            {
+              "version": "2026-08-25"
+            }
+          ]
+        },
+        "payment_handlers": {
+          "x402.near.exact": [
+            {
+              "id": "x402_near_exact",
+              "version": "2026-08-25"
+            }
+          ]
+        }
+      },
+      "id": "81ad24c5bc1871349e389af13f546383",
+      "status": "ready_for_complete",
+      "currency": "USD",
+      "line_items": [
+        {
+          "id": "job",
+          "quantity": 1,
+          "item": {
+            "id": "chainaim.crossask.nearai/deepseek-v4.1-flash",
+            "title": "ChainAim private analysis job",
+            "price": 2
+          },
+          "totals": [
+            {
+              "type": "subtotal",
+              "amount": 2
+            },
+            {
+              "type": "total",
+              "amount": 2
+            }
+          ]
+        }
+      ],
+      "totals": [
+        {
+          "type": "subtotal",
+          "amount": 2
+        },
+        {
+          "type": "total",
+          "amount": 2
+        }
+      ],
+      "links": [
+        {
+          "type": "terms_of_service",
+          "url": "https://github.com/chainaimdev/chainaim-private-ai/blob/main/LICENSE"
+        }
+      ],
+      "expires_at": "2026-11-13T02:29:30.919Z",
+      "dev.chainaim.job": {
+        "network": "near:testnet",
+        "asset": "3e2210e1184b45b64c8a434c0a7e7b23cc04ea7eb7a6c3c32520d03d4afcb8af",
+        "payTo": "chainaim-payto-seller.testnet",
+        "amountUnits": "20000",
+        "usdcDecimals": 6,
+        "datasetId": "smb-erp-fin",
+        "mode": "estimate-first"
+      }
+    },
+    "merchant_authorization": "eyJhbGciOiJFUzI1NiIsImtpZCI6IjgzODE2ZTZmZDMyYjg3OWZkOTZkMDMxOGE0MGNkNDBkIn0..MyPO7t2THQHM_Z2QxRP6kjJNxYYOIHRU1fLJfOviZoblL8Re0YgQjK0f4pJakfrC8cUC6hxwu2ubXbJfImcdgA"
+  }
+}
