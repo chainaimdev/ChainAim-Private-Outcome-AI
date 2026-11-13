@@ -156,12 +156,21 @@ export function nearRpcDouble(options: { tokenId: string; decimals?: number; sym
       id: baseEncode(sha256(Buffer.from(`${txHash}:${executor}`))),
       outcome: { executor_id: executor, status, logs: [], receipt_ids: [], gas_burnt: 2_428_000_000_000, tokens_burnt: "242800000000000000000" },
     });
-    const finish = (receipts: ReturnType<typeof outcome>[], status: Record<string, unknown>) => {
+    // privateAI-design-37: the ft_transfer receipt as EXPERIMENTAL_tx_status shows it on testnet (predecessor = who paid),
+    // with the id of the token's outcome, so a reader can match the transfer to its success.
+    const ftReceipt = (predecessor: string, args: unknown) => ({
+      receipt_id: outcome(state.token.id, {}).id,
+      predecessor_id: predecessor,
+      receiver_id: state.token.id,
+      receipt: { Action: { actions: [{ FunctionCall: { method_name: "ft_transfer", args: Buffer.from(JSON.stringify(args)).toString("base64"), gas: 30_000_000_000_000, deposit: "1" } }] } },
+    });
+    const finish = (receipts: ReturnType<typeof outcome>[], status: Record<string, unknown>, actionReceipts: ReturnType<typeof ftReceipt>[] = []) => {
       const result = {
         final_execution_status: "FINAL",
         status,
         transaction: { signer_id: tx.signerId, receiver_id: tx.receiverId, nonce: Number(tx.nonce), hash: txHash },
-        transaction_outcome: { id: txHash, outcome: { executor_id: tx.signerId, status: { SuccessReceiptId: "receipt" }, logs: [], receipt_ids: [], gas_burnt: 0, tokens_burnt: "0" } },
+        transaction_outcome: { id: txHash, block_hash: state.blockHash, outcome: { executor_id: tx.signerId, status: { SuccessReceiptId: "receipt" }, logs: [], receipt_ids: [], gas_burnt: 0, tokens_burnt: "0" } },
+        receipts: actionReceipts,
         receipts_outcome: receipts,
       };
       state.outcomes.set(txHash, result);
@@ -172,6 +181,19 @@ export function nearRpcDouble(options: { tokenId: string; decimals?: number; sym
     // A direct call from a full-access key: the only one the token serves here is NEP-145 storage_deposit.
     const direct = tx.actions.length === 1 ? tx.actions[0].functionCall : undefined;
     if (direct) {
+      // privateAI-design-37: a direct ft_transfer from a full-access key (ChainAim's signer refunding from payTo).
+      if (tx.receiverId === state.token.id && direct.methodName === "ft_transfer") {
+        if (direct.deposit !== 1n) return fail(state.token.id, { FunctionCallError: { ExecutionError: "Smart contract panicked: Requires attached deposit of exactly 1 yoctoNEAR" } });
+        const a = JSON.parse(Buffer.from(Uint8Array.from(direct.args)).toString("utf8")) as { receiver_id: string; amount: string; memo?: string };
+        const amt = BigInt(a.amount);
+        const bal = state.token.balances;
+        if (!state.token.registered.has(a.receiver_id)) return fail(state.token.id, { FunctionCallError: { ExecutionError: `Smart contract panicked: The account ${a.receiver_id} is not registered` } });
+        if ((bal.get(tx.signerId) ?? 0n) < amt) return fail(state.token.id, { FunctionCallError: { ExecutionError: "Smart contract panicked: The account doesn't have enough balance" } });
+        bal.set(tx.signerId, (bal.get(tx.signerId) ?? 0n) - amt);
+        bal.set(a.receiver_id, (bal.get(a.receiver_id) ?? 0n) + amt);
+        state.transfers.push({ sender: tx.signerId, receiver: a.receiver_id, amount: amt, ...(a.memo !== undefined ? { memo: a.memo } : {}), txHash });
+        return finish([outcome(state.token.id, { SuccessValue: "" })], { SuccessValue: "" }, [ftReceipt(tx.signerId, a)]);
+      }
       if (tx.receiverId !== state.token.id || direct.methodName !== "storage_deposit") return fail(tx.receiverId, { FunctionCallError: { MethodResolveError: "MethodNotFound" } });
       if (direct.deposit < BigInt(STORAGE_MIN)) return fail(tx.receiverId, { FunctionCallError: { ExecutionError: "Smart contract panicked: The attached deposit is less than the minimum storage balance" } });
       const args = JSON.parse(Buffer.from(Uint8Array.from(direct.args)).toString("utf8")) as { account_id?: string };
@@ -207,13 +229,13 @@ export function nearRpcDouble(options: { tokenId: string; decimals?: number; sym
     balances.set(d.senderId, (balances.get(d.senderId) ?? 0n) - amount);
     balances.set(args.receiver_id, (balances.get(args.receiver_id) ?? 0n) + amount);
     state.transfers.push({ sender: d.senderId, receiver: args.receiver_id, amount, ...(args.memo !== undefined ? { memo: args.memo } : {}), txHash });
-    return finish([outcome(d.senderId, { SuccessReceiptId: "inner" }), outcome(state.token.id, { SuccessValue: "" })], { SuccessValue: "" });
+    return finish([outcome(d.senderId, { SuccessReceiptId: "inner" }), outcome(state.token.id, { SuccessValue: "" })], { SuccessValue: "" }, [ftReceipt(d.senderId, args)]);
   }
 
   function handle(method: string, params: Record<string, unknown>): unknown {
     // The chain moves on: each block read sees the next final block, as on a live network (about one a second).
     if (method === "block") state.height += 1n;
-    if (method === "block") return { author: "validator.testnet", header: { height: Number(state.height), hash: state.blockHash, timestamp: 0 }, chunks: [] };
+    if (method === "block") return { author: "validator.testnet", header: { height: Number(state.height), hash: state.blockHash, timestamp: 0, timestamp_nanosec: String(BigInt(Date.now()) * 1_000_000n) }, chunks: [] };
     if (method === "status") return { chain_id: "testnet", version: { version: "double" }, sync_info: { latest_block_height: Number(state.height) } };
     if (method === "query") return query(params);
     if (method === "send_tx") return sendTx(params);

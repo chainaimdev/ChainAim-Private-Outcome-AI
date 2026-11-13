@@ -49,6 +49,8 @@ try {
 } catch (e) { usage((e as Error).message.replace(/--observer-(rpc-)?/g, "--")); }
 
 const say = (tag: string, text: string) => process.stdout.write(`${tag.padEnd(7)} ${text}\n`);
+// The exit code is SET and the process ends on its own: process.exit() while fetch's sockets are still closing trips a
+// libuv assertion on Windows (src\win\async.c: !(handle->flags & UV_HANDLE_CLOSING), exit 3221226505).
 try {
   const v = await observe(settlement, cfg!);
   say("CHAIN", `${v.network} transaction ${v.transaction}  (read from ${new URL(v.rpcUrl).host}, no key)`);
@@ -62,11 +64,11 @@ try {
   say("LINK", v.explorerUrl);
   // The receipt's price against the transfer: the same job, the same amount.
   const units = body?.price?.amountUnits;
-  if (!v.succeeded) { say("NO", "the transfer failed on chain"); process.exit(1); }
-  if (units !== undefined && units !== v.amountBase) { say("NO", `the receipt's price is ${units} base units, the transfer moved ${v.amountBase}`); process.exit(1); }
-  say("OK", `the chain shows this receipt's payment${units !== undefined ? ` (${v.amount}, as the receipt's price${body?.jobId ? ` for job ${body.jobId}` : ""})` : ""}`);
+  if (!v.succeeded) { say("NO", "the transfer failed on chain"); process.exitCode = 1; }
+  else if (units !== undefined && units !== v.amountBase) { say("NO", `the receipt's price is ${units} base units, the transfer moved ${v.amountBase}`); process.exitCode = 1; }
+  else say("OK", `the chain shows this receipt's payment${units !== undefined ? ` (${v.amount}, as the receipt's price${body?.jobId ? ` for job ${body.jobId}` : ""})` : ""}`);
 } catch (e) {
   const status = e instanceof ObserverError ? e.status : 502;
   say("NO", (e as Error).message);
-  process.exit(status === 400 ? 2 : 1);
+  process.exitCode = status === 400 ? 2 : 1;
 }

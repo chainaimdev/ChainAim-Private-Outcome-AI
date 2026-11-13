@@ -229,7 +229,7 @@
       const dl = document.createElement("button");
       dl.type = "button"; dl.className = "ghost"; dl.id = "xreceiptGo"; dl.textContent = "Download receipt";
       dl.onclick = () => {
-        const blob = new Blob([JSON.stringify({ receipt: r, publicKeyPem: j.publicKeyPem, ...(j.ap2 ? { ap2: j.ap2 } : {}), ...(typeof j.mandate === "string" ? { mandate: j.mandate } : {}) }, null, 2)], { type: "application/json" });
+        const blob = new Blob([JSON.stringify({ receipt: r, publicKeyPem: j.publicKeyPem, ...(j.ap2 ? { ap2: j.ap2 } : {}), ...(typeof j.mandate === "string" ? { mandate: j.mandate } : {}), ...(j.attestation ? { attestation: j.attestation } : {}) }, null, 2)], { type: "application/json" });
         const a = document.createElement("a");
         a.href = URL.createObjectURL(blob); a.download = `chainaim-receipt-${jobId}.json`;
         document.body.append(a); a.click(); a.remove();
@@ -352,7 +352,9 @@
     const by = (actor) => { const s = document.createElement("span"); s.className = "actor"; s.textContent = `[${actor}] `; return s; };
     const AGENT = `Agent ${t.id}`;
     const CHECK = { not_expired: (c) => "quote still valid", attested_route: (c) => "attested route", max_per_job: (c) => `at most ${c.limit} a job (quote ${c.value})`,
-      daily_cap: (c) => `${c.limit} a day (with this job ${c.value})`, auto_approve: (c) => `pays by itself up to ${c.limit}` };
+      daily_cap: (c) => `${c.limit} a day (with this job ${c.value})`, auto_approve: (c) => `pays by itself up to ${c.limit}`,
+      allowed_models: (c) => `models ${c.limit} (signed: ${c.value})`, max_tokens_per_call: (c) => `at most ${c.limit} tokens a call (signed: ${c.value})`,
+      require_attestation: (c) => `attestation ${c.limit} or stronger (signed: ${c.value})` };
     say(`The AI agent for ${t.name} is running and paying the job…`);
     const r = await fetch("/agent/crossask", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ...body, tenant: t.id, offerMode: modeChosen() }) });
     if (!r.ok || !/^text\/event-stream/i.test(r.headers.get("content-type") ?? "")) {
@@ -390,6 +392,10 @@
         else if (type === "signed") step(by(AGENT), `Payment signed by ${d.account} (ChainAim's relayer pays the gas)`);
         else if (type === "settled") { settled = d; step(by("NEAR"), "Settled on NEAR · ", explorerLink(d.network, d.transaction)); }
         else if (type === "released") { result = d.result; step(by("ChainAim"), `Result released: ${d.rows} row(s)`); }
+        // privateAI-design-37 ARCH-677: paid upfront, the run was refused, and ChainAim's signer sent the money back.
+        // privateAI-design-39 ARCH-689: d.privacy = the refusal was "privacy not proven" (ca-attest's summary).
+        else if (type === "refund_pending") step(by("ChainAim"), `${d.privacy ? `Refused: privacy not proven (${d.privacy})` : "Run refused after the payment"}: refund pending… (invoice ${String(d.invoiceId ?? "?")})`);
+        else if (type === "refunded") step(by("ChainAim"), `${d.privacy ? `Refused: privacy not proven (${d.privacy}) → refunded ✓` : "Refunded ✓"} (record signed by ChainAim, verified by the agent) · `, explorerLink(d.network, d.refundTx));
         else if (type === "receipt_verified") {
           receiptCheck = { ok: true, who: `Agent ${t.id}` };
           step(by(AGENT), `Agent verified the receipt ✓ · signed by the pinned key ${String(d.keyId).slice(0, 8)}… · result, job and amount${d.settled ? " and transaction" : ""} match${d.settled ? "" : " (settlement not attached yet)"}`);
@@ -401,6 +407,8 @@
         else if (type === "done") step("Done");
         else if (type === "refused") throw new Error(`Not paid${typeof d.code === "string" ? ` [${d.code}]` : ""}: ${d.reason}`);
         else if (type === "error") throw new Error(`${d.reason}${d.transaction ? ` (transaction ${d.transaction})` : ""}`);
+        // privateAI-design-38 ARCH-683: under the quote, the limits the agent checked in ChainAim's signed quote.
+        if (type === "quote_signed" && d.limits && Array.isArray(d.limits.models)) step(by(AGENT), `Signed limits checked ✓ · ${d.limits.models.map(String).join(" / ")} · at most ${Number(d.limits.modelCalls)} model call(s), ${Number(d.limits.maxTokens)} tokens each · ${Number(d.limits.files)} file(s): what you signed is exactly what runs`);
       }
     }
     if (result !== undefined && settled && ranJob) attestPanel(ranJob);

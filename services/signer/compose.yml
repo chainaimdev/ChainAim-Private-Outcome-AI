@@ -15,6 +15,11 @@ networks:
   chainaim-control:
     name: chainaim-control
 
+volumes:
+  # privateAI-design-37 ARCH-674: the signed refund ledger (refunds.jsonl); kept across restarts and image rebuilds.
+  chainaim-refunds:
+    name: chainaim-refunds
+
 services:
   control-signer:
     build: { context: ../.., dockerfile: services/signer/Dockerfile, labels: { chainaim.plane: control } }
@@ -25,6 +30,10 @@ services:
       - SIGNER_REQUEST_KEY
       - AP2_SIGNING_KEY
       - RECEIPT_SIGNING_KEY
+      # privateAI-design-37: the payTo account's key, for refunds only (--refunds on); empty and unused otherwise.
+      - SELLER_NEAR_PRIVATE_KEY
+    volumes:
+      - chainaim-refunds:/data/refunds
     # The base command; up.ps1 writes the full one (catalog, fees, cost model, terms, mandate keys).
     command: ["--host", "0.0.0.0", "--port", "8780"]
     ports: ["127.0.0.1:8780:8780"]

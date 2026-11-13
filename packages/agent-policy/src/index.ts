@@ -38,7 +38,21 @@ export type Policy = {
   /** A requote after size drift is paid without a human only when at most this many percent above the first price. */
   requoteAutoAcceptPct: number;
   counter: CounterPolicy;
+  /** privateAI-design-38 ARCH-683: the models a job may be signed for; absent = no check. Read from the SIGNED limits. */
+  allowedModels?: string[];
+  /** privateAI-design-38 ARCH-683: the largest max_tokens per model call the signed limits may allow; absent = no check. */
+  maxTokensPerCall?: number;
+  /**
+   * privateAI-design-39 ARCH-688: the weakest NEAR AI attestation rule the SIGNED limits may carry (off < evidence <
+   * verified); absent or off = no check. verified: pay only when ChainAim signed that it delivers only after ca-attest's verdict.
+   */
+  requireAttestation?: AttestationRule;
 };
+
+/** privateAI-design-39 ARCH-688: the attestation rules, weakest first (packages/offer ATTESTATION_MODES, the same names). */
+export const ATTESTATION_RULES = ["off", "evidence", "verified"] as const;
+export type AttestationRule = (typeof ATTESTATION_RULES)[number];
+const ruleRank = (r: string | undefined): number => ATTESTATION_RULES.indexOf((r ?? "off") as AttestationRule);
 
 /** The "policy" block of a tenant.json, checked field by field; the message names the field. */
 export function parsePolicy(raw: unknown, tenantId: string): Policy {
@@ -63,6 +77,13 @@ export function parsePolicy(raw: unknown, tenantId: string): Policy {
   if (!Array.isArray(c.acceptReduced) || c.acceptReduced.some((s) => !(REDUCIBLE as readonly unknown[]).includes(s))) {
     throw new Error(`${at("counter.acceptReduced")} must list only ${REDUCIBLE.join(", ")}`);
   }
+  if (p.allowedModels !== undefined && (!Array.isArray(p.allowedModels) || p.allowedModels.length === 0 || p.allowedModels.some((m) => typeof m !== "string" || !/^[\w.-]+\/[\w.:-]+$/.test(m)))) {
+    throw new Error(`${at("allowedModels")} must be a non-empty list of model ids provider/name`);
+  }
+  const mt = p.maxTokensPerCall;
+  if (mt !== undefined && (typeof mt !== "number" || !Number.isInteger(mt) || mt < 1)) throw new Error(`${at("maxTokensPerCall")} must be a whole number of at least 1`);
+  const ra = p.requireAttestation;
+  if (ra !== undefined && !(ATTESTATION_RULES as readonly unknown[]).includes(ra)) throw new Error(`${at("requireAttestation")} must be off, evidence or verified`);
   return {
     autoApproveMicro,
     maxPerJobMicro,
@@ -70,11 +91,34 @@ export function parsePolicy(raw: unknown, tenantId: string): Policy {
     requireAttestedRoute: p.requireAttestedRoute,
     requoteAutoAcceptPct: pct,
     counter: { enabled: c.enabled, maxRounds: c.maxRounds, acceptReduced: c.acceptReduced as Reducible[] },
+    ...(p.allowedModels !== undefined ? { allowedModels: [...(p.allowedModels as string[])] } : {}),
+    ...(mt !== undefined ? { maxTokensPerCall: mt as number } : {}),
+    ...(ra !== undefined ? { requireAttestation: ra as AttestationRule } : {}),
   };
 }
 
 /** A firm quote as the console returns it (ARCH-605), plus whether its route is the attested one. */
-export type Quote = { quoteId: string; route: string; priceUsd: string; attested: boolean; expiresAt: number; counterOf?: string; reduced?: string[] };
+export type Quote = { quoteId: string; route: string; priceUsd: string; attested: boolean; expiresAt: number; counterOf?: string; reduced?: string[]; limits?: SignedLimits };
+/**
+ * privateAI-design-38: what the signed checkout limits allow (models and max_tokens per call), when the quote has signed limits.
+ * attestation (privateAI-design-39 ARCH-688): the signed attestation rule; absent in limits signed before v2.1.0.
+ */
+export type SignedLimits = { models: string[]; maxTokens: number; attestation?: string };
+
+/** ARCH-683: why a quote breaks the policy's model / token rules, or null (rules absent = nothing to check). */
+function limitsBreach(policy: Policy, q: Quote): string | null {
+  const wantAttest = ruleRank(policy.requireAttestation) > 0;
+  if (policy.allowedModels === undefined && policy.maxTokensPerCall === undefined && !wantAttest) return null;
+  if (!q.limits) return wantAttest && policy.allowedModels === undefined && policy.maxTokensPerCall === undefined
+    ? `the policy requires attestation ${policy.requireAttestation} and the quote carries no signed limits`
+    : "the policy limits models or tokens and the quote carries no signed limits";
+  // ARCH-688: the signed rule must be at least the policy's (an absent signed rule promises nothing).
+  if (wantAttest && ruleRank(q.limits.attestation) < ruleRank(policy.requireAttestation)) return `the signed limits promise attestation ${q.limits.attestation ?? "none"}, weaker than requireAttestation ${policy.requireAttestation}`;
+  const bad = policy.allowedModels ? q.limits.models.find((m) => !policy.allowedModels!.includes(m)) : undefined;
+  if (bad) return `the signed limits allow ${bad}, which is not in allowedModels`;
+  if (policy.maxTokensPerCall !== undefined && q.limits.maxTokens > policy.maxTokensPerCall) return `the signed limits allow ${q.limits.maxTokens} tokens per call, above maxTokensPerCall ${policy.maxTokensPerCall}`;
+  return null;
+}
 
 export type Decision =
   | { action: "pay"; quote: Quote; reason: string }
@@ -102,8 +146,10 @@ export function decide(policy: Policy, quotes: readonly Quote[], ctx: DecideCont
   if (live.length === 0) return { action: "refuse", reason: "every quote has expired" };
   const usable = live.filter((q) => !policy.requireAttestedRoute || q.attested);
   if (usable.length === 0) return { action: "refuse", reason: "the policy requires the attested route and none was quoted" };
+  const withinLimits = usable.filter((q) => limitsBreach(policy, q) === null);
+  if (withinLimits.length === 0) return { action: "refuse", reason: limitsBreach(policy, usable[0])! };
   const counterOk = (q: Quote): boolean => (q.reduced ?? []).every((s) => (policy.counter.acceptReduced as string[]).includes(s));
-  const acceptable = usable.filter(counterOk);
+  const acceptable = withinLimits.filter(counterOk);
   if (acceptable.length === 0) return { action: "refuse", reason: "the counter offer reduces a limit the policy does not accept" };
   const priced = acceptable.map((q) => ({ q, micro: usdToMicro(q.priceUsd, `quote ${q.quoteId} priceUsd`) })).sort((a, b) => (a.micro < b.micro ? -1 : a.micro > b.micro ? 1 : 0));
   const best = priced[0];
@@ -126,13 +172,16 @@ export function decide(policy: Policy, quotes: readonly Quote[], ctx: DecideCont
  * policy's limit, the quote's value and whether it passed. Amounts are decimal USD strings. This explains a decision;
  * decide() is still the only thing that makes one (a test keeps the two in step).
  */
-export type PolicyCheck = { check: "not_expired" | "attested_route" | "max_per_job" | "daily_cap" | "auto_approve"; limit: string; value: string; ok: boolean };
+export type PolicyCheck = { check: "not_expired" | "attested_route" | "allowed_models" | "max_tokens_per_call" | "require_attestation" | "max_per_job" | "daily_cap" | "auto_approve"; limit: string; value: string; ok: boolean };
 
 /** The checks decide() applies to one quote (no counter round, no requote), in the order it applies them. */
 export function checksFor(policy: Policy, quote: Quote, ctx: Pick<DecideContext, "spentTodayMicro" | "now">): PolicyCheck[] {
   const price = usdToMicro(quote.priceUsd, `quote ${quote.quoteId} priceUsd`);
   const out: PolicyCheck[] = [{ check: "not_expired", limit: new Date(quote.expiresAt).toISOString(), value: new Date(ctx.now).toISOString(), ok: quote.expiresAt > ctx.now }];
   if (policy.requireAttestedRoute) out.push({ check: "attested_route", limit: "required", value: quote.attested ? "attested" : "not attested", ok: quote.attested });
+  if (policy.allowedModels) out.push({ check: "allowed_models", limit: policy.allowedModels.join(", "), value: quote.limits ? quote.limits.models.join(", ") : "no signed limits", ok: !!quote.limits && quote.limits.models.every((m) => policy.allowedModels!.includes(m)) });
+  if (policy.maxTokensPerCall !== undefined) out.push({ check: "max_tokens_per_call", limit: String(policy.maxTokensPerCall), value: quote.limits ? String(quote.limits.maxTokens) : "no signed limits", ok: !!quote.limits && quote.limits.maxTokens <= policy.maxTokensPerCall });
+  if (ruleRank(policy.requireAttestation) > 0) out.push({ check: "require_attestation", limit: policy.requireAttestation!, value: quote.limits ? (quote.limits.attestation ?? "not signed") : "no signed limits", ok: !!quote.limits && ruleRank(quote.limits.attestation) >= ruleRank(policy.requireAttestation) });
   out.push({ check: "max_per_job", limit: microToUsd(policy.maxPerJobMicro), value: quote.priceUsd, ok: price <= policy.maxPerJobMicro });
   out.push({ check: "daily_cap", limit: microToUsd(policy.dailyCapMicro), value: microToUsd(ctx.spentTodayMicro + price), ok: ctx.spentTodayMicro + price <= policy.dailyCapMicro });
   out.push({ check: "auto_approve", limit: microToUsd(policy.autoApproveMicro), value: quote.priceUsd, ok: price <= policy.autoApproveMicro });
@@ -196,21 +245,32 @@ export class SpendLedger {
     appendFileSync(f, `${JSON.stringify({ ts: new Date(at).toISOString(), jobId, amountMicro: usdToMicro(amountUsd).toString(), transaction })}\n`);
   }
 
+  /**
+   * privateAI-design-37 ARCH-677: a refund ChainAim signed and the agent verified gives the amount back to today's cap
+   * (a line with kind "refund"; the payment's own line stays, so the file still shows both movements).
+   */
+  refund(tenant: string, jobId: string, amountUsd: string, refundTx: string): void {
+    const at = this.now();
+    const f = this.file(tenant, at);
+    mkdirSync(join(this.dir, tenant), { recursive: true });
+    appendFileSync(f, `${JSON.stringify({ ts: new Date(at).toISOString(), kind: "refund", jobId, amountMicro: usdToMicro(amountUsd).toString(), refundTx })}\n`);
+  }
+
   spentToday(tenant: string): bigint {
     const f = this.file(tenant, this.now());
     if (!existsSync(f)) return 0n;
     let total = 0n;
     for (const [i, line] of readFileSync(f, "utf8").split("\n").entries()) {
       if (line.trim() === "") continue;
-      let row: { amountMicro?: unknown };
+      let row: { amountMicro?: unknown; kind?: unknown };
       try {
-        row = JSON.parse(line) as { amountMicro?: unknown };
+        row = JSON.parse(line) as { amountMicro?: unknown; kind?: unknown };
       } catch {
         throw new Error(`${f} line ${i + 1} is not JSON; fix or move the file before paying again`);
       }
       if (typeof row.amountMicro !== "string" || !/^\d+$/.test(row.amountMicro)) throw new Error(`${f} line ${i + 1} has no amountMicro`);
-      total += BigInt(row.amountMicro);
+      total += row.kind === "refund" ? -BigInt(row.amountMicro) : BigInt(row.amountMicro);
     }
-    return total;
+    return total < 0n ? 0n : total;
   }
 }

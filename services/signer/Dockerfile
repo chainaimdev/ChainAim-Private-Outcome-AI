@@ -17,11 +17,16 @@ COPY packages/ap2/package.json packages/ap2/package.json
 COPY packages/ap2/src packages/ap2/src
 COPY packages/offer/package.json packages/offer/package.json
 COPY packages/offer/src packages/offer/src
+# privateAI-design-37 ARCH-676: refunds (--refunds on). Dependency-free too: the NEAR transaction is built with node:crypto.
+COPY packages/near-refund/package.json packages/near-refund/package.json
+COPY packages/near-refund/src packages/near-refund/src
 COPY packages/signer/package.json packages/signer/package.json
 COPY packages/signer/src packages/signer/src
 COPY services/signer/package.json services/signer/package.json
 COPY services/signer/src services/signer/src
 COPY config config
+# The refund ledger lives on a volume (compose: chainaim-refunds), owned by the user the signer runs as.
+RUN mkdir -p /data/refunds && chown node:node /data/refunds
 USER node
 EXPOSE 8780
 ENTRYPOINT ["node", "services/signer/src/main.ts"]

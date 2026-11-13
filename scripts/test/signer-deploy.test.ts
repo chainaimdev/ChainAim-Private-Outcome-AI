@@ -24,7 +24,10 @@ test("ARCH-664 compose: ca-control-signer is alone in project chainaim-control-p
   assert.match(compose, /ports: \["127\.0\.0\.1:8780:8780"\]/);
   for (const n of ["SIGNER_REQUEST_KEY", "AP2_SIGNING_KEY", "RECEIPT_SIGNING_KEY"]) assert.match(compose, new RegExp(`\\n {6}- ${n}\\n`), `${n} by name only`);
   assert.equal(/=/.test(compose.split("environment:")[1].split("command:")[0]), false, "no value in the file");
-  assert.equal(/volumes:/.test(compose), false, "no data folder is mounted into the signer");
+  // privateAI-design-37 ARCH-676 amends ARCH-660: exactly one named volume, the signed refund ledger; no host folder.
+  const mounts = [...compose.matchAll(/^\s+- ([^\s#]+:\/[^\s]*)\r?$/gm)].map((m) => m[1]);
+  assert.deepEqual(mounts, ["chainaim-refunds:/data/refunds"], "no data folder is mounted into the signer; only the refund ledger volume");
+  assert.match(compose, /^volumes:\r?\n(?:\s*#.*\r?\n)*\s+chainaim-refunds:\r?\n\s+name: chainaim-refunds\r?$/m);
 });
 
 test("ARCH-660 image: zero npm dependencies, no key copied in, only the signer's packages and public config", () => {
@@ -52,9 +55,11 @@ test("ARCH-664 up.ps1 -Signer separate: the console API gets the request key onl
   assert.match(up, /Set-Secret "SIGNER_REQUEST_KEY" \$signerReqKey/);
   // The seller keys: set right before the control-plane compose up, removed in its finally, before the data plane starts.
   const sig = up.slice(up.indexOf("if ($signerCmd) {"), up.indexOf("$upArgs = $composeArgs"));
-  assert.match(sig, /foreach \(\$k in @\("AP2_SIGNING_KEY", "RECEIPT_SIGNING_KEY"\)\) \{ Set-Item -Path "env:\$k" -Value \$sellerKeys\[\$k\] \}/);
+  // privateAI-design-37: with -PaidFlow upfront the payTo key joins them, under the same set-then-remove rule.
+  assert.match(sig, /\$sigKeys = @\("AP2_SIGNING_KEY", "RECEIPT_SIGNING_KEY"\) \+ \$\(if \(\$refundKeyOn\) \{ @\("SELLER_NEAR_PRIVATE_KEY"\) \} else \{ @\(\) \}\)/);
+  assert.match(sig, /foreach \(\$k in \$sigKeys\) \{ Set-Item -Path "env:\$k" -Value \$sellerKeys\[\$k\] \}/);
   assert.match(sig, /"compose", "-p", "chainaim-control-plane", "-f", "services\/signer\/compose\.yml"/);
-  assert.match(sig, /finally \{ foreach \(\$k in @\("AP2_SIGNING_KEY", "RECEIPT_SIGNING_KEY"\)\) \{ Remove-Item "env:\$k"/);
+  assert.match(sig, /finally \{ foreach \(\$k in \$sigKeys\) \{ Remove-Item "env:\$k"/);
   assert.ok(up.indexOf("if ($signerCmd) {") < up.indexOf("$upArgs = $composeArgs"), "the control plane starts first");
   assert.match(up, /if \(-not \$signerReqKey -or \$signerReqKey -ne \$sellerKeys\["SIGNER_REQUEST_KEY"\]\)/, "both sides hold the same request key");
   assert.match(up, /still in \$SecretsFile \(not used now; remove those lines/);

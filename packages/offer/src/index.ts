@@ -156,6 +156,103 @@ export function worstCase(b: OfferBasis, cm: CostModel): { meter: MeterLine[]; e
   };
 }
 
+// ---- signed limits (privateAI-design-38 ARCH-680..684) -------------------------------------------------------------------
+
+export type CrossaskBasis = Extract<OfferBasis, { kind: "crossask" }>;
+
+/**
+ * checkout["dev.chainaim.job"].limits: the basis the signer priced, plus the priced model-call count and the folder's size
+ * tolerance. Signed in the checkout (and through checkout_jwt in the buyer's mandate), so what runs is what was signed.
+ */
+export type CheckoutLimits = {
+  model: string; answerModel: string; phrase: "llm" | "none"; userSql: boolean; files: number; totalBytes: number; sizeTolerancePct: number;
+  maxPromptChars: number; answerMaxPromptChars: number; maxTokens: number; sqlRetries: number; answerMaxRows: number; modelCalls: number;
+  /** privateAI-design-39 ARCH-688: the console's --pay-only-attested mode when the offer was signed; absent in offers signed before v2.1.0. */
+  attestation?: AttestationMode;
+};
+export const LIMIT_FIELDS = ["model", "answerModel", "phrase", "userSql", "files", "totalBytes", "sizeTolerancePct", "maxPromptChars", "answerMaxPromptChars", "maxTokens", "sqlRetries", "answerMaxRows", "modelCalls", "attestation"] as const;
+
+/**
+ * privateAI-design-39 ARCH-688: what an offer promises about NEAR AI attestation, weakest first. off: no rule; evidence:
+ * every NEAR AI call carries the gateway's evidence; verified: ca-attest verified every call before delivery.
+ */
+export const ATTESTATION_MODES = ["off", "evidence", "verified"] as const;
+export type AttestationMode = (typeof ATTESTATION_MODES)[number];
+/** true when `signed` promises at least what `wanted` asks (an absent signed mode promises nothing beyond off). */
+export function attestationAtLeast(signed: AttestationMode | undefined, wanted: AttestationMode): boolean {
+  return ATTESTATION_MODES.indexOf(signed ?? "off") >= ATTESTATION_MODES.indexOf(wanted);
+}
+const LIMIT_INTS = ["files", "totalBytes", "sizeTolerancePct", "maxPromptChars", "answerMaxPromptChars", "maxTokens", "sqlRetries", "answerMaxRows", "modelCalls"] as const;
+const MODEL_RE = /^[\w.-]+\/[\w.:-]+$/;
+
+/** The model calls an offer is priced for: 1 + sqlRetries query calls (none with the buyer's own SQL), plus the answer call. */
+export function pricedCalls(b: CrossaskBasis): number {
+  return (b.userSql ? 0 : 1 + b.sqlRetries) + (b.phrase === "llm" ? 1 : 0);
+}
+
+/**
+ * ARCH-680: the limits of an offer, from the very basis that was priced (never from a separate caller field).
+ * privateAI-design-39 ARCH-688: attestation, when given, is the console's mode, signed with the limits.
+ */
+export function limitsOf(b: CrossaskBasis, sizeTolerancePct: number, attestation?: AttestationMode): CheckoutLimits {
+  checkBasis(b);
+  whole(sizeTolerancePct, "sizeTolerancePct");
+  if (sizeTolerancePct > 100) throw new Error("sizeTolerancePct must be a whole number from 0 to 100");
+  if (attestation !== undefined && !(ATTESTATION_MODES as readonly string[]).includes(attestation)) throw new Error(`attestation must be ${ATTESTATION_MODES.join(", ")}`);
+  return {
+    model: b.model, answerModel: b.answerModel ?? b.model, phrase: b.phrase, userSql: b.userSql, files: b.files, totalBytes: b.totalBytes, sizeTolerancePct,
+    maxPromptChars: b.maxPromptChars, answerMaxPromptChars: b.answerMaxPromptChars, maxTokens: b.maxTokens, sqlRetries: b.sqlRetries, answerMaxRows: b.answerMaxRows,
+    modelCalls: pricedCalls(b),
+    ...(attestation !== undefined ? { attestation } : {}),
+  };
+}
+
+/** ARCH-681: limits read back from a checkout, exactly the 13 members with their types (plus attestation, optional: ARCH-688); the message names the member. */
+export function parseLimits(raw: unknown, path = "limits"): CheckoutLimits {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) throw new Error(`${path} must be a JSON object`);
+  const o = raw as Record<string, unknown>;
+  for (const k of Object.keys(o)) if (!(LIMIT_FIELDS as readonly string[]).includes(k)) throw new Error(`${path}.${k} is not a limit`);
+  for (const f of ["model", "answerModel"] as const) if (typeof o[f] !== "string" || !MODEL_RE.test(o[f] as string)) throw new Error(`${path}.${f} must be a model id provider/name`);
+  if (o.phrase !== "llm" && o.phrase !== "none") throw new Error(`${path}.phrase must be llm or none`);
+  if (typeof o.userSql !== "boolean") throw new Error(`${path}.userSql must be true or false`);
+  for (const f of LIMIT_INTS) whole(o[f], `${path}.${f}`);
+  if ((o.sizeTolerancePct as number) > 100) throw new Error(`${path}.sizeTolerancePct must be a whole number from 0 to 100`);
+  if (o.attestation !== undefined && !(ATTESTATION_MODES as readonly unknown[]).includes(o.attestation)) throw new Error(`${path}.attestation must be ${ATTESTATION_MODES.join(", ")}`);
+  return o as CheckoutLimits;
+}
+
+/** ARCH-682: the first member in which the signed limits differ from a basis (plus its call count), or null when equal. */
+export function limitsEqualBasis(l: CheckoutLimits, b: CrossaskBasis): string | null {
+  const want: Omit<CheckoutLimits, "sizeTolerancePct"> = {
+    model: b.model, answerModel: b.answerModel ?? b.model, phrase: b.phrase, userSql: b.userSql, files: b.files, totalBytes: b.totalBytes,
+    maxPromptChars: b.maxPromptChars, answerMaxPromptChars: b.answerMaxPromptChars, maxTokens: b.maxTokens, sqlRetries: b.sqlRetries, answerMaxRows: b.answerMaxRows, modelCalls: pricedCalls(b),
+  };
+  for (const [k, v] of Object.entries(want)) if (l[k as keyof CheckoutLimits] !== v) return k;
+  return null;
+}
+
+/**
+ * ARCH-682 before the run: the folder may not have grown past the signed tolerance, nor gained files (409, estimate it
+ * again). A smaller folder is fine: the price is a ceiling.
+ */
+export function withinLimits(l: Pick<CheckoutLimits, "files" | "totalBytes" | "sizeTolerancePct">, now: { files: number; totalBytes: number }): string | null {
+  if (now.files > l.files) return `the folder has ${now.files} data files now, ${l.files} when it was estimated: estimate it again`;
+  const limit = Math.floor((l.totalBytes * (100 + l.sizeTolerancePct)) / 100);
+  if (now.totalBytes > limit) return `the folder holds ${now.totalBytes} bytes now, more than the ${l.totalBytes} estimated (+${l.sizeTolerancePct} %): estimate it again`;
+  return null;
+}
+
+/**
+ * ARCH-682 after the run: no more calls than signed, every call served by a signed model (the catalog id the gateway
+ * reports and the meter prices by), and no call's completion over maxTokens. The first breach, or null.
+ */
+export function servedWithinLimits(l: Pick<CheckoutLimits, "model" | "answerModel" | "maxTokens" | "modelCalls">, served: readonly { model?: string; completionTokens?: number }[]): string | null {
+  if (served.length > l.modelCalls) return `the job made ${served.length} model calls, more than the ${l.modelCalls} estimated`;
+  for (const s of served) if (s.model !== l.model && s.model !== l.answerModel) return `the job was served by ${s.model ?? "an unnamed model"}, not a model you signed for`;
+  for (const s of served) if (s.completionTokens !== undefined && s.completionTokens > l.maxTokens) return `a model call returned ${s.completionTokens} completion tokens, more than the ${l.maxTokens} signed`;
+  return null;
+}
+
 /** One firm price for an offer: the worst-case meter and extras through quoteJob (fees, margin, minimum, rounding). */
 export function quoteOffer(b: OfferBasis, prices: ReadonlyMap<string, ModelPrice> | Record<string, ModelPrice>, fees: Fees, cm: CostModel, round: PriceRound = "cent"): JobQuote {
   const { meter, extras } = worstCase(b, cm);

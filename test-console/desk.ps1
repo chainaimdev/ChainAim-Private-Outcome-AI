@@ -46,9 +46,27 @@ one READY table across both. Neither launcher is changed or renamed; each team k
   -MandateKey -MandateTenant ID [-MandateKeyRotate]
                 privateAI-design-36 ARCH-666: tenant ID's AP2 checkout mandate key (ES256): the private key into
                 <secretsDir>\agent-tenants.env (AP2_MANDATE_KEY_<ID>), the PUBLIC key into config\ap2-mandate-keys.json
-                (committed; ca-control-signer and verify-receipt check mandates with it). Runs on its own.
+                (committed; ca-control-signer and verify-receipt check mandates with it). The key is ADDED: the
+                tenant's earlier public keys stay listed, so older mandates still verify. Runs on its own.
   -Planes       report only: which container is data plane and which control plane, and that no data-plane container
                 holds a ChainAim signing key (checked by NAME in each container's environment; no value is read or printed)
+  -Refunds [-RefundRetry INVOICE]
+                report only (privateAI-design-37): ca-control-signer's refund ledger, one line per refund (ids, payer,
+                amount, status, paid and refund transactions). -RefundRetry INVOICE sends a refund that failed again (fix
+                its cause first, e.g. NEAR for gas in the payTo wallet); the chain checks are made again. Runs on its own.
+  -All ... -PaidFlow authorization|upfront
+                how tab 03 jobs are paid (default desk.json paidJobs.flow, else authorization = as before). upfront: the
+                payment settles before any work and a refused job is refunded on chain by ca-control-signer (needs the
+                separate signer and SELLER_NEAR_PRIVATE_KEY in <sellerSecretsDir>\signer.env; MANUAL_SETUP.md 2026-11-13).
+  -All ... -PayOnlyAttested off|evidence|verified  [-PayOnlyAttestedDeadlineMs 30000]
+                privateAI-design-39: what a paid job must show about NEAR AI attestation before it is delivered (default
+                desk.json paidJobs.payOnlyAttested, else evidence = as before). verified: the console waits for ca-attest's
+                verdict (up to the deadline, 1000-240000 ms) and refuses the run unless every call is verified; with
+                -PaidFlow upfront the payment is then refunded. Needs ca-attest (attest.enabled / -Attest). The paywall's
+                run timeout is raised by the deadline.
+  -StopService NAME / -StartService NAME
+                stop or start ONE running container of the stack (NAME as for -Logs, e.g. attest), nothing else; for the
+                deliberate "privacy not proven" refusal (privateAI-design-39 section 5). Runs on its own.
   -RejudgeReceiver ACCOUNT  -RejudgeReason "TEXT"
                 after the start, clear FALSE reconcile mismatches in the NEAR admin UI (near-watch src/rejudge.ts
                 --all-mismatches; chainaim-adminUI-NEAR src/reconcile.ts rejudge). ACCOUNT is the pay-to you checked the
@@ -181,6 +199,13 @@ param(
   [string]$MandateTenant = "",
   [switch]$MandateKeyRotate,
   [switch]$Planes,
+  [switch]$Refunds,
+  [string]$RefundRetry = "",
+  [string]$PaidFlow = "",
+  [string]$PayOnlyAttested = "",
+  [int]$PayOnlyAttestedDeadlineMs = 0,
+  [string]$StopService = "",
+  [string]$StartService = "",
   [switch]$NoBrowser,
   [string[]]$Logs = @(),
   [int]$LogLines = 40,
@@ -275,6 +300,23 @@ function AdminRoot {
   return [IO.Path]::GetFullPath((Join-Path $nw "..\.."))
 }
 function Quiet([scriptblock]$block) { $prev = $ErrorActionPreference; $ErrorActionPreference = "Continue"; try { & $block } finally { $ErrorActionPreference = $prev } }
+# -Ship (2026-11-13, v2.1.0 ship): the staged set as `git diff --cached --name-status -M` prints it, one object per change:
+# Status (first letter: M A D R C T), Path (the path after the change; for a rename or copy its NEW path) and From (a
+# rename's or copy's old path, else $null).
+function Get-StagedChanges([string[]]$lines) {
+  foreach ($l in $lines) {
+    if (-not "$l") { continue }
+    $f = "$l" -split "`t"
+    $st = $f[0].Substring(0, 1)
+    if (($st -eq "R" -or $st -eq "C") -and $f.Count -ge 3) { [pscustomobject]@{ Status = $st; Path = $f[2].Trim('"'); From = $f[1].Trim('"') } }
+    else { [pscustomobject]@{ Status = $st; Path = $f[1].Trim('"'); From = $null } }
+  }
+}
+# The staged paths that are not in the commit's list. A rename counts as its new path (its old path is the same change,
+# listed or not); a deletion as its own path.
+function Get-StagedOutside([object[]]$changes, [string[]]$want) {
+  @($changes | Where-Object { $_ -and $want -notcontains $_.Path } | ForEach-Object { $_.Path })
+}
 # Service name -> container, shared by -Logs and -Windows.
 $LogContainers = [ordered]@{ "gateway" = "ca-gateway"; "paywall" = "ca-paywall"; "presidio" = "ca-presidio"; "analyst" = "ca-analyst"; "chain-query" = "ca-chain-query"; "console-api" = "ca-console-api"; "agent" = "ca-agent"; "attest" = "ca-attest"; "near-watch" = "ca-near-watch" }
 
@@ -335,6 +377,22 @@ if ($All -and -not $AllSkipSmoke) {
 if (-not $Ship -and ($ShipMessage -or $ShipFiles.Count -or $ShipBranch -or $ShipTrailer -or $ShipTag -or $ShipTagMessage -or $ShipSkipTests -or $ShipNoPush -or $ShipDryRun)) { Stop-Here "the -Ship... options need -Ship" }
 if ($ShipTag -and $ShipTag -notmatch '^v\d+\.\d+\.\d+$') { Stop-Here "-ShipTag must look like v1.4.8" }
 if ($ShipTagMessage -and -not $ShipTag) { Stop-Here "-ShipTagMessage needs -ShipTag" }
+
+# ---------------------------------------------------------------- -StopService / -StartService NAME: one container, then stop
+# privateAI-design-39 section 5: the deliberate refusal stops ca-attest after the estimate (-StopService attest) and starts it
+# again afterwards (-StartService attest). Only a known service of this stack; nothing else is started or stopped.
+if ($StopService -or $StartService) {
+  if ($StopService -and $StartService) { Stop-Here "-StopService and -StartService: one at a time" }
+  if ($otherModes -or $keyModes -or $Refunds -or $AgentAsk -or $VerifyReceipt) { Stop-Here "-StopService / -StartService run on their own: leave out the other mode switches" }
+  $svcName = if ($StopService) { $StopService } else { $StartService }
+  if (-not $LogContainers.Contains($svcName)) { Stop-Here "$svcName is not a service here; use one of: $($LogContainers.Keys -join ', ')" }
+  $svcVerb = if ($StopService) { "stop" } else { "start" }
+  Say "RUN" "docker $svcVerb $($LogContainers[$svcName]) (only this container)"
+  $null = Quiet { & docker $svcVerb $LogContainers[$svcName] 2>&1 }
+  if ($LASTEXITCODE) { Stop-Here "docker $svcVerb $($LogContainers[$svcName]) failed (exit $LASTEXITCODE): is the stack running? .\test-console\desk.ps1 -Check" }
+  Say "OK" "$($LogContainers[$svcName]) $(if ($StopService) { 'stopped' } else { 'started' })"
+  exit 0
+}
 
 # ---------------------------------------------------------------- -Logs: read-only, needs nothing else
 if ($Logs.Count) {
@@ -524,7 +582,7 @@ function Invoke-Suites {
   Say "TEST" "terminal suites (each starts its own servers; near-watch path from config\local\repos.json)"
   # packages/receipt and packages/agent-policy: privateAI-design-32 ARCH-613..616 and ARCH-620..624; packages/ap2: design-33 ARCH-626; packages/offer: design-34 ARCH-634 (pure, no servers).
   # packages/signer + services/signer: privateAI-design-36 ARCH-660..668 (the control-plane signer and the checkout mandate).
-  & node --test "packages/crossask/test/*.test.ts" "packages/receipt/test/*.test.ts" "packages/agent-policy/test/*.test.ts" "packages/ap2/test/*.test.ts" "packages/offer/test/*.test.ts" "packages/observer/test/*.test.ts" "packages/signer/test/*.test.ts" "services/signer/test/*.test.ts" "scripts/test/*.test.ts" "services/gateway/test/*.test.ts" "test-console/test/*.test.ts" | Out-Host
+  & node --test "packages/crossask/test/*.test.ts" "packages/receipt/test/*.test.ts" "packages/agent-policy/test/*.test.ts" "packages/ap2/test/*.test.ts" "packages/offer/test/*.test.ts" "packages/observer/test/*.test.ts" "packages/near-refund/test/*.test.ts" "packages/signer/test/*.test.ts" "services/signer/test/*.test.ts" "scripts/test/*.test.ts" "services/gateway/test/*.test.ts" "test-console/test/*.test.ts" | Out-Host
   $a = $LASTEXITCODE
   & npm --prefix services\analyst test | Out-Host
   $b = $LASTEXITCODE
@@ -634,10 +692,17 @@ if ($Ship) {
     Quiet { & git @addArgs }
     if ($LASTEXITCODE) { Stop-Here "git add failed (exit $LASTEXITCODE): nothing committed" }
   }
+  # The commit takes the INDEX, with no pathspec (2026-11-13, v2.1.0 ship: a moved file, " D old" + "?? new", is staged by
+  # git add as a rename, and `git commit -- old` then fails: old is in neither the index nor the work tree). So the staged
+  # set is read back first and must be exactly this commit's list (a rename by its new path); anything else stops here.
+  $stagedNow = @(Get-StagedChanges @(Quiet { & git -c core.quotePath=false diff --cached --name-status -M 2>$null }))
+  if ($LASTEXITCODE) { Stop-Here "git diff --cached failed (exit $LASTEXITCODE): nothing committed (the files stay staged)" }
+  $outside = @(Get-StagedOutside $stagedNow $want)
+  if ($outside.Count) { Stop-Here ("staged but not in this commit's list: " + ($outside -join ", ") + "; nothing committed (the files stay staged)") }
+  if (-not $stagedNow.Count) { Stop-Here "nothing is staged after git add: nothing committed" }
+  Say "GIT" ("staged: $($stagedNow.Count) change(s)" + $(if (@($stagedNow | Where-Object { $_.Status -eq "R" }).Count) { ", renames: " + (@($stagedNow | Where-Object { $_.Status -eq "R" } | ForEach-Object { "$($_.From) -> $($_.Path)" }) -join ", ") } else { "" }))
   $commitArgs = @("commit", "-m", $ShipMessage)
   if ($ShipTrailer) { $commitArgs += @("-m", $ShipTrailer) }
-  # --include: the listed paths plus the index (the staged removals above); with only removals, the index alone
-  if ($addPaths.Count) { $commitArgs += @("--include", "--") + $addPaths }
   Quiet { & git @commitArgs }
   if ($LASTEXITCODE) { Stop-Here "git commit failed (exit $LASTEXITCODE): the files stay staged; nothing pushed" }
   Say "OK" "committed $("$(Quiet { & git log --oneline -1 2>$null })".Trim())"
@@ -773,11 +838,27 @@ function PlanesReport {
   if ($left.Count) { Write-Host ("  {0,-18} {1,-16} {2,-6} {3}" -f "buyer secrets", "data", "WARN", "$($left -join ', ') still in ${buyerEnv}: remove those lines (MANUAL_SETUP.md 2026-11-13 Signer split and checkout mandates, step 2)") }
   else { Write-Host ("  {0,-18} {1,-16} {2,-6} {3}" -f "buyer secrets", "data", "OK", "$buyerEnv holds none of ChainAim's signing keys") }
   $sk = HttpJson "http://127.0.0.1:8780/healthz"
-  if ($sk -and $sk.ok) { Write-Host ("  {0,-18} {1,-16} {2,-6} {3}" -f "signer keys", "control", "OK", "AP2 $($sk.ap2Kid)  receipt $($sk.receiptKeyId)  mandates $(if ($sk.mandates) { 'on' } else { 'off' })") }
+  if ($sk -and $sk.ok) { Write-Host ("  {0,-18} {1,-16} {2,-6} {3}" -f "signer keys", "control", "OK", "AP2 $($sk.ap2Kid)  receipt $($sk.receiptKeyId)  mandates $(if ($sk.mandates) { 'on' } else { 'off' })$(if ($sk.refunds) { "  refunds on, payTo wallet NEAR $($sk.refundWallet)" })") }
+  if ($sk -and $sk.refundWallet -eq "low") { Write-Host ("  {0,-18} {1,-16} {2,-6} {3}" -f "refund wallet", "control", "WARN", "the payTo account holds under --refund-min-near NEAR: refunds will fail for gas (MANUAL_SETUP.md 2026-11-13 Upfront pay, step 2)") }
   Write-Host "  One PC: separation by design (own compose project, network chainaim-control, keys folder $sellerSecrets), not by hardware."
   return $bad
 }
 if ($Planes) { $b = PlanesReport; if ($b) { Stop-Here "$b plane check(s) failed: see the FAIL lines above" }; exit 0 }
+
+# ---------------------------------------------------------------- -Refunds [-RefundRetry INVOICE]: the refund ledger, then stop
+# privateAI-design-37: the Node script reads the request key from signer-client.env itself; this script passes the path only.
+if ($RefundRetry -and -not $Refunds) { Stop-Here "-RefundRetry needs -Refunds: .\test-console\desk.ps1 -Refunds -RefundRetry <invoiceId>" }
+if ($Refunds) {
+  if ($RefundRetry -and $RefundRetry -notmatch '^[A-Za-z0-9_-]{1,100}$') { Stop-Here "-RefundRetry must be an invoice id (as -Refunds lists it)" }
+  # The signer URL as the containers see it; from this PC the same port is on 127.0.0.1.
+  $hostSigner = $signerUrl -replace '://host\.docker\.internal', '://127.0.0.1'
+  $refArgs = @("scripts\refunds.ts", "--signer-url", $hostSigner, "--client-file", (Join-Path $secrets "signer-client.env"))
+  if ($RefundRetry) { $refArgs += @("--retry", $RefundRetry) }
+  Say "RUN" "refund ledger of ca-control-signer at $hostSigner$(if ($RefundRetry) { " (retry $RefundRetry)" })"
+  & node @refArgs
+  if ($LASTEXITCODE) { Stop-Here "scripts\refunds.ts stopped (exit $LASTEXITCODE): its message is above" }
+  exit 0
+}
 
 # ---------------------------------------------------------------- -ReceiptKey: the receipt signing key, then stop
 # The Node script reads and writes chainaim.env; this script only passes the path, so it still never reads a secret value.
@@ -991,7 +1072,20 @@ $privArgs.Signer = $signerMode
 $privArgs.SellerSecretsFile = Join-Path $sellerSecrets "signer.env"
 $privArgs.SignerClientFile = Join-Path $secrets "signer-client.env"
 $privArgs.SignerUrl = $signerUrl
-Say "RUN" "test-console\up.ps1 -ReplaceRunning -PaidJobs $($privArgs.PaidJobs)$(if ($Build) { ' -Build' })$(if ($WithStub) { ' -Test' })$(if ($agentMode -ne 'auto') { ' -Agent ' + $agentMode })$(if ($attestMode -ne 'auto') { ' -Attest ' + $attestMode }) -AttestGpuCheck $attestGpu$(if ($receiptsMode -ne 'auto') { ' -Receipts ' + $receiptsMode }) -DefaultPayer $defPayer$(if ($defAnswer) { ' -DefaultAnswerModel ' + $defAnswer }) -CrossaskMaxPromptChars $maxPrompt -Signer $signerMode -SignerUrl $signerUrl"
+# privateAI-design-37: how tab 03 jobs are paid; -PaidFlow, else desk.json paidJobs.flow, else authorization (as before).
+$paidFlow = if ($PaidFlow) { $PaidFlow } elseif ($P.paidJobs -and $P.paidJobs.flow) { [string]$P.paidJobs.flow } else { "authorization" }
+if (@("authorization", "upfront") -notcontains $paidFlow) { Stop-Here "-PaidFlow (or $Settings paidJobs.flow) must be authorization or upfront" }
+$privArgs.PaidFlow = $paidFlow
+# privateAI-design-39: -PayOnlyAttested, else desk.json paidJobs.payOnlyAttested, else evidence (as before); the deadline the same way.
+$payOnly = if ($PayOnlyAttested) { $PayOnlyAttested } elseif ($P.paidJobs -and $P.paidJobs.payOnlyAttested) { [string]$P.paidJobs.payOnlyAttested } else { "evidence" }
+if (@("off", "evidence", "verified") -notcontains $payOnly) { Stop-Here "-PayOnlyAttested (or $Settings paidJobs.payOnlyAttested) must be off, evidence or verified" }
+$payOnlyMs = if ($PayOnlyAttestedDeadlineMs) { $PayOnlyAttestedDeadlineMs } elseif ($P.paidJobs -and $P.paidJobs.payOnlyAttestedDeadlineMs) { [int]$P.paidJobs.payOnlyAttestedDeadlineMs } else { 30000 }
+if ($payOnlyMs -lt 1000 -or $payOnlyMs -gt 240000) { Stop-Here "-PayOnlyAttestedDeadlineMs (or $Settings paidJobs.payOnlyAttestedDeadlineMs) must be from 1000 to 240000" }
+if ($payOnly -eq "verified" -and $attestMode -eq "off") { Stop-Here "-PayOnlyAttested verified needs ca-attest: leave attest on (attest.enabled / -Attest)" }
+$privArgs.PayOnlyAttested = $payOnly
+$privArgs.PayOnlyAttestedDeadlineMs = $payOnlyMs
+if ($payOnly -ne "evidence") { Say "INFO" "pay only for attested private inference: $payOnly$(if ($payOnly -eq 'verified') { ", ca-attest's verdict awaited up to $payOnlyMs ms before delivery" })" }
+Say "RUN" "test-console\up.ps1 -ReplaceRunning -PaidFlow $paidFlow -PaidJobs $($privArgs.PaidJobs)$(if ($Build) { ' -Build' })$(if ($WithStub) { ' -Test' })$(if ($agentMode -ne 'auto') { ' -Agent ' + $agentMode })$(if ($attestMode -ne 'auto') { ' -Attest ' + $attestMode }) -AttestGpuCheck $attestGpu$(if ($receiptsMode -ne 'auto') { ' -Receipts ' + $receiptsMode }) -DefaultPayer $defPayer$(if ($defAnswer) { ' -DefaultAnswerModel ' + $defAnswer }) -CrossaskMaxPromptChars $maxPrompt -Signer $signerMode -SignerUrl $signerUrl"
 & $privUp @privArgs
 if ($LASTEXITCODE) { Stop-Here "test-console\up.ps1 stopped (exit $LASTEXITCODE): its STOP line above names the fix" }
 

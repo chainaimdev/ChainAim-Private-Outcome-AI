@@ -9,6 +9,8 @@
 !packages/ap2/src
 !packages/offer/package.json
 !packages/offer/src
+!packages/near-refund/package.json
+!packages/near-refund/src
 !packages/signer/package.json
 !packages/signer/src
 !services/signer/package.json

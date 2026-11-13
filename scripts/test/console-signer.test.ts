@@ -79,7 +79,13 @@ const dir = mkdtempSync(join(tmpdir(), "console-signer-"));
 const data = join(dir, "data");
 mkdirSync(data);
 writeFileSync(join(data, "orders.csv"), `order_id,customer,amount\n1,${MARKER} One,10.50\n2,${MARKER} Two,20.25\n3,Third,5.00\n`);
-writeFileSync(join(dir, "data-sources.json"), JSON.stringify({ allowedRoots: [data], defaultFolder: data, defaultMode: "whole", extensions: [".csv"], maxBytes: { "*": 2_000_000 }, exclude: [], maxFiles: 20, hideFolders: ["_*"] }));
+/** privateAI-design-38: a second root, grown between estimate and run (its own folder, so the orders data never changes). */
+const grow = join(dir, "grow");
+mkdirSync(grow);
+writeFileSync(join(grow, "orders.csv"), "order_id,customer,amount\n1,Alpha,10.50\n");
+/** A question carrying this word gets a reply reporting more completion tokens than the signed maxTokens. */
+const LONG_REPLY = "overlongreply";
+writeFileSync(join(dir, "data-sources.json"), JSON.stringify({ allowedRoots: [data, grow], defaultFolder: data, defaultMode: "whole", extensions: [".csv"], maxBytes: { "*": 2_000_000 }, exclude: [], maxFiles: 20, hideFolders: ["_*"] }));
 let modelCalls = 0;
 const modelServer: Server = createServer((req, res) => {
   let raw = "";
@@ -89,8 +95,9 @@ const modelServer: Server = createServer((req, res) => {
     modelCalls++;
     const body = JSON.parse(raw) as { messages: { role: string; content: string }[] };
     const sqlStep = body.messages.some((m) => m.role === "system" && m.content.startsWith("You write DuckDB SQL"));
+    const long = body.messages.some((m) => typeof m.content === "string" && m.content.includes(LONG_REPLY));
     res.writeHead(200, { "content-type": "application/json" });
-    res.end(JSON.stringify({ model: "standin", choices: [{ index: 0, message: { role: "assistant", content: sqlStep ? "```sql\nSELECT count(*) AS n FROM orders\n```" : "There are 3 orders." }, finish_reason: "stop" }], usage: { prompt_tokens: 1200, completion_tokens: 40, total_tokens: 1240 } }));
+    res.end(JSON.stringify({ model: "standin", choices: [{ index: 0, message: { role: "assistant", content: sqlStep ? "```sql\nSELECT count(*) AS n FROM orders\n```" : "There are 3 orders." }, finish_reason: "stop" }], usage: { prompt_tokens: 1200, completion_tokens: long ? 3000 : 40, total_tokens: long ? 4200 : 1240 } }));
   });
 });
 
@@ -250,6 +257,90 @@ describe("ARCH-667 ARCH-668 the two-sided AP2 deal, estimate first", () => {
       assert.equal(r.status, 422);
       assert.equal(JSON.parse(r.text).code, "mandate_required");
       assert.equal(modelCalls, 0);
+    } finally { await stop(c); }
+  });
+});
+
+describe("privateAI-design-38 ARCH-680..684 signed limits: what you signed is exactly what runs", () => {
+  const offerWith = (b: { folder?: string; question?: string }, port = consolePort) =>
+    call(port, "POST", "/offers", { "content-type": "application/json" }, JSON.stringify({ folder: b.folder ?? data, question: b.question ?? QUESTION, model: MODEL, answerModel: MODEL, phrase: "llm", datasetId: "orders-demo" }));
+  const held = (jobId: string, iport = internalPort) => call(iport, "GET", `/internal/jobs/${jobId}`, { "x-jobs-key": JOBS_KEY });
+  const verify = (file: string, keys: { receipt: { publicKeyPem: string }; ap2: { keys: unknown[] } }) => {
+    const receiptPem = join(dir, "limits-receipt-public-key.pem"), ap2Jwk = join(dir, "limits-ap2-public-key.jwk.json");
+    writeFileSync(receiptPem, keys.receipt.publicKeyPem);
+    writeFileSync(ap2Jwk, JSON.stringify({ keys: keys.ap2.keys }));
+    return spawnSync(process.execPath, [VERIFY, "--file", file, "--public-key", receiptPem, "--ap2-public-key", ap2Jwk, "--mandate-keys", mandateKeysPath, "--result", "none"], { encoding: "utf8", env: BASE_ENV });
+  };
+
+  test("ARCH-680 ARCH-682 ARCH-684: the signed checkout carries the limits; inside them the run is 200, the receipt's quoteBasis is the limits and verify-receipt says so; a receipt outside them FAILs", async () => {
+    const j = JSON.parse((await offerWith({})).text);
+    const L = j.ap2.checkout["dev.chainaim.job"].limits;
+    assert.deepEqual(L, {
+      model: MODEL, answerModel: MODEL, phrase: "llm", userSql: false, files: j.basis.files, totalBytes: j.basis.totalBytes, sizeTolerancePct: 10,
+      maxPromptChars: j.basis.maxPromptChars, answerMaxPromptChars: j.basis.answerMaxPromptChars, maxTokens: j.basis.maxTokens, sqlRetries: j.basis.sqlRetries, answerMaxRows: 50, modelCalls: j.basis.modelCalls,
+      // privateAI-design-39 ARCH-688: the console's --pay-only-attested mode (default evidence) is signed with the limits.
+      attestation: "evidence",
+    }, "the limits are the estimate the buyer was shown, signed");
+    const invoice = "INVLIMITS0001";
+    const r = await run(j.jobId, { invoiceId: invoice, checkoutMandate: mandateFor(j.ap2, invoice) });
+    assert.equal(r.status, 200, r.text);
+    const settlement = { transaction: "8Dx2qkLz5DUqvB4hdDcDhVXcKPYxx3rJ3tzbRHwCZ1fM", network: "near:testnet", payer: TENANT_ACCOUNT, invoiceId: invoice };
+    assert.equal((await call(internalPort, "POST", `/internal/jobs/${j.jobId}/released`, { "x-jobs-key": JOBS_KEY, "content-type": "application/json" }, JSON.stringify(settlement))).status, 200);
+    let got = { status: 0, text: "" };
+    for (let i = 0; i < 50 && !(got.status === 200 && JSON.parse(got.text).receipt.settlement); i++) { got = await call(consolePort, "GET", `/jobs/${j.jobId}/receipt`); await new Promise((ok) => setTimeout(ok, 100)); }
+    assert.equal(got.status, 200, got.text);
+    const file = JSON.parse(got.text) as { receipt: SignedReceipt; ap2: { checkout: Record<string, unknown>; merchant_authorization: string }; mandate: string };
+    const qb = file.receipt.body.price.quoteBasis;
+    for (const f of ["phrase", "userSql", "sqlRetries", "answerMaxRows", "maxPromptChars", "answerMaxPromptChars", "maxTokens", "files", "totalBytes", "sizeTolerancePct"]) assert.equal(qb[f], L[f], f);
+    assert.ok((qb.calls as number) <= L.modelCalls);
+    const keys = JSON.parse((await call(signerPort, "GET", "/.well-known/keys")).text);
+    const saved = join(dir, `chainaim-receipt-${j.jobId}.json`);
+    writeFileSync(saved, got.text);
+    const ok = verify(saved, keys);
+    assert.equal(ok.status, 0, ok.stdout + ok.stderr);
+    assert.match(ok.stdout, /signed quote matches, checkout mandate matches, signed limits match/);
+    // A console that records a bigger run than was signed: the signer signs the (allowlisted) body, verify-receipt FAILs it.
+    const bigger = { ...file.receipt.body, price: { ...file.receipt.body.price, quoteBasis: { ...qb, maxTokens: 65_536 } } };
+    const resigned = await call(signerPort, "POST", "/v1/receipts", { "content-type": "application/json", "x-signer-key": SIGNER_KEY }, JSON.stringify({ body: bigger, ap2: file.ap2, mandate: file.mandate }));
+    assert.equal(resigned.status, 200, resigned.text);
+    const badFile = join(dir, `limits-outside-${j.jobId}.json`);
+    writeFileSync(badFile, JSON.stringify({ receipt: JSON.parse(resigned.text), ap2: file.ap2 }));
+    const bad = verify(badFile, keys);
+    assert.equal(bad.status, 1, bad.stdout + bad.stderr);
+    assert.match(bad.stdout, /FAIL +limits: maxTokens: the receipt says 65536, the signed quote 2048/);
+  });
+
+  test("ARCH-682: a model call over the signed maxTokens is refused 409 after the run; nothing is held, so nothing settles", async () => {
+    const j = JSON.parse((await offerWith({ question: `How many orders are there? ${LONG_REPLY}` })).text);
+    const r = await run(j.jobId, { invoiceId: "INVLIMITS0002", checkoutMandate: mandateFor(j.ap2, "INVLIMITS0002") });
+    assert.equal(r.status, 409, r.text);
+    assert.equal(JSON.parse(r.text).code, "outside_limits");
+    assert.match(JSON.parse(r.text).error, /a model call returned 3000 completion tokens, more than the 2048 signed/);
+    assert.equal((await held(j.jobId)).status, 404, "nothing held");
+    assert.match(consoleProc.out(), new RegExp(`"event":"offer_outside_limits","offerId":"${j.jobId}"`));
+  });
+
+  test("ARCH-682: a folder grown past the SIGNED tolerance is 409 before any model call", async () => {
+    const j = JSON.parse((await offerWith({ folder: grow })).text);
+    assert.equal(j.ap2.checkout["dev.chainaim.job"].limits.sizeTolerancePct, 10);
+    writeFileSync(join(grow, "orders.csv"), "order_id,customer,amount\n1,Alpha,10.50\n" + "2,Beta,20.25\n".repeat(20));
+    modelCalls = 0;
+    const r = await run(j.jobId, { invoiceId: "INVLIMITS0003", checkoutMandate: mandateFor(j.ap2, "INVLIMITS0003") });
+    assert.equal(r.status, 409, r.text);
+    assert.match(JSON.parse(r.text).error, /more than the \d+ estimated \(\+10 %\): estimate it again/);
+    assert.equal(modelCalls, 0, "no model call");
+  });
+
+  test("ARCH-682: --offer-limits-check off keeps the v2.0.0 behaviour (no token check); a bad value stops start-up", async () => {
+    const bad = spawnSync(process.execPath, consoleArgs(await freePort(), await freePort(), { "offer-limits-check": "maybe" }), { encoding: "utf8", timeout: 20_000, env: DATA_ENV });
+    assert.notEqual(bad.status, 0);
+    assert.match(bad.stderr, /--offer-limits-check must be on or off, got maybe/);
+    const port = await freePort(), iport = await freePort();
+    const c = await start(consoleArgs(port, iport, { "offer-limits-check": "off", "receipt-dir": join(dir, "receipts-limits-off") }), consoleReady(port), DATA_ENV, "the console (limits check off)");
+    try {
+      const j = JSON.parse((await offerWith({ question: `How many orders are there? ${LONG_REPLY}` }, port)).text);
+      const r = await run(j.jobId, { invoiceId: "INVLIMITS0004", checkoutMandate: mandateFor(j.ap2, "INVLIMITS0004") }, iport);
+      assert.equal(r.status, 200, r.text);
     } finally { await stop(c); }
   });
 });

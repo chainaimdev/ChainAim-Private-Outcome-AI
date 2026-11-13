@@ -55,6 +55,16 @@ this PC (server.ts --mode ui, which forwards every call to the console API in Do
                                                 -MandateKeys FILE: the tenants' PUBLIC mandate keys (default
                                                 config\ap2-mandate-keys.json, desk.ps1 -MandateKey); present = the signer
                                                 checks the agent's checkout mandate before each run (ARCH-667).
+  -PaidFlow authorization|upfront               how a tab 03 job is paid (privateAI-design-37). authorization (default, as
+                                                before): verify, run, settle only a delivered job. upfront: the payment
+                                                settles BEFORE any work and a refused job is refunded on chain by
+                                                ca-control-signer (needs -Signer separate and SELLER_NEAR_PRIVATE_KEY in
+                                                -SellerSecretsFile; refund ledger on the chainaim-refunds volume).
+  -PayOnlyAttested off|evidence|verified  [-PayOnlyAttestedDeadlineMs 30000]
+                                                privateAI-design-39 ARCH-685 (console --pay-only-attested): evidence
+                                                (default, as before) | off | verified = the console waits for ca-attest's
+                                                verdict before delivering a paid job (needs -Attest on). verified raises
+                                                the paywall's PAID_JOBS_RUN_TIMEOUT_SEC to the console's 300 s + deadline + 10 s.
   -OfferMode auto|estimate-first|run-hold  [-OfferModes LIST]
                                                 tab 03 paid jobs (privateAI-design-34 D4/D5): estimate-first = price from
                                                 sizes, no work until the buyer pays; run-hold = run, quote, hold, pay to
@@ -154,7 +164,10 @@ param(
   [string]$SignerClientFile = "C:\PRIV-AI-SECRETS\signer-client.env",
   [string]$SignerUrl = "http://host.docker.internal:8780",
   [int]$SignerPort = 8780,
-  [string]$MandateKeys = "config\ap2-mandate-keys.json"
+  [string]$MandateKeys = "config\ap2-mandate-keys.json",
+  [ValidateSet("authorization", "upfront")][string]$PaidFlow = "authorization",
+  [ValidateSet("off", "evidence", "verified")][string]$PayOnlyAttested = "evidence",
+  [int]$PayOnlyAttestedDeadlineMs = 30000
 )
 $ErrorActionPreference = "Stop"
 $repo = [IO.Path]::GetFullPath((Split-Path $PSScriptRoot -Parent))
@@ -267,7 +280,7 @@ try {
   if ($Signer -eq "separate") {
     if (-not (Test-Path $SellerSecretsFile)) { Stop-Here "-Signer separate needs $SellerSecretsFile (desk.ps1 -SignerKeys makes it)" }
     if (-not (Test-Path $SignerClientFile)) { Stop-Here "-Signer separate needs $SignerClientFile with SIGNER_REQUEST_KEY (desk.ps1 -SignerKeys makes it)" }
-    $sellerKeys = (Read-EnvFile $SellerSecretsFile '^(AP2_SIGNING_KEY|RECEIPT_SIGNING_KEY|SIGNER_REQUEST_KEY)$').Values
+    $sellerKeys = (Read-EnvFile $SellerSecretsFile '^(AP2_SIGNING_KEY|RECEIPT_SIGNING_KEY|SIGNER_REQUEST_KEY|SELLER_NEAR_PRIVATE_KEY)$').Values
     foreach ($need in @("AP2_SIGNING_KEY", "RECEIPT_SIGNING_KEY", "SIGNER_REQUEST_KEY")) { if (-not $sellerKeys[$need]) { Stop-Here "$SellerSecretsFile has no $need (desk.ps1 -SignerKeys)" } }
     $signerReqKey = (Read-EnvFile $SignerClientFile '^SIGNER_REQUEST_KEY$').Values["SIGNER_REQUEST_KEY"]
     if (-not $signerReqKey -or $signerReqKey -ne $sellerKeys["SIGNER_REQUEST_KEY"]) { Stop-Here "SIGNER_REQUEST_KEY in $SignerClientFile is missing or not the one in $SellerSecretsFile (values not printed): run .\test-console\desk.ps1 -SignerKeys again" }
@@ -479,6 +492,38 @@ try {
     $consoleCmd += @("--signer=remote", "--signer-url=$($SignerUrl.TrimEnd('/'))", "--signer-key-env=SIGNER_REQUEST_KEY", "--signer-start-wait-sec=60")
     Set-Secret "SIGNER_REQUEST_KEY" $signerReqKey
   }
+  # privateAI-design-37: upfront = the payment settles before any work; ca-control-signer refunds a refused job on chain.
+  $refundKeyOn = $false
+  if ($PaidFlow -eq "upfront") {
+    if ($PaidJobs -ne "on") { Stop-Here "-PaidFlow upfront needs -PaidJobs on" }
+    if ($Signer -ne "separate") { Stop-Here "-PaidFlow upfront needs -Signer separate: the refunds are made by ca-control-signer (desk.ps1 -SignerKeys once)" }
+    if (-not $sellerKeys["SELLER_NEAR_PRIVATE_KEY"]) { Stop-Here "-PaidFlow upfront needs SELLER_NEAR_PRIVATE_KEY (the payTo account's key, ed25519:...) in $SellerSecretsFile (MANUAL_SETUP.md 2026-11-13 Upfront pay, step 1)" }
+    $nNet = if ($env:NEAR_NETWORK) { $env:NEAR_NETWORK } else { "testnet" }
+    if (@("testnet", "mainnet") -notcontains $nNet) { Stop-Here "NEAR_NETWORK must be testnet or mainnet for -PaidFlow upfront, got $nNet" }
+    $NET = $nNet.ToUpper()
+    $nPayTo = [Environment]::GetEnvironmentVariable("NEAR_PAY_TO_$NET"); $nUsdc = [Environment]::GetEnvironmentVariable("NEAR_USDC_CONTRACT_$NET"); $nRelayer = [Environment]::GetEnvironmentVariable("NEAR_RELAYER_ACCOUNT_$NET")
+    foreach ($pair in @(@("NEAR_PAY_TO_$NET", $nPayTo), @("NEAR_USDC_CONTRACT_$NET", $nUsdc), @("NEAR_RELAYER_ACCOUNT_$NET", $nRelayer))) { if (-not $pair[1]) { Stop-Here "-PaidFlow upfront needs $($pair[0]) in -NearEnvFile (the signer checks each payment against it)" } }
+    $nRpc = [Environment]::GetEnvironmentVariable("NEAR_RPC_URL_$NET"); if (-not $nRpc) { $nRpc = "https://rpc.$nNet.fastnear.com" }
+    $signerCmd += @("--refunds=on", "--refund-store=/data/refunds", "--refund-account=$nPayTo", "--refund-usdc-contract=$nUsdc", "--refund-network=near:$nNet", "--near-rpc-url=$nRpc", "--paid-tx-sender=$nRelayer")
+    # The paywall gets the request key under its own name, only in this flow (PAID_JOBS_REFUND_KEY_ENV names it).
+    Set-Secret "PAID_JOBS_FLOW" "upfront"; Set-Secret "PAID_JOBS_REFUND_URL" $SignerUrl.TrimEnd('/'); Set-Secret "PAID_JOBS_REFUND_KEY_ENV" "PAYWALL_SIGNER_KEY"; Set-Secret "PAYWALL_SIGNER_KEY" $signerReqKey
+    $refundKeyOn = $true
+    Say "OK" "paid flow upfront: the payment settles before the run; ca-control-signer refunds a refused job from $nPayTo (key from $SellerSecretsFile, not printed; ledger on volume chainaim-refunds)"
+  }
+  # privateAI-design-39 ARCH-685: what a paid job must show about attestation; evidence (the console's default) adds no flag.
+  if ($PayOnlyAttestedDeadlineMs -lt 1000 -or $PayOnlyAttestedDeadlineMs -gt 240000) { Stop-Here "-PayOnlyAttestedDeadlineMs must be from 1000 to 240000, got $PayOnlyAttestedDeadlineMs" }
+  if ($PayOnlyAttested -ne "evidence") {
+    if ($PaidJobs -ne "on") { Stop-Here "-PayOnlyAttested $PayOnlyAttested needs -PaidJobs on" }
+    if ($PayOnlyAttested -eq "verified" -and $Attest -ne "on") { Stop-Here "-PayOnlyAttested verified needs -Attest on: the verdict comes from ca-attest" }
+    $consoleCmd += "--pay-only-attested=$PayOnlyAttested"
+    if ($PayOnlyAttested -eq "verified") {
+      $consoleCmd += "--pay-only-attested-deadline-ms=$PayOnlyAttestedDeadlineMs"
+      # The paywall waits for the run step, which now includes the verdict: the console's --crossask-timeout-sec (its
+      # default 300; this script does not change it) + the deadline + 10 s.
+      Set-Secret "PAID_JOBS_RUN_TIMEOUT_SEC" ([string](300 + [math]::Ceiling($PayOnlyAttestedDeadlineMs / 1000) + 10))
+    }
+    Say "OK" "pay only for attested private inference: $PayOnlyAttested$(if ($PayOnlyAttested -eq 'verified') { " (ca-attest's verdict within $PayOnlyAttestedDeadlineMs ms before delivery; paywall run timeout $env:PAID_JOBS_RUN_TIMEOUT_SEC s)" })"
+  }
   $override = [ordered]@{ services = [ordered]@{ gateway = [ordered]@{ command = @($gwCmd) }; "console-api" = [ordered]@{ command = $consoleCmd; ports = @($port) } } }
   if ($agentCmd) { $override.services["agent"] = [ordered]@{ command = $agentCmd; ports = @("127.0.0.1:${AgentPort}:${AgentPort}") } }
   if ($attestCmd) { $override.services["attest"] = [ordered]@{ command = $attestCmd; ports = @("127.0.0.1:${AttestPort}:${AttestPort}") } }
@@ -513,11 +558,12 @@ try {
     $sigFile = Join-Path $outDir "signer-commands.yml"
     $sigOverride = [ordered]@{ services = [ordered]@{ "control-signer" = [ordered]@{ command = $signerCmd; ports = @("127.0.0.1:${SignerPort}:8780") } } }
     [IO.File]::WriteAllText($sigFile, ($sigOverride | ConvertTo-Json -Depth 6), (New-Object Text.UTF8Encoding($false)))
-    foreach ($k in @("AP2_SIGNING_KEY", "RECEIPT_SIGNING_KEY")) { Set-Item -Path "env:$k" -Value $sellerKeys[$k] }
+    $sigKeys = @("AP2_SIGNING_KEY", "RECEIPT_SIGNING_KEY") + $(if ($refundKeyOn) { @("SELLER_NEAR_PRIVATE_KEY") } else { @() })
+    foreach ($k in $sigKeys) { Set-Item -Path "env:$k" -Value $sellerKeys[$k] }
     try {
       & docker @(@("compose", "-p", "chainaim-control-plane", "-f", "services/signer/compose.yml", "-f", $sigFile, "up", "-d") + $(if (-not $NoBuild) { @("--build") } else { @() }))
       $sigCode = $LASTEXITCODE
-    } finally { foreach ($k in @("AP2_SIGNING_KEY", "RECEIPT_SIGNING_KEY")) { Remove-Item "env:$k" -ErrorAction SilentlyContinue } }
+    } finally { foreach ($k in $sigKeys) { Remove-Item "env:$k" -ErrorAction SilentlyContinue } }
     $sellerKeys = $null
     if ($sigCode -ne 0) { Stop-Here "ca-control-signer did not start (docker compose -p chainaim-control-plane); see the message above" }
     if (-not (Wait-Http "http://127.0.0.1:$SignerPort/healthz" @{} "ca-control-signer")) { Stop-Here "ca-control-signer did not answer: docker logs ca-control-signer --tail 20" }

@@ -1,0 +1,10 @@
+{
+  "name": "@chainaim/near-refund",
+  "version": "0.1.0",
+  "private": true,
+  "description": "privateAI-design-37 ARCH-673/674: reads a settled NEAR USDC payment from the chain and builds, signs and sends the refund ft_transfer. No runtime dependencies (node:crypto and fetch only): the NEAR transaction is encoded in borsh here and checked byte for byte against @near-js/transactions in services/paywall/test/near-refund.test.ts.",
+  "type": "module",
+  "engines": { "node": ">=22.22" },
+  "exports": { ".": "./src/index.ts" },
+  "scripts": { "test": "node --test \"test/*.test.ts\"" }
+}

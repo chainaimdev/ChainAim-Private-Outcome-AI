@@ -137,7 +137,7 @@ class ScriptedModel extends Model<BaseModelConfig> {
 }
 
 /** How the console stand-in answers: signer, and what it claims (and signs) as the payee. */
-const state: { signer: Ap2Signer; payTo?: string; noAp2: boolean; held: Map<string, unknown>; offers: Map<string, unknown>; runs: string[]; paths: string[] } = { signer: pinned, noAp2: false, held: new Map(), offers: new Map(), runs: [], paths: [] };
+const state: { signer: Ap2Signer; payTo?: string; noAp2: boolean; held: Map<string, unknown>; offers: Map<string, unknown>; runs: string[]; paths: string[]; limits?: Record<string, unknown>; answerBasis?: Record<string, unknown>; route?: string } = { signer: pinned, noAp2: false, held: new Map(), offers: new Map(), runs: [], paths: [] };
 let paywallUrl = "";
 const consoleServer: Server = createServer(async (req, res) => {
   for await (const _ of req) { /* drain */ }
@@ -155,7 +155,9 @@ const consoleServer: Server = createServer(async (req, res) => {
     await q.body?.cancel();
     const offer = (JSON.parse(Buffer.from(q.headers.get("payment-required")!, "base64").toString("utf8")) as { accepts: Record<string, string>[] }).accepts[0];
     const j: QuotedJob = { jobId, amount: "20000", network: offer.network, asset: offer.asset, payTo: offer.payTo, expiresAt };
-    return send(200, { ...j, offerId: jobId, mode: "estimate-first", totalUsd: "0.020000", route: "nearai/standin", attested: false, ap2: signed(j, state.signer) });
+    // privateAI-design-38: with state.limits, the signed checkout carries them (as packages/signer writes them) and the answer its basis.
+    const ap2 = signed(j, state.signer, (c) => { if (state.limits) c["dev.chainaim.job"].limits = state.limits; });
+    return send(200, { ...j, offerId: jobId, mode: "estimate-first", totalUsd: "0.020000", route: state.route ?? "nearai/standin", attested: false, ap2, ...(state.answerBasis ? { basis: state.answerBasis } : {}) });
   }
   if (req.method === "POST" && path === "/jobs/crossask") {
     const jobId = randomBytes(16).toString("hex");
@@ -218,6 +220,9 @@ describe("ARCH-630 in the agent run: quoted -> quote_signed -> signed, or refuse
     state.signer = pinned;
     state.payTo = undefined;
     state.noAp2 = false;
+    state.limits = undefined;
+    state.answerBasis = undefined;
+    state.route = undefined;
     state.runs.length = 0;
     state.paths.length = 0;
   });
@@ -278,6 +283,47 @@ describe("ARCH-630 in the agent run: quoted -> quote_signed -> signed, or refuse
     assert.deepEqual(events.map((e) => e.type), ["masked", "tool_called", "job_ran", "quoted", "quote_signed", "refused"]);
     assert.match((events.at(-1) as { reason: string }).reason, /mandate_scope_mismatch: the paywall's payee/);
     assert.equal(double.state.transfers.length, 0);
+  });
+
+  // privateAI-design-38 ARCH-683: the signed limits, as packages/offer limitsOf writes them, against the estimate's basis and route.
+  const LIMITS = { model: "nearai/standin", answerModel: "nearai/standin", phrase: "none", userSql: false, files: 1, totalBytes: 2048, sizeTolerancePct: 10, maxPromptChars: 16000, answerMaxPromptChars: 8000, maxTokens: 2048, sqlRetries: 1, answerMaxRows: 50, modelCalls: 2 };
+  const BASIS = { files: 1, totalBytes: 2048, modelCalls: 2, maxPromptChars: 16000, answerMaxPromptChars: 8000, maxTokens: 2048, sqlRetries: 1 };
+  const ef = async (d: RunDeps): Promise<AgentEvent[]> => { const events: AgentEvent[] = []; await runAgentJob({ ...req, offerMode: "estimate-first" }, d, (e) => events.push(e), new AbortController().signal); return events; };
+
+  it("ARCH-683: signed limits equal to the estimate: quote_signed shows them (sizes and model ids), then paid once", async () => {
+    state.limits = LIMITS;
+    state.answerBasis = BASIS;
+    const events = await ef(deps());
+    assert.deepEqual(events.map((e) => e.type), ["masked", "tool_called", "estimated", "quoted", "quote_signed", "signed", "settled", "released", "done"], JSON.stringify(events));
+    const qs = events.find((e) => e.type === "quote_signed") as Extract<AgentEvent, { type: "quote_signed" }>;
+    assert.deepEqual(qs.limits, { models: ["nearai/standin"], modelCalls: 2, maxTokens: 2048, files: 1, totalBytes: 2048 });
+    assert.equal(state.runs.length, 1);
+  });
+
+  it("ARCH-683: signed limits that differ from the estimate, or a route outside them: refused limits_mismatch, nothing signed, run or paid", async () => {
+    for (const [what, set] of [
+      ["maxTokens", () => { state.answerBasis = { ...BASIS, maxTokens: 1024 }; }],
+      ["modelCalls", () => { state.answerBasis = { ...BASIS, modelCalls: 1 }; }],
+      ["route", () => { state.answerBasis = BASIS; state.route = "nearai/standin+nearai/bigger"; }],
+      ["shape", () => { state.answerBasis = BASIS; state.limits = { ...LIMITS, extra: 1 }; }],
+    ] as const) {
+      state.limits = LIMITS;
+      state.route = undefined;
+      set();
+      const events = await ef(deps());
+      assert.deepEqual(events.map((e) => e.type), ["masked", "tool_called", "estimated", "quoted", "refused"], what);
+      const last = events.at(-1) as { code: string; reason: string };
+      assert.equal(last.code, "limits_mismatch", what);
+      assert.match(last.reason, /^ChainAim's signed limits do not match the estimate \(limits_mismatch\).*nothing was signed or paid$/, what);
+    }
+    assert.equal(state.runs.length, 0, "nothing ran");
+    assert.equal(double.state.transfers.length, 0, "nothing paid");
+  });
+
+  it("ARCH-683: a signed estimate without limits (a signer before v2.1.0) passes the agent with no limits shown; the console's run step refuses it", async () => {
+    const events = await ef(deps());
+    const qs = events.find((e) => e.type === "quote_signed") as Extract<AgentEvent, { type: "quote_signed" }>;
+    assert.equal(qs.limits, undefined);
   });
 
   it("ARCH-630: without the check (--ap2-verify off) there is no quote_signed step and the ap2 member is ignored", async () => {

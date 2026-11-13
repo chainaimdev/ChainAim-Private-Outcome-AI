@@ -40,7 +40,7 @@ test("ARCH-615 the receipt panel runs after both paid releases, only with receip
   assert.match(p, /fetch\(`\/jobs\/\$\{jobId\}\/receipt`\)/);
   assert.match(p, /RECEIPT_POLL_MAX/);
   assert.match(p, /r\.sig\.keyId/, "the key id is shown, so the owner can match it to desk.ps1 -ReceiptKey");
-  assert.match(p, /JSON\.stringify\(\{ receipt: r, publicKeyPem: j\.publicKeyPem, \.\.\.\(j\.ap2 \? \{ ap2: j\.ap2 \} : \{\}\), \.\.\.\(typeof j\.mandate === "string" \? \{ mandate: j\.mandate \} : \{\}\) \}/, "ARCH-631: the signed quote rides along when there is one; privateAI-design-36 ARCH-668: and the checkout mandate");
+  assert.match(p, /JSON\.stringify\(\{ receipt: r, publicKeyPem: j\.publicKeyPem, \.\.\.\(j\.ap2 \? \{ ap2: j\.ap2 \} : \{\}\), \.\.\.\(typeof j\.mandate === "string" \? \{ mandate: j\.mandate \} : \{\}\), \.\.\.\(j\.attestation \? \{ attestation: j\.attestation \} : \{\}\) \}/, "ARCH-631: the signed quote rides along when there is one; privateAI-design-36 ARCH-668: and the checkout mandate; privateAI-design-40 ARCH-692: and the attestation bundle");
   assert.match(p, /a\.download = `chainaim-receipt-\$\{jobId\}\.json`/);
   assert.match(js, /pay\.replaceChildren\(\); proof\.replaceChildren\(\); rcpt\.replaceChildren\(\);/, "cleared on every new paid Ask");
 });
@@ -134,4 +134,14 @@ test("ARCH-628 tab 03 Payment has the Show the UCP profile button (GET /.well-kn
   const t3 = index.slice(index.indexOf('<section class="sheet" id="t3"'), index.indexOf('<section class="sheet" id="t4"'));
   assert.match(t3, /data-route="chat">Try chat<\/button>\s*<button class="ghost" id="ucpProfile"[^>]*>Show the UCP profile<\/button>/);
   assert.match(index, /if \(\$\("ucpProfile"\)\) \$\("ucpProfile"\)\.onclick = \(\) => busy\(\$\("ucpProfile"\), async \(\) => \{\s*const out = \$\("payOut"\); out\.replaceChildren\(\);\s*const res = await fetch\("\/\.well-known\/ucp"\);/);
+});
+
+test("privateAI-design-39 ARCH-689 ARCH-688 tab 03: a refund because privacy was not proven says so; the policy row for the signed attestation mode", () => {
+  assert.match(html, /d\.privacy \? `Refused: privacy not proven \(\$\{d\.privacy\}\) → refunded ✓` : "Refunded ✓"/);
+  assert.match(html, /d\.privacy \? `Refused: privacy not proven \(\$\{d\.privacy\}\)` : "Run refused after the payment"/);
+  assert.match(html, /require_attestation: \(c\) => `attestation \$\{c\.limit\} or stronger \(signed: \$\{c\.value\}\)`/);
+});
+
+test("privateAI-design-40 ARCH-692 tab 03: Download receipt carries the attestation bundle when the console sends it, so verify-receipt re-hashes it offline", () => {
+  assert.match(html, /\.\.\.\(j\.attestation \? \{ attestation: j\.attestation \} : \{\}\) \}, null, 2\)\], \{ type: "application\/json" \}\);/);
 });

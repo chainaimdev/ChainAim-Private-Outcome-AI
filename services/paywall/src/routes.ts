@@ -233,7 +233,9 @@ export function routesConfig(config: PaywallConfig, invoiceFor: (paymentHeader: 
             const jobId = jobs.jobIdOf(request.path);
             const amount = jobId === undefined ? undefined : jobs.amountOf(jobId);
             if (jobId === undefined || amount === undefined) throw new Error("the job is not open");
-            return { amount, asset: near.usdcContract, extra: { invoiceId: jobs.invoiceFor(jobId, request.paymentHeader) } };
+            // privateAI-design-37 ARCH-670: upfront = @x402 settles before the handler; the chat routes above never get it.
+            const upfront = config.paidJobs?.flow === "upfront" ? { paymentFlow: "upfront" } : {};
+            return { amount, asset: near.usdcContract, extra: { invoiceId: jobs.invoiceFor(jobId, request.paymentHeader), ...upfront } };
           },
           network: near.network,
           payTo: near.payTo,

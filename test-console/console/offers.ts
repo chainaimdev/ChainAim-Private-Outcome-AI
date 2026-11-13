@@ -12,18 +12,22 @@
  *                                           completion line per call (default 2048)
  *   --offer-size-tolerance-pct N            the folder may grow this much between estimate and run before it is
  *                                           refused for a re-estimate (409; default 10; design-32 ARCH-610)
+ *   --offer-limits-check on|off             privateAI-design-38 ARCH-682 (default on): with --ap2 on, run an offer from
+ *                                           the limits in its SIGNED checkout and refuse a run outside them; off keeps the
+ *                                           v2.0.0 behaviour (enforce from the held basis) for a console paired with a
+ *                                           v2.0.0 signer, whose quotes carry no limits. desk.ps1 never sets off.
  *
  * The question is held here with the offer (never sent anywhere before payment): the paid release carries no body
  * (services/web payNearRelease and the agent post it empty). Held in memory only, dropped on run or expiry.
  */
 import { readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
-import { checkBasis, OFFER_MODES, parseCostModel, type CostModel, type OfferBasis, type OfferMode } from "../../packages/offer/src/index.ts";
+import { checkBasis, OFFER_MODES, parseCostModel, withinLimits, type CostModel, type OfferBasis, type OfferMode } from "../../packages/offer/src/index.ts";
 import type { JobQuote } from "../../packages/crossask/src/cost.ts";
 import type { Ap2Hold } from "./ap2.ts";
 
-export type OfferFlags = { "offer-mode"?: string; "offer-modes"?: string; "cost-model"?: string; "offer-max-tokens"?: string; "offer-size-tolerance-pct"?: string };
-export type OfferConfig = { mode: OfferMode; modes: OfferMode[]; costModel?: CostModel; maxTokens: number; tolerancePct: number };
+export type OfferFlags = { "offer-mode"?: string; "offer-modes"?: string; "cost-model"?: string; "offer-max-tokens"?: string; "offer-size-tolerance-pct"?: string; "offer-limits-check"?: string };
+export type OfferConfig = { mode: OfferMode; modes: OfferMode[]; costModel?: CostModel; maxTokens: number; tolerancePct: number; limitsCheck: boolean };
 
 const isMode = (m: string): m is OfferMode => (OFFER_MODES as readonly string[]).includes(m);
 const int = (raw: string | undefined, fallback: number, name: string, lo: number, hi: number): number => {
@@ -49,6 +53,8 @@ export function offerConfig(flags: OfferFlags, paidJobsOn: boolean, readText: (p
   if (!modes.includes(mode)) throw new Error(`--offer-mode ${mode} must be one of --offer-modes (${modes.join(",")})`);
   const maxTokens = int(flags["offer-max-tokens"], 2048, "offer-max-tokens", 16, 65_536);
   const tolerancePct = int(flags["offer-size-tolerance-pct"], 10, "offer-size-tolerance-pct", 0, 100);
+  const lc = flags["offer-limits-check"] ?? "on";
+  if (lc !== "on" && lc !== "off") throw new Error(`--offer-limits-check must be on or off, got ${lc}`);
   let costModel: CostModel | undefined;
   if (modes.includes("estimate-first")) {
     const file = flags["cost-model"] ?? "config/cost-model.json";
@@ -58,7 +64,7 @@ export function offerConfig(flags: OfferFlags, paidJobsOn: boolean, readText: (p
     try { costModel = parseCostModel(JSON.parse(text.charCodeAt(0) === 0xfeff ? text.slice(1) : text)); }
     catch (e) { throw new Error(`the cost model ${file} is not valid (${(e as Error).message}): run .\\test-console\\desk.ps1 -Calibrate again`); }
   }
-  return { mode, modes: modes as OfferMode[], ...(costModel ? { costModel } : {}), maxTokens, tolerancePct };
+  return { mode, modes: modes as OfferMode[], ...(costModel ? { costModel } : {}), maxTokens, tolerancePct, limitsCheck: lc === "on" };
 }
 
 /** The data files the analyst reads in a folder, by size only: nothing is opened (ARCH-636: no work before payment). */
@@ -106,10 +112,8 @@ export function crossaskBasis(req: OfferRequest, size: { files: number; totalByt
  * longer cover it: 409, re-estimate). A smaller folder is fine (the price is a ceiling).
  */
 export function withinBasis(basis: { files: number; totalBytes: number }, now: { files: number; totalBytes: number }, tolerancePct: number): string | null {
-  if (now.files > basis.files) return `the folder has ${now.files} data files now, ${basis.files} when it was estimated: estimate it again`;
-  const limit = Math.floor((basis.totalBytes * (100 + tolerancePct)) / 100);
-  if (now.totalBytes > limit) return `the folder holds ${now.totalBytes} bytes now, more than the ${basis.totalBytes} estimated (+${tolerancePct} %): estimate it again`;
-  return null;
+  // The same check as the signed limits' (packages/offer withinLimits, design-38 ARCH-682), on the held basis.
+  return withinLimits({ files: basis.files, totalBytes: basis.totalBytes, sizeTolerancePct: tolerancePct }, now);
 }
 
 /** Offers in memory until run or expiry, like JobStore (the run turns one into a held job). */

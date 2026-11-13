@@ -21,6 +21,10 @@
 !packages/ap2/package.json
 !packages/ap2/src
 !config/ap2-public-key.jwk.json
+!packages/offer/package.json
+!packages/offer/src/index.ts
+!packages/crossask/package.json
+!packages/crossask/src/cost.ts
 **/node_modules
 **/.env
 **/*.env

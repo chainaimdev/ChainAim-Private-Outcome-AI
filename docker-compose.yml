@@ -131,8 +131,18 @@ services:
       - PAID_JOBS_RESULT_URL=http://console-api:8731
       - PAID_JOBS_TTL_SEC
       - PAID_JOBS_MAX
+      # privateAI-design-37, set by up.ps1 only with -PaidFlow upfront (unset = authorization, as before): the signer that
+      # refunds a refused job, and the request key under its own name (PAYWALL_SIGNER_KEY, named by PAID_JOBS_REFUND_KEY_ENV).
+      - PAID_JOBS_FLOW
+      # privateAI-design-39: set by up.ps1 only with -PayOnlyAttested verified (the run step then waits for ca-attest).
+      - PAID_JOBS_RUN_TIMEOUT_SEC
+      - PAID_JOBS_REFUND_URL
+      - PAID_JOBS_REFUND_KEY_ENV
+      - PAYWALL_SIGNER_KEY
       - PAYMENT_LOG_URL
       - PAYMENT_LOG_KEY
+    # ca-control-signer is published on the host (127.0.0.1:8780) from its own project: the upfront refunds reach it here.
+    extra_hosts: ["host.docker.internal:host-gateway"]
     ports: ["127.0.0.1:8080:8080"]
     networks: [chainaim-test]
     depends_on: [gateway]

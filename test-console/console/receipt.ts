@@ -18,16 +18,20 @@ import type { SignerApi } from "../../packages/signer/src/index.ts";
 import { remoteReceiptSigner } from "./signer-client.ts";
 import {
   addSettlement,
+  canonicalJson,
   filesRoot,
+  SETTLEMENT_FLOWS,
   resultSha256,
   sha256Hex,
   signerFromEnv,
   signReceipt,
   type ReceiptCall,
+  type ReceiptEconomics,
   type ReceiptFile,
   type ReceiptMandate,
   type ReceiptSigner,
   type Settlement,
+  type SettlementFlow,
   type SignedReceipt,
 } from "../../packages/receipt/src/index.ts";
 
@@ -134,6 +138,9 @@ export type ReceiptInput = {
   priceUsd: string;
   quoteBasis: Record<string, string | number | boolean>;
   actualUsd?: string;
+  /** privateAI-design-40 ARCH-690: the money trail (economicsOf). */
+  economics?: ReceiptEconomics;
+  /** ARCH-692: SHA-256 of the canonical JSON of the job's final attestation bundle (evidenceBundleOf). */
   evidenceBundleSha256?: string;
   /** ARCH-631: the signed quote's merchant_authorization hash (--ap2 on only). */
   merchantAuthSha256?: string;
@@ -174,6 +181,7 @@ export async function buildReceipt(input: ReceiptInput, cfg: ReceiptConfig, bind
         priceUsd: input.priceUsd,
         quoteBasis: input.quoteBasis,
         ...(input.actualUsd !== undefined ? { actualUsd: input.actualUsd } : {}),
+        ...(input.economics !== undefined ? { economics: input.economics } : {}),
       },
       createdAt: input.createdAt,
       v: 1 as const,
@@ -189,6 +197,7 @@ export class ReceiptStore {
   private readonly mem = new Map<string, SignedReceipt>();
   private readonly quotes = new Map<string, { checkout: Record<string, unknown>; merchant_authorization: string }>();
   private readonly mandates = new Map<string, string>();
+  private readonly attestations = new Map<string, JobAttestation>();
   private readonly cfg: ReceiptConfig;
 
   constructor(cfg: ReceiptConfig) {
@@ -271,6 +280,27 @@ export class ReceiptStore {
     return v;
   }
 
+  /**
+   * privateAI-design-40 ARCH-692: the attestation bundle the receipt's evidenceBundleSha256 commits to, kept beside it as
+   * <dir>/<jobId>.attestation.json, so the download carries it and anyone can re-hash it. Verdicts, addresses, hashes only.
+   */
+  putAttestation(jobId: string, bundle: JobAttestation): void {
+    const p = `${this.path(jobId).replace(/\.json$/, "")}.attestation.json`;
+    writeFileSync(`${p}.tmp`, JSON.stringify(bundle, null, 2));
+    renameSync(`${p}.tmp`, p);
+    this.attestations.set(jobId, bundle);
+  }
+
+  getAttestation(jobId: string): JobAttestation | undefined {
+    const m = this.attestations.get(jobId);
+    if (m) return m;
+    const p = `${this.path(jobId).replace(/\.json$/, "")}.attestation.json`;
+    if (!existsSync(p)) return undefined;
+    const a = JSON.parse(readFileSync(p, "utf8")) as JobAttestation;
+    this.attestations.set(jobId, a);
+    return a;
+  }
+
   /** ARCH-663: stores the receipt ChainAim's signer settled, once, in place of the unsettled one with the same signature. */
   putSettled(r: SignedReceipt): SignedReceipt {
     const cur = this.get(r.body.jobId);
@@ -300,7 +330,9 @@ export function parseSettlement(body: unknown, now: () => number = Date.now): Se
   if (typeof b.invoiceId !== "string" || !/^[A-Za-z0-9_-]{1,100}$/.test(b.invoiceId)) return undefined;
   const payer = b.payer === null || b.payer === undefined ? null : typeof b.payer === "string" && /^[a-z0-9._-]{2,64}$/.test(b.payer) ? b.payer : undefined;
   if (payer === undefined) return undefined;
-  return { network: b.network, transaction: b.transaction, invoiceId: b.invoiceId, payer, settledAt: new Date(now()).toISOString() };
+  // privateAI-design-40 ARCH-691: which x402 flow moved the money, when the paywall says; another value is malformed.
+  if (b.flow !== undefined && !(SETTLEMENT_FLOWS as readonly unknown[]).includes(b.flow)) return undefined;
+  return { network: b.network, transaction: b.transaction, invoiceId: b.invoiceId, payer, settledAt: new Date(now()).toISOString(), ...(b.flow !== undefined ? { flow: b.flow as SettlementFlow } : {}) };
 }
 
 /**
@@ -361,6 +393,18 @@ export function attestStatusFrom(a: JobAttestation | undefined): (index: number)
   };
 }
 
+/**
+ * privateAI-design-40 ARCH-692: the job's attestation bundle and its hash, once ca-attest's verdict is final (any summary
+ * but pending); undefined while pending or with attestation off, and the receipt is then signed without the hash. The
+ * bundle is the JobAttestation as JSON carries it (verdicts, signing addresses, the signed text of model id + hashes, the
+ * signature hex): no prompt or answer text. Hash = SHA-256 of its canonical JSON.
+ */
+export function evidenceBundleOf(a: JobAttestation | undefined): { bundle: JobAttestation; sha256: string } | undefined {
+  if (!a || a.summary === "pending") return undefined;
+  const bundle = JSON.parse(JSON.stringify(a)) as JobAttestation;
+  return { bundle, sha256: sha256Hex(canonicalJson(bundle)) };
+}
+
 export type ReleaseReceiptDeps = {
   store: ReceiptStore;
   cfg: ReceiptConfig;
@@ -381,6 +425,8 @@ export async function receiptOnRelease(deps: ReleaseReceiptDeps, jobId: string, 
   const hold = job.receipt;
   if (!hold) return undefined;
   const now = deps.now ?? Date.now;
+  const attestation = deps.attestation?.(jobId);
+  const evidence = evidenceBundleOf(attestation);
   const receipt = await buildReceipt(
     {
       jobId,
@@ -392,12 +438,14 @@ export async function receiptOnRelease(deps: ReleaseReceiptDeps, jobId: string, 
       sql: hold.sql,
       result: releasedResult(job.result),
       served: job.result.served,
-      attestStatusOf: attestStatusFrom(deps.attestation?.(jobId)),
+      attestStatusOf: attestStatusFrom(attestation),
       amountUnits: job.amount,
       usdcDecimals: USDC_DECIMALS,
       priceUsd: hold.priceUsd,
       quoteBasis: hold.quoteBasis,
       ...(hold.actualUsd !== undefined ? { actualUsd: hold.actualUsd } : {}),
+      ...(hold.economics !== undefined ? { economics: hold.economics } : {}),
+      ...(evidence ? { evidenceBundleSha256: evidence.sha256 } : {}),
       ...(job.ap2 ? { merchantAuthSha256: job.ap2.merchantAuthSha256 } : {}),
       ...(job.mandate ? { mandate: job.mandate.ref } : {}),
       createdAt: new Date(now()).toISOString(),
@@ -408,6 +456,7 @@ export async function receiptOnRelease(deps: ReleaseReceiptDeps, jobId: string, 
   deps.store.put(receipt);
   if (job.ap2) deps.store.putQuote(jobId, { checkout: job.ap2.checkout, merchant_authorization: job.ap2.merchantAuthorization });
   if (job.mandate) deps.store.putMandate(jobId, job.mandate.presentation);
+  if (evidence) deps.store.putAttestation(jobId, evidence.bundle);
   const settlement = parseSettlement(notice, now);
   if (!settlement) return receipt;
   if (deps.signer) return deps.store.putSettled(await deps.signer.settle({ receipt, settlement }));

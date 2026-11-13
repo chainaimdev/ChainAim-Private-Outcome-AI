@@ -46,6 +46,8 @@
  *                          committed; exported by desk.ps1 -ReceiptKey). The publicKeyPem the console sends is never used
  * --receipt-poll-ms N / --receipt-poll-max N  how often and how many times to ask for the receipt, which the console makes
  *                          just after the release (defaults 1000 and 15, as tab 03)
+ * --refund-poll-ms N / --refund-poll-max N  privateAI-design-37: how often and how many times to ask the paywall for a
+ *                          pending refund of an upfront payment whose run was refused (defaults 3000 and 40)
  * --ap2-verify on|off      privateAI-design-33 ARCH-630: verify ChainAim's signed quote (the console's --ap2 on answer) with
  *                          the PINNED AP2 key and bind it to the quote before the policy; a failure refuses the run with the
  *                          AP2 error code, nothing signed or paid (default off). On: start-up refuses a missing or bad key file
@@ -120,6 +122,8 @@ const { values } = parseArgs({
     "mandate-lifetime-sec": { type: "string", default: "300" },
     "receipt-poll-ms": { type: "string", default: "1000" },
     "receipt-poll-max": { type: "string", default: "15" },
+    "refund-poll-ms": { type: "string", default: "3000" },
+    "refund-poll-max": { type: "string", default: "40" },
     "run-timeout-sec": { type: "string", default: "300" },
     "body-max-bytes": { type: "string", default: "65536" },
   },
@@ -179,6 +183,8 @@ if (policyOn && spendDir === "") fail("--spend-dir must not be empty with --agen
 const receiptOn = onOff("receipt-verify", values["receipt-verify"]);
 const receiptPollMs = whole("receipt-poll-ms", values["receipt-poll-ms"], 100, 60000);
 const receiptPollMax = whole("receipt-poll-max", values["receipt-poll-max"], 1, 120);
+const refundPollMs = whole("refund-poll-ms", values["refund-poll-ms"], 100, 60000);
+const refundPollMax = whole("refund-poll-max", values["refund-poll-max"], 1, 600);
 let receiptCheck: ReceiptCheck | undefined;
 if (receiptOn) {
   const keyPath = values["receipt-public-key"].trim();
@@ -295,7 +301,7 @@ createServer(async (req, res) => {
       res.on("close", () => { if (!finished) stop.abort(); });
       const timer = setTimeout(() => stop.abort(), runTimeoutMs);
       try {
-        await runAgentJob(run, { tenants: byId, console: consoleUrl, paywall: paywallUrl, scan, promptMask, makeModel, maxTurns, ...(maxAmount ? { maxAmount } : {}), ...(policy ? { policy } : {}), ...(receiptCheck ? { receiptCheck } : {}), ...(ap2Check ? { ap2Check } : {}), ...(mandates ? { mandates } : {}), queue, tenantLabel, log, defaultOfferMode },
+        await runAgentJob(run, { tenants: byId, console: consoleUrl, paywall: paywallUrl, scan, promptMask, makeModel, maxTurns, ...(maxAmount ? { maxAmount } : {}), ...(policy ? { policy } : {}), ...(receiptCheck ? { receiptCheck } : {}), refundPollMs, refundPollMax, ...(ap2Check ? { ap2Check } : {}), ...(mandates ? { mandates } : {}), queue, tenantLabel, log, defaultOfferMode },
           (e) => { if (!res.writableEnded && !res.destroyed) res.write(sseFrame(e)); }, stop.signal);
       } catch (e) {
         if (!res.writableEnded && !res.destroyed) res.write(sseFrame({ type: "error", reason: `the agent service failed: ${e instanceof Error ? e.message : String(e)}` }));

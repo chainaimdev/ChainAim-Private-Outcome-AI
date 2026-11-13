@@ -29,7 +29,33 @@ export function attestConfig(flags: AttestFlags, paidJobsOn: boolean): AttestCli
   return { url: url.replace(/\/+$/, ""), timeoutMs: int("attest-timeout-ms", "20000", 1000, 300_000), keep: int("attest-keep", "500", 1, 100_000) };
 }
 
-export type CallStatus = "verified" | "unverified" | "unavailable" | "not_applicable";
+/**
+ * privateAI-design-39 ARCH-685: what a paid job must show about NEAR AI attestation before it is delivered.
+ * off: no attestation rule; evidence (default, the rule before design-39): an estimate that said attested is void when a
+ * call lacks the gateway's evidence; verified: ca-attest's verdict is awaited and must be verified on every call.
+ */
+export const PAY_ONLY_ATTESTED_MODES = ["off", "evidence", "verified"] as const;
+export type PayOnlyAttestedMode = (typeof PAY_ONLY_ATTESTED_MODES)[number];
+export type PayOnlyAttestedFlags = { "pay-only-attested"?: string; "pay-only-attested-deadline-ms"?: string };
+export type PayOnlyAttested = { mode: PayOnlyAttestedMode; deadlineMs: number };
+
+/** The checked --pay-only-attested settings; verified needs --attest-url (attestOn), or start-up stops naming it. */
+export function payOnlyAttestedConfig(flags: PayOnlyAttestedFlags, attestOn: boolean): PayOnlyAttested {
+  const mode = flags["pay-only-attested"] ?? "evidence";
+  if (!(PAY_ONLY_ATTESTED_MODES as readonly string[]).includes(mode)) throw new Error(`--pay-only-attested must be off, evidence or verified, got ${mode}`);
+  const rawDeadline = flags["pay-only-attested-deadline-ms"] ?? "30000";
+  const deadlineMs = Number(rawDeadline);
+  if (!Number.isInteger(deadlineMs) || deadlineMs < 1000 || deadlineMs > 240_000) throw new Error(`--pay-only-attested-deadline-ms must be a whole number from 1000 to 240000, got ${rawDeadline}`);
+  if (mode === "verified" && !attestOn) throw new Error("--pay-only-attested verified needs --attest-url: the verdict comes from ca-attest");
+  return { mode: mode as PayOnlyAttestedMode, deadlineMs };
+}
+
+/** Verified mode's rule: ca-attest says verified and every model call carried evidence (a job with no model call is not proven). */
+export function privacyProven(a: JobAttestation, served: readonly ChatReply[]): boolean {
+  return a.summary === "verified" && served.length > 0 && served.every((s) => s.attest !== undefined);
+}
+
+export type CallStatus ="verified" | "unverified" | "unavailable" | "not_applicable";
 /** One model call of the job, in run order (index = position in CrossAskResult.served). */
 export type CallAttestation = {
   index: number; model: string | null; status: CallStatus; reason: string | null;
@@ -79,16 +105,48 @@ export class AttestClient {
 
   /** Starts the check for one quoted job; returns at once and never throws. */
   start(jobId: string, served: readonly ChatReply[]): void {
-    const iso = new Date(this.now()).toISOString();
+    // durationMs in the job_attested log line: from asking ca-attest to its verdict (the design-39 latency figure).
+    const began = this.now();
+    const iso = new Date(began).toISOString();
     this.store({ jobId, summary: "pending", at: iso, calls: served.map((s, i) => empty(i, s.model ?? null, s.attest ? "unavailable" : "not_applicable", s.attest ? "checking" : null)) });
     this.inflight += 1;
     this.run(jobId, served)
       .then((a) => {
         this.store(a);
-        this.log(JSON.stringify({ ts: a.at, route: "attest", event: "job_attested", jobId, summary: a.summary, calls: a.calls.map((c) => ({ index: c.index, status: c.status, reason: c.reason })) }));
+        this.log(JSON.stringify({ ts: a.at, route: "attest", event: "job_attested", jobId, summary: a.summary, durationMs: this.now() - began, calls: a.calls.map((c) => ({ index: c.index, status: c.status, reason: c.reason })) }));
         this.onDone?.(a);
       })
       .finally(() => { this.inflight -= 1; });
+  }
+
+  /**
+   * privateAI-design-39 ARCH-686 (--pay-only-attested verified): the same check as start(), awaited, bounded by deadlineMs
+   * overall (each POST stays bounded by --attest-timeout-ms). Resolves with the verdict, or with the pending result when the
+   * deadline passes first; never throws. The verdict is stored (the receipt and GET /jobs/<id>/attestation read it) and logged
+   * as job_attested; a result that lands after the deadline is still stored and logged. onDone is not called here: the caller
+   * calls announce() once the job is quoted, so the job feed sends job_attested after job_quoted (it needs the job's calls).
+   */
+  async verifyNow(jobId: string, served: readonly ChatReply[], deadlineMs: number): Promise<JobAttestation> {
+    const began = this.now();
+    const pending: JobAttestation = { jobId, summary: "pending", at: new Date(began).toISOString(), calls: served.map((s, i) => empty(i, s.model ?? null, s.attest ? "unavailable" : "not_applicable", s.attest ? "checking" : null)) };
+    this.store(pending);
+    this.inflight += 1;
+    const checked = this.run(jobId, served).then((a) => {
+      this.store(a);
+      this.log(JSON.stringify({ ts: a.at, route: "attest", event: "job_attested", jobId, summary: a.summary, durationMs: this.now() - began, calls: a.calls.map((c) => ({ index: c.index, status: c.status, reason: c.reason })) }));
+      return a;
+    });
+    void checked.finally(() => { this.inflight -= 1; });
+    let timer: NodeJS.Timeout | undefined;
+    const deadline = new Promise<JobAttestation>((resolve) => { timer = setTimeout(() => resolve(pending), deadlineMs); });
+    try { return await Promise.race([checked, deadline]); }
+    finally { clearTimeout(timer); }
+  }
+
+  /** Hands a job's finished verdict to onDone (the job feed); nothing while it is pending or unknown. */
+  announce(jobId: string): void {
+    const a = this.results.get(jobId);
+    if (a && a.summary !== "pending") this.onDone?.(a);
   }
 
   /** Resolves when every check started so far has finished (tests and shutdown). */

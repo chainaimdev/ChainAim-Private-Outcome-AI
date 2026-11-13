@@ -36,11 +36,18 @@ const budget = f.budget === undefined ? undefined : int("budget", f.budget, 1);
 const key = f["key-env"] ? (process.env[f["key-env"]] ?? "") : (() => { try { return readFileSync(f["key-file"]!, "utf8").trim(); } catch { return ""; } })();
 if (!key) fail(f["key-env"] ? `environment variable ${f["key-env"]} is empty` : `no gateway key in ${f["key-file"]}`);
 
+// After the calls, the exit code is SET and the script ends on its own (no process.exit): exiting while fetch's sockets are
+// still closing trips a libuv assertion on Windows (src\win\async.c: !(handle->flags & UV_HANDLE_CLOSING), exit 3221226505).
+const done = (code: number): void => { process.exitCode = code; };
 try {
   const r = await explainReconcile({ folder: f.folder!, model: f.model!, pack: f.pack, budget, question: f.question },
     { analyst: analystClient(f.analyst!, timeoutMs), chat: gatewayChat({ url: f.gateway!, key, timeoutMs }) });
   const mismatch = f.model !== "chainaim/auto" && r.model !== undefined && r.model !== f.model;
-  if (f.json) { console.log(JSON.stringify({ ...r, ...(mismatch ? { modelMismatch: { asked: f.model, served: r.model } } : {}) }, null, 2)); process.exit(r.verify.verified && !mismatch ? 0 : 1); }
+  if (f.json) { console.log(JSON.stringify({ ...r, ...(mismatch ? { modelMismatch: { asked: f.model, served: r.model } } : {}) }, null, 2)); done(r.verify.verified && !mismatch ? 0 : 1); }
+  else report(r, mismatch);
+} catch (e) { console.error(`reconcile-explain: ${(e as Error).message}`); done(1); }
+
+function report(r: Awaited<ReturnType<typeof explainReconcile>>, mismatch: boolean): void {
   console.log(`RUN       ${r.runId}: ${r.exceptions} exception(s); evidence ${r.evidenceChars} chars`);
   for (const s of r.sentToModel) console.log(`SENT      ${s.step}: ${s.chars} chars (exception codes, signed amounts, payment IDs; no names; masked again by the gateway)`);
   if (r.model) console.log(`SERVED    ${r.model}${r.zone ? ` (zone ${r.zone})` : ""}`);
@@ -51,5 +58,5 @@ try {
   if (v.signMismatch.length) console.log(`  wrong direction (short vs over): ${v.signMismatch.join(", ")}`);
   if (v.signUnclear.length) console.log(`  direction unclear (say short/missing or over/extra): ${v.signUnclear.join(", ")}`);
   if (mismatch) console.log(`MODEL     asked for ${f.model} but the gateway served ${r.model}: ${f.model} is not in the gateway's current model list (it fell back to its own choice). Not counted as ${f.model}'s answer.`);
-  process.exit(v.verified && !mismatch ? 0 : 1);
-} catch (e) { fail((e as Error).message, 1); }
+  done(v.verified && !mismatch ? 0 : 1);
+}

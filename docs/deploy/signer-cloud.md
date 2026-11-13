@@ -91,3 +91,11 @@ It proves the control plane runs on someone else's server with only sizes and ha
 ChainAim's keys. It does not make the signer's code provable: on Railway or App Runner the platform operator could in
 principle read the keys. The next step is a TEE (NEAR Shade Agents on Phala/Dstack TDX, or AWS Nitro Enclaves), on the
 roadmap.
+
+## Same version on both planes (privateAI-design-38)
+
+From v2.1.0 the signer writes the job's signed limits into every estimate-first checkout, and the console runs a job
+only from them (`--offer-limits-check on`, the default). Deploy the signer and the console from the same tree: a v2.1.0
+console paired with a v2.0.0 signer refuses every estimate-first run (422 "the signed quote carries no limits"), and a
+v2.1.0 signer refuses a v2.0.0 console's quote request (400 `$.sizeTolerancePct`). desk.ps1 always builds both from one
+tree, so this happens only with a hand-mixed deployment.

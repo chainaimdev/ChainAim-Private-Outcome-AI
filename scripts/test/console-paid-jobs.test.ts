@@ -636,3 +636,129 @@ describe("privateAI-design-34 ARCH-636 ARCH-637 ARCH-638 estimate-first offers o
   });
 });
 
+describe("privateAI-design-39 ARCH-685 ARCH-687 --pay-only-attested verified on the real console, analyst, gateway and paywall", () => {
+  // Its own gateway: one model whose only deployment is marked attest "nearai", served by the loopback model above, so the
+  // real gateway hashes the exact bytes and sends its attestation evidence headers. ca-attest is a loopback server speaking
+  // its real POST /verify contract (services/attest/src/main.ts); its verdict is switched per test.
+  const ATT_MODEL = "nearai/standin-attested";
+  let attGateway: TestGateway;
+  let attestSrv: Server;
+  let attestUrl = "";
+  let verdict: "verified" | "unverified" | "down" = "verified";
+  let verifyPosts = 0;
+  let port = 0, iport = 0;
+  let proc: Proc;
+  const attCatalog = join(dir, "catalog-attested.json");
+  const offerAt = (body: Record<string, unknown>) => call(port, "POST", "/offers", { "content-type": "application/json" }, JSON.stringify(body));
+  const runAt = (jobId: string) => call(iport, "POST", `/internal/jobs/${jobId}/run`, { "x-jobs-key": JOBS_KEY });
+  const heldAt = (jobId: string) => call(iport, "GET", `/internal/jobs/${jobId}`, { "x-jobs-key": JOBS_KEY });
+  const askAt = (body: Record<string, unknown>) => call(port, "POST", "/jobs/crossask", { "content-type": "application/json" }, JSON.stringify(body));
+
+  before(async () => {
+    attestSrv = createServer((req, res) => {
+      let raw = "";
+      req.on("data", (d) => (raw += d));
+      req.on("end", () => {
+        verifyPosts++;
+        if (verdict === "down") { res.writeHead(503, { "content-type": "application/json" }); return void res.end(JSON.stringify({ error: "stopped" })); }
+        const calls = (JSON.parse(raw) as { calls: { chatId?: string; servedModel: string }[] }).calls;
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ results: calls.map((c) => ({ chatId: c.chatId ?? null, servedModel: c.servedModel, status: verdict, reason: verdict === "verified" ? null : "signature mismatch", signatureKind: "provider_tee", signingAlgo: "ecdsa", signingAddress: "0xfe0071895500a9755c18044948ab4f4e1a7f337e", reportFetchedAt: new Date().toISOString(), tdx: true, gpu: true, signature: verdict === "verified", hashes: true, signedText: null, signatureHex: null })) }));
+      });
+    });
+    attestUrl = await listen(attestSrv);
+    const caps = { contextWindow: 8192, maxOutputTokens: 2048, supportsTools: true, supportsVision: false };
+    const raw = {
+      version: "pay-only-attested-test",
+      models: [
+        { id: ATT_MODEL, zone: "private-cloud", capabilities: caps, pricing: { inputPerM: 0.5, outputPerM: 1.5 }, deployments: [{ id: "standin-att@0", adapter: "openai", baseUrl: `${modelUrl}/v1`, servedModel: "standin", healthUrl: `${modelUrl}/health`, attest: "nearai" }] },
+        { id: MODEL, zone: "local", capabilities: caps, pricing: { inputPerM: 0.5, outputPerM: 1.5 }, deployments: [{ id: "standin@0", adapter: "openai", baseUrl: `${modelUrl}/v1`, servedModel: "standin", healthUrl: `${modelUrl}/health` }] },
+      ],
+      profiles: Object.fromEntries(["auto", "eco", "premium"].map((p) => [p, { SIMPLE: [ATT_MODEL], MEDIUM: [ATT_MODEL], COMPLEX: [ATT_MODEL], REASONING: [ATT_MODEL] }])),
+    };
+    writeFileSync(attCatalog, JSON.stringify(raw));
+    attGateway = await startTestGateway({ presidioUrl: presidio.url, catalog: validateCatalog(raw), gatewayKey: KEY });
+    port = await freePort(); iport = await freePort();
+    const args = consoleArgs(port, iport, { gateway: attGateway.url, "pricing-catalog": attCatalog, "default-model": ATT_MODEL, "attest-url": attestUrl, "pay-only-attested": "verified", "pay-only-attested-deadline-ms": "5000" });
+    proc = await start(args, consoleReady(port), { PAID_JOBS_KEY: JOBS_KEY }, "the console (verified)");
+  });
+  after(async () => {
+    await stop(proc);
+    await attGateway?.close();
+    if (attestSrv) await closeServer(attestSrv);
+  });
+
+  test("ARCH-685: verified without --attest-url stops start-up naming the flag; a bad mode or deadline is refused", async () => {
+    const env = { ...process.env, PAID_JOBS_KEY: JOBS_KEY };
+    const noUrl = spawnSync(process.execPath, consoleArgs(await freePort(), await freePort(), { "pay-only-attested": "verified" }), { encoding: "utf8", timeout: 20_000, env });
+    assert.notEqual(noUrl.status, 0);
+    assert.match(noUrl.stderr, /--pay-only-attested verified needs --attest-url/);
+    const bad = spawnSync(process.execPath, consoleArgs(await freePort(), await freePort(), { "pay-only-attested": "always" }), { encoding: "utf8", timeout: 20_000, env });
+    assert.match(bad.stderr, /--pay-only-attested must be off, evidence or verified, got always/);
+    const late = spawnSync(process.execPath, consoleArgs(await freePort(), await freePort(), { "attest-url": attestUrl, "pay-only-attested": "verified", "pay-only-attested-deadline-ms": "500" }), { encoding: "utf8", timeout: 20_000, env });
+    assert.match(late.stderr, /--pay-only-attested-deadline-ms must be a whole number from 1000 to 240000, got 500/);
+    assert.match(proc.out(), /pay only for attested private inference: every NEAR AI call verified by ca-attest within 5000 ms/);
+  });
+
+  test("ARCH-687: /offers refuses a route that is not all attested models (422 route_not_attested), before the paywall is asked", async () => {
+    modelCalls = 0;
+    const r = await offerAt({ folder: data, question: QUESTION, model: MODEL, answerModel: MODEL, phrase: "llm" });
+    assert.equal(r.status, 422, r.text);
+    assert.equal(JSON.parse(r.text).code, "route_not_attested");
+    assert.equal(modelCalls, 0);
+    const mixed = await offerAt({ folder: data, question: QUESTION, model: ATT_MODEL, answerModel: MODEL, phrase: "llm" });
+    assert.equal(mixed.status, 422, "one local model on the route is enough to refuse");
+  });
+
+  test("ARCH-687: verified verdict -> the run answers 200 and the stored attestation says verified (what the receipt reads)", async () => {
+    verdict = "verified"; verifyPosts = 0;
+    const o = await offerAt({ folder: data, question: QUESTION, model: ATT_MODEL, answerModel: ATT_MODEL, phrase: "llm" });
+    assert.equal(o.status, 200, o.text);
+    const j = JSON.parse(o.text);
+    assert.equal(j.attested, true);
+    const r = await runAt(j.jobId);
+    assert.equal(r.status, 200, r.text);
+    assert.equal(Number(JSON.parse(r.text).result.result.rows[0].n), 3);
+    assert.equal(verifyPosts, 1, "the verdict was asked for before the 200, once");
+    const a = await call(port, "GET", `/jobs/${j.jobId}/attestation`);
+    assert.equal(a.status, 200, a.text);
+    assert.equal(JSON.parse(a.text).summary, "verified", "stored, not pending");
+    assert.match(proc.out(), new RegExp(`"event":"offer_ran","offerId":"${j.jobId}"`));
+  });
+
+  test("ARCH-687: ca-attest refusing or stopped -> the run answers 422 attestation_not_proven and holds no result", async () => {
+    for (const v of ["unverified", "down"] as const) {
+      verdict = v;
+      const j = JSON.parse((await offerAt({ folder: data, question: QUESTION, model: ATT_MODEL, answerModel: ATT_MODEL, phrase: "llm" })).text);
+      const r = await runAt(j.jobId);
+      assert.equal(r.status, 422, `${v}: ${r.text}`);
+      const body = JSON.parse(r.text);
+      assert.equal(body.code, "attestation_not_proven");
+      assert.equal(body.summary, v === "down" ? "unavailable" : "unverified");
+      assert.equal(body.result, undefined, "no result goes back");
+      assert.equal((await heldAt(j.jobId)).status, 404, "nothing held to release");
+      assert.match(proc.out(), new RegExp(`"event":"attestation_not_proven","offerId":"${j.jobId}","summary":"${body.summary}"`));
+    }
+    verdict = "verified";
+  });
+
+  test("ARCH-687: run-hold awaits the verdict before the quote: not proven -> 422, nothing registered; proven -> the quote", async () => {
+    verdict = "down";
+    const no = await askAt({ folder: data, question: QUESTION, model: ATT_MODEL, answerModel: ATT_MODEL });
+    assert.equal(no.status, 422, no.text);
+    const nb = JSON.parse(no.text);
+    assert.equal(nb.code, "attestation_not_proven");
+    assert.match(nb.error, /nothing can be paid/);
+    assert.equal(nb.jobId, undefined, "no job, no amount");
+    verdict = "verified";
+    const ok = await askAt({ folder: data, question: QUESTION, model: ATT_MODEL, answerModel: ATT_MODEL });
+    assert.equal(ok.status, 200, ok.text);
+    const q = JSON.parse(ok.text);
+    assert.equal(q.attested, true);
+    assert.equal(JSON.parse((await call(port, "GET", `/jobs/${q.jobId}/attestation`)).text).summary, "verified");
+    const local = await askAt({ folder: data, question: QUESTION, model: MODEL, answerModel: MODEL });
+    assert.equal(local.status, 422, "a job with no attested call is not proven");
+    assert.equal(JSON.parse(local.text).summary, "not_applicable");
+  });
+});
+

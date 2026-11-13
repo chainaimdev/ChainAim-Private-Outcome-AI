@@ -30,6 +30,12 @@ COPY config/receipt-public-key.pem config/receipt-public-key.pem
 COPY packages/ap2/package.json packages/ap2/package.json
 COPY packages/ap2/src packages/ap2/src
 COPY config/ap2-public-key.jwk.json config/ap2-public-key.jwk.json
+# privateAI-design-38 ARCH-683: the agent reads the signed limits with packages/offer (pure; it imports packages/crossask
+# cost.ts only, Node built-ins).
+COPY packages/offer/package.json packages/offer/package.json
+COPY packages/offer/src/index.ts packages/offer/src/index.ts
+COPY packages/crossask/package.json packages/crossask/package.json
+COPY packages/crossask/src/cost.ts packages/crossask/src/cost.ts
 # /data/spend: the spend ledger (--spend-dir, volume chainaim-agent-spend); owned by node, which runs the service, so an
 # empty named volume takes this owner on first use.
 RUN mkdir -p /data/spend && chown node:node /data/spend

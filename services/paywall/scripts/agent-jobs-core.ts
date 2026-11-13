@@ -48,7 +48,9 @@ import { NEAR_NETWORKS } from "../src/config.ts";
 import { nearBuyer, nearNetworkName, payAndFetchNear, SetupError, type NearBuyer } from "./near.ts";
 import { AskRefused } from "./private-ask-core.ts";
 import { verifyPaidReceipt, type PaidJob, type ReceiptCheck, type ReceiptEvent } from "./agent-receipt.ts";
-import { checkSignedQuote, type Ap2Check, type QuoteSignedEvent } from "./agent-ap2.ts";
+import { awaitRefund, checkRefund } from "./agent-refund.ts";
+import { checkSignedLimits, checkSignedQuote, type Ap2Check, type QuoteSignedEvent } from "./agent-ap2.ts";
+import type { CheckoutLimits } from "../../../packages/offer/src/index.ts";
 import { MANDATE_HEADER, signMandateFor, type MandateSignedEvent, type MandateSigner, type MandateVerifiedEvent } from "./agent-mandate.ts";
 import type { Ap2ErrorCode } from "../../../packages/ap2/src/index.ts";
 import type { PromptScan } from "./prompt-scan.ts";
@@ -175,6 +177,11 @@ export type AgentEvent =
   | MandateSignedEvent
   | { type: "signed"; account: string }
   | { type: "settled"; transaction: string; network: string }
+  /** privateAI-design-37 ARCH-677: an upfront payment whose run was refused came back: ChainAim's signed record, verified. */
+  | { type: "refunded"; paidTx: string; refundTx: string; network: string; invoiceId: string; privacy?: string }
+  /** ...or is still on its way (the run then ends with error naming the invoice to ask about). privacy (privateAI-design-39
+   * ARCH-689): the refund is because NEAR AI attestation was not proven; its value is ca-attest's summary (e.g. unavailable). */
+  | { type: "refund_pending"; paidTx: string; invoiceId?: string; reason: string; privacy?: string }
   | { type: "released"; jobId: string; rows: number; calls: number; result: unknown }
   /** Step B: the job's signed receipt checked against the pinned key (agent-receipt.ts); after released, before done. */
   | ReceiptEvent
@@ -182,13 +189,16 @@ export type AgentEvent =
   | MandateVerifiedEvent
   | { type: "done" }
   /** code: the UCP AP2 error code when the signed-quote check refused (ARCH-630). */
-  | { type: "refused"; reason: string; code?: Ap2ErrorCode }
+  | { type: "refused"; reason: string; code?: Ap2ErrorCode | "limits_mismatch" }
   | { type: "error"; reason: string; transaction?: string };
 
 /** What the agent's model receives from the tool: never the result's rows, table or worded answer (ARCH-305). */
 export type JobsToolReply =
   | { status: "paid"; amountUsdc: string; transaction: string; rows: number }
-  | { status: "refused" | "failed"; reason: string };
+  | { status: "refused" | "failed"; reason: string }
+  /** privateAI-design-37 ARCH-677: paid upfront, the run was refused, the money came back (or is coming back). */
+  | { status: "refunded"; amountUsdc: string; transaction: string; refundTx: string; reason: string }
+  | { status: "refund_pending"; amountUsdc: string; transaction: string; invoiceId?: string; reason: string };
 
 /**
  * One run, as POST /run takes it. The page's own tab 03 fields plus the tenant. datasetId / templateLabel (privateAI-design-32
@@ -252,6 +262,9 @@ export type RunDeps = {
   policy?: AgentPolicy;
   /** The receipt check after a paid release (step B); unset = no receipt step (--receipt-verify off). */
   receiptCheck?: ReceiptCheck;
+  /** privateAI-design-37 ARCH-677: how a pending refund is asked again (--refund-poll-ms, default 3000; --refund-poll-max, default 40). */
+  refundPollMs?: number;
+  refundPollMax?: number;
   /** The signed-quote check before the policy (ARCH-630); unset = no quote_signed step (--ap2-verify off). */
   ap2Check?: Ap2Check;
   /** ARCH-666: the tenants' checkout mandate keys (--ap2-mandate on); unset = no mandate is signed. */
@@ -361,7 +374,7 @@ async function runAndPay(
   // quotes, holds and registers. Either way the console answers the cost and the job id only.
   const mode: OfferMode = req.offerMode ?? deps.defaultOfferMode ?? "run-hold";
   const estimateFirst = mode === "estimate-first";
-  let job: { jobId: string; totalUsd: string; amount: string; network: string; asset: string; payTo: string; expiresAt: number; route?: string; attested: boolean; ap2?: unknown };
+  let job: { jobId: string; totalUsd: string; amount: string; network: string; asset: string; payTo: string; expiresAt: number; route?: string; attested: boolean; ap2?: unknown; basis?: unknown; limits?: CheckoutLimits };
   try {
     const r = await fetch(`${deps.console}${estimateFirst ? "/offers" : "/jobs/crossask"}`, {
       method: "POST",
@@ -378,7 +391,7 @@ async function runAndPay(
     ) return refuse("the console's quote could not be read, so nothing was paid");
     // route / attested (ARCH-620): what the console says the job ran on; a console that does not say counts as not attested.
     job = { jobId: j.jobId, totalUsd: j.totalUsd, amount: j.amount, network: j.network, asset: j.asset, payTo: j.payTo, expiresAt: j.expiresAt,
-      ...(typeof j.route === "string" ? { route: j.route } : {}), attested: j.attested === true, ...(j.ap2 !== undefined ? { ap2: j.ap2 } : {}) };
+      ...(typeof j.route === "string" ? { route: j.route } : {}), attested: j.attested === true, ...(j.ap2 !== undefined ? { ap2: j.ap2 } : {}), ...(j.basis !== undefined ? { basis: j.basis } : {}) };
   } catch (e) {
     return refuse(signal.aborted ? "the request was cancelled before anything was paid" : `the console could not be reached at ${deps.console}, so nothing was run or paid (${(e as Error).name})`);
   }
@@ -393,7 +406,14 @@ async function runAndPay(
       const reason = `ChainAim's signed quote was refused (${v.code}): ${v.reason}; nothing was signed or paid`;
       return { reply: { status: "refused" as const, reason }, terminal: { type: "refused" as const, reason, code: v.code } };
     }
-    emit(v.event);
+    // privateAI-design-38 ARCH-683: the signed limits against the estimate the console answered and its route.
+    const lv = estimateFirst ? checkSignedLimits(job.ap2, job.basis, job.route) : { ok: true as const };
+    if (!lv.ok) {
+      const reason = `ChainAim's signed limits do not match the estimate (${lv.code}): ${lv.reason}; nothing was signed or paid`;
+      return { reply: { status: "refused" as const, reason }, terminal: { type: "refused" as const, reason, code: lv.code } };
+    }
+    if (lv.limits) job.limits = lv.limits;
+    emit({ ...v.event, ...(lv.view ? { limits: lv.view } : {}) });
   }
 
   // The payer, with the hang-up checked right before signing and the `signed` step reported right after.
@@ -462,6 +482,42 @@ async function runAndPay(
       return fail("the result was lost after the payment went through", transaction);
     }
     if (paid.refusal) return fail(`refused by the paywall: ${paid.refusal}`, transaction);
+    // privateAI-design-37 ARCH-677: with the upfront flow the money moved before the run; a refusal after it carries
+    // ChainAim's refund. It counts as spent now, and comes back off today's cap only once the signed record verifies.
+    const refundBlock = paid.response.status !== 200 && transaction ? refundOf(text) : undefined;
+    if (refundBlock !== undefined && transaction) {
+      const network = paid.receipt?.network ?? job.network;
+      emit({ type: "settled", transaction, network });
+      if (deps.policy) {
+        try { deps.policy.ledger.record(tenant.id, job.jobId, job.totalUsd, transaction); }
+        catch (e) { deps.log?.(JSON.stringify({ ts: new Date().toISOString(), route: "agent-run", event: "spend_record_failed", tenant: tenant.id, jobId: job.jobId, reason: String((e as Error).message).slice(0, 200) })); }
+      }
+      const why = errorMessage(text) ?? `HTTP ${paid.response.status}`;
+      const expect = { paidTx: transaction, amountUnits: job.amount, payer: tenant.accountId };
+      const pem = deps.receiptCheck?.publicKeyPem;
+      const privacy = privacyNotProven(refundBlock, why);
+      let o = checkRefund(refundBlock, expect, pem);
+      if (o.kind === "pending" && o.invoiceId) {
+        emit({ type: "refund_pending", paidTx: transaction, invoiceId: o.invoiceId, reason: o.reason, ...(privacy ? { privacy } : {}) });
+        o = await awaitRefund(deps.paywall, o.invoiceId, expect, pem, { pollMs: deps.refundPollMs ?? 3000, pollMax: deps.refundPollMax ?? 40, fetchTimeoutMs: 5000, signal });
+      }
+      if (o.kind === "refunded") {
+        if (deps.policy) {
+          try { deps.policy.ledger.refund(tenant.id, job.jobId, job.totalUsd, o.refundTx); }
+          catch (e) { deps.log?.(JSON.stringify({ ts: new Date().toISOString(), route: "agent-run", event: "spend_refund_failed", tenant: tenant.id, jobId: job.jobId, reason: String((e as Error).message).slice(0, 200) })); }
+        }
+        emit({ type: "refunded", paidTx: transaction, refundTx: o.refundTx, network, invoiceId: o.invoiceId, ...(privacy ? { privacy } : {}) });
+        const reason = privacy
+          ? `Refunded: NEAR AI attestation was not verified for this job (${privacy}), so you were not charged; refund ${o.refundTx} of the payment ${transaction} (record signed by ChainAim, verified)`
+          : `${why}; the payment ${transaction} was refunded in ${o.refundTx} (record signed by ChainAim, verified)`;
+        return { reply: { status: "refunded" as const, amountUsdc: job.totalUsd, transaction, refundTx: o.refundTx, reason }, terminal: { type: "error" as const, reason, transaction } };
+      }
+      if (o.kind === "pending") {
+        const reason = `${why}; the payment ${transaction} is being refunded${o.invoiceId ? ` (ask GET /v1/refunds/${o.invoiceId})` : ""}: ${o.reason}`;
+        return { reply: { status: "refund_pending" as const, amountUsdc: job.totalUsd, transaction, ...(o.invoiceId ? { invoiceId: o.invoiceId } : {}), reason }, terminal: { type: "error" as const, reason, transaction } };
+      }
+      return fail(`${why}; the payment ${transaction} settled and its refund is not confirmed: ${o.reason}`, transaction);
+    }
     if (paid.response.status !== 200 || !transaction) {
       return fail(`the job was not released (HTTP ${paid.response.status}${errorMessage(text) ? `: ${errorMessage(text)}` : ""})`, transaction);
     }
@@ -510,7 +566,7 @@ async function runAndPay(
 function applyPolicy(
   policy: AgentPolicy,
   tenantId: string,
-  job: { jobId: string; totalUsd: string; expiresAt: number; route?: string; attested: boolean },
+  job: { jobId: string; totalUsd: string; expiresAt: number; route?: string; attested: boolean; limits?: CheckoutLimits },
   emit: (e: AgentEvent) => void,
 ): { refused: string } | { maxAmount: (cap: string | undefined) => string } {
   const p = policy.policies.get(tenantId);
@@ -522,7 +578,9 @@ function applyPolicy(
     return { refused: `the spend ledger could not be read (${(e as Error).message}), so nothing was signed or paid` };
   }
   // The quote in plain decimals ("0.010000" -> "0.01"), so the checks and the reasons read as the page shows prices.
-  const quote: Quote = { quoteId: job.jobId, route: job.route ?? "unknown", priceUsd: plainUsd(job.totalUsd), attested: job.attested, expiresAt: job.expiresAt };
+  // design-38 ARCH-683: the policy's model and token rules read the SIGNED limits, never the console's answer.
+  const quote: Quote = { quoteId: job.jobId, route: job.route ?? "unknown", priceUsd: plainUsd(job.totalUsd), attested: job.attested, expiresAt: job.expiresAt,
+    ...(job.limits ? { limits: { models: [...new Set([job.limits.model, job.limits.answerModel])], maxTokens: job.limits.maxTokens, ...(job.limits.attestation ? { attestation: job.limits.attestation } : {}) } } : {}) };
   const now = (policy.now ?? Date.now)();
   let checks: PolicyCheck[];
   let d: ReturnType<typeof decide>;
@@ -556,6 +614,26 @@ function decimalLess(a: string, b: string): boolean {
 }
 
 /** error.message or error from a JSON error body, cut to one plain line. */
+/**
+ * privateAI-design-39 ARCH-689: ca-attest's summary when the run was refused because NEAR AI attestation was not proven
+ * (the refund's reason attestation_not_proven, or the console's "privacy was not proven" message); undefined otherwise.
+ */
+export function privacyNotProven(refund: unknown, why: string): string | undefined {
+  const named = typeof refund === "object" && refund !== null && (refund as { reason?: unknown }).reason === "attestation_not_proven";
+  if (!named && !/privacy was not proven/.test(why)) return undefined;
+  return /NEAR AI attestation: ([a-z_]{1,20})/.exec(why)?.[1] ?? "not verified";
+}
+
+/** privateAI-design-37: the refund block of a refused upfront release ({error, refund}), or undefined. */
+function refundOf(text: string): unknown {
+  try {
+    const j = JSON.parse(text) as { refund?: unknown };
+    return typeof j.refund === "object" && j.refund !== null ? j.refund : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function errorMessage(text: string): string | undefined {
   try {
     const j = JSON.parse(text) as { error?: unknown };

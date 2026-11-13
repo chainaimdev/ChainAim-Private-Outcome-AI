@@ -27,6 +27,22 @@
  *   --mandate-max-lifetime-sec N   the longest mandate accepted (default 900)
  *   --max-body-bytes N             largest request body (default 1048576)
  *
+ * Refunds (privateAI-design-37 ARCH-673..676; off by default, so the signer is otherwise as it was):
+ *   --refunds off|on               on = refund upfront payments whose job was not delivered; needs every flag below
+ *   --refund-store DIR             the signed, append-only refund ledger (refunds.jsonl; a volume in a container)
+ *   --refund-account ID            ChainAim's payTo NEAR account: it received the payment and sends the refund
+ *   --refund-key-env NAME          its full-access key, ed25519:... (default SELLER_NEAR_PRIVATE_KEY; never logged)
+ *   --refund-usdc-contract ID      the USDC NEP-141 contract the paywall is paid on
+ *   --refund-network ID            near:testnet (default) or near:mainnet
+ *   --near-rpc-url URL             the NEAR JSON-RPC endpoint (default https://rpc.testnet.fastnear.com on testnet)
+ *   --paid-tx-sender ID            the paywall's relayer account: the outer signer of every x402 payment
+ *   --refund-gas N                 gas for the refund ft_transfer (default 30000000000000)
+ *   --refund-confirm-timeout-ms N  how long a refund waits to be final before it answers refund_pending (default 15000)
+ *   --refund-max-age-sec N         the oldest payment that is refunded automatically (default 86400)
+ *   --refund-sweep-sec N           how often pending refunds are finished (default 30)
+ *   --refund-min-near D            /healthz says refundWallet low under this much NEAR (default 0.5)
+ *   Routes (X-Signer-Key): POST /v1/refunds, POST /v1/refunds/retry {invoiceId}, GET /v1/refunds, GET /v1/refunds/:invoiceId.
+ *
  * Routes: GET /healthz, GET /.well-known/keys, GET /.well-known/ucp (public); POST /v1/price, /v1/quotes, /v1/receipts,
  * /v1/receipts/settle, /v1/mandates/verify (X-Signer-Key). 400 = a field the allowlist refuses, 409 = a request that does
  * not match what this signer signed, 422 = a refused mandate {ok:false, code, reason}. Logs: route, status, ms and the
@@ -54,6 +70,12 @@ import {
   ucpProfile,
   type MandateSettings,
 } from "../../../packages/signer/src/index.ts";
+import { RefundBook } from "../../../packages/signer/src/refund-book.ts";
+import { parseRefundRequest, RefundDesk, RefundInputError, RefundRefused } from "../../../packages/signer/src/refund.ts";
+import { nearKeyOf } from "../../../packages/near-refund/src/index.ts";
+
+const REFUND_FLAGS = ["refunds", "refund-store", "refund-account", "refund-key-env", "refund-usdc-contract", "refund-network", "near-rpc-url", "paid-tx-sender", "refund-gas", "refund-confirm-timeout-ms", "refund-max-age-sec", "refund-sweep-sec", "refund-min-near"] as const;
+const NEAR_ACCOUNT = /^(([a-z\d]+[-_])*[a-z\d]+\.)*([a-z\d]+[-_])*[a-z\d]+$/;
 
 const FEE_FLAGS = ["fee-per-model-call-usd", "fee-analyst-usd", "near-gas-fee-usd", "margin-pct", "min-price-usd"] as const;
 const ENV_NAME = /^[A-Z_][A-Z0-9_]*$/;
@@ -61,7 +83,54 @@ const ENV_NAME = /^[A-Z_][A-Z0-9_]*$/;
 export class SignerSetupError extends Error {}
 
 export type SignerFlags = Record<string, string | undefined>;
-export type SignerServerConfig = { host: string; port: number; requestKey: string; maxBodyBytes: number; signer: SellerSigner };
+export type SignerServerConfig = {
+  host: string; port: number; requestKey: string; maxBodyBytes: number; signer: SellerSigner;
+  /** privateAI-design-37: present with --refunds on. */
+  refunds?: { desk: RefundDesk; sweepSec: number; account: string };
+};
+
+/** --refunds on: the ledger (opened and replayed now) and the desk; a SignerSetupError names the flag or variable. */
+function refundsConfig(flags: SignerFlags, env: Record<string, string | undefined>, receipt: ReturnType<typeof receiptSignerFromEnv>): { book: RefundBook; desk: RefundDesk; sweepSec: number; account: string } | undefined {
+  const mode = flags.refunds ?? "off";
+  if (mode !== "on" && mode !== "off") throw new SignerSetupError(`--refunds must be on or off, got ${mode}`);
+  if (mode === "off") {
+    for (const f of REFUND_FLAGS) if (f !== "refunds" && flags[f] !== undefined) throw new SignerSetupError(`--${f} needs --refunds on`);
+    return undefined;
+  }
+  const account = (name: string): string => {
+    const v = flags[name];
+    if (!v || v.length < 2 || v.length > 64 || !NEAR_ACCOUNT.test(v)) throw new SignerSetupError(`--${name} must be a NEAR account id (required with --refunds on)`);
+    return v;
+  };
+  const store = flags["refund-store"];
+  if (!store) throw new SignerSetupError("--refund-store DIR is required with --refunds on (the refund ledger; a volume in a container)");
+  const network = flags["refund-network"] ?? "near:testnet";
+  if (network !== "near:testnet" && network !== "near:mainnet") throw new SignerSetupError("--refund-network must be near:testnet or near:mainnet");
+  const keyEnv = envName(flags["refund-key-env"], "SELLER_NEAR_PRIVATE_KEY", "refund-key-env");
+  const secret = env[keyEnv]?.trim();
+  if (!secret) throw new SignerSetupError(`${keyEnv} is not set: the payTo account's full-access key (ed25519:...), needed to send refunds (MANUAL_SETUP.md 2026-11-13 Upfront pay)`);
+  let key;
+  try { key = nearKeyOf(secret); } catch (e) { throw new SignerSetupError(`${keyEnv}: ${(e as Error).message}`); }
+  const rpcUrl = flags["near-rpc-url"] ?? (network === "near:testnet" ? "https://rpc.testnet.fastnear.com" : "https://rpc.mainnet.fastnear.com");
+  if (!URL.canParse(rpcUrl) || !/^https?:$/.test(new URL(rpcUrl).protocol)) throw new SignerSetupError("--near-rpc-url must be an http(s) URL");
+  const gasRaw = flags["refund-gas"] ?? "30000000000000";
+  if (!/^[1-9]\d{0,15}$/.test(gasRaw) || BigInt(gasRaw) > 300_000_000_000_000n) throw new SignerSetupError("--refund-gas must be a whole number of gas up to 300000000000000");
+  const minNear = flags["refund-min-near"] ?? "0.5";
+  if (!/^(0|[1-9]\d{0,6})(\.\d{1,6})?$/.test(minNear)) throw new SignerSetupError("--refund-min-near must be a NEAR amount such as 0.5");
+  const [whole_, frac = ""] = minNear.split(".");
+  const minYocto = BigInt(whole_) * 10n ** 24n + BigInt(frac.padEnd(6, "0")) * 10n ** 18n;
+  const sweepSec = whole(flags["refund-sweep-sec"], 30, "refund-sweep-sec", 5, 3600);
+  let book: RefundBook;
+  try { book = new RefundBook(store, receipt); } catch (e) { throw new SignerSetupError(`--refund-store ${store}: ${(e as Error).message}`); }
+  const payTo = account("refund-account");
+  const desk = new RefundDesk({
+    book, receipt, network, account: payTo, key, usdcContract: account("refund-usdc-contract"), rpcUrl: rpcUrl.replace(/\/+$/, ""),
+    paidTxSender: account("paid-tx-sender"), gas: BigInt(gasRaw),
+    confirmTimeoutMs: whole(flags["refund-confirm-timeout-ms"], 15_000, "refund-confirm-timeout-ms", 1000, 120_000),
+    maxAgeSec: whole(flags["refund-max-age-sec"], 86_400, "refund-max-age-sec", 60, 30 * 86_400), minYocto,
+  });
+  return { book, desk, sweepSec, account: payTo };
+}
 
 const readJson = (path: string, what: string): unknown => {
   let text: string;
@@ -115,12 +184,14 @@ export function signerServerConfig(flags: SignerFlags, env: Record<string, strin
     for (const f of ["mandate-audience", "mandate-skew-sec", "mandate-max-lifetime-sec"]) if (flags[f] !== undefined) throw new SignerSetupError(`--${f} needs --mandate-keys FILE`);
   }
   const portRaw = flags.port ?? env.PORT;
+  const refunds = refundsConfig(flags, env, receipt);
   return {
     host: flags.host ?? "127.0.0.1",
     port: whole(portRaw, 8780, "port", 0, 65535),
     requestKey,
     maxBodyBytes: whole(flags["max-body-bytes"], 1_048_576, "max-body-bytes", 1024, 16_777_216),
-    signer: new SellerSigner({ ap2, receipt, pricing: { prices, fees, round: "cent", ...(costModel ? { costModel } : {}) }, termsUrl, ...(mandates ? { mandates } : {}) }),
+    signer: new SellerSigner({ ap2, receipt, pricing: { prices, fees, round: "cent", ...(costModel ? { costModel } : {}) }, termsUrl, ...(mandates ? { mandates } : {}), ...(refunds ? { refunds: refunds.book } : {}) }),
+    ...(refunds ? { refunds: { desk: refunds.desk, sweepSec: refunds.sweepSec, account: refunds.account } } : {}),
   };
 }
 
@@ -160,9 +231,48 @@ export function signerHandler(cfg: SignerServerConfig, log: (line: string) => vo
       send(res, status, body);
       log(JSON.stringify({ ts: new Date().toISOString(), route: path, status, ms: Math.round(performance.now() - t0), ...(jobId ? { jobId } : {}) }));
     };
+    const keyOk = (): boolean => {
+      const given = Buffer.from(String(req.headers["x-signer-key"] ?? ""), "utf8");
+      return given.length === want.length && timingSafeEqual(given, want);
+    };
+    // privateAI-design-37 ARCH-673: the refund routes (X-Signer-Key), only with --refunds on.
+    const desk = cfg.refunds?.desk;
+    if (desk && (path === "/v1/refunds" || path.startsWith("/v1/refunds/"))) {
+      if (!keyOk()) { req.resume(); return done(401, { error: "X-Signer-Key is missing or wrong" }); }
+      if (req.method === "GET") {
+        req.resume();
+        if (path === "/v1/refunds") return done(200, { refunds: desk.list() });
+        const invoiceId = path.slice("/v1/refunds/".length);
+        const r = /^[A-Za-z0-9_-]{1,100}$/.test(invoiceId) ? desk.get(invoiceId) : undefined;
+        return r ? done(200, r) : done(404, { error: { message: "no refund for this invoice" } });
+      }
+      if (req.method !== "POST" || (path !== "/v1/refunds" && path !== "/v1/refunds/retry")) { req.resume(); return done(404, { error: "not found" }); }
+      void readBody(req, cfg.maxBodyBytes).then(async (b) => {
+        if (!b.ok) return done(b.status, { error: { message: b.error } });
+        let jobId: string | undefined;
+        try {
+          let rec;
+          if (path === "/v1/refunds") { const r = parseRefundRequest(b.value); jobId = r.jobId; rec = await desk.refund(r); }
+          else {
+            const id = (b.value as { invoiceId?: unknown } | null)?.invoiceId;
+            if (typeof id !== "string" || !/^[A-Za-z0-9_-]{1,100}$/.test(id) || Object.keys(b.value as object).length !== 1) throw new RefundInputError("$ must be {invoiceId}");
+            rec = await desk.retry(id);
+            jobId = rec.jobId;
+          }
+          log(JSON.stringify({ ts: new Date().toISOString(), route: path, event: "refund", invoiceId: rec.invoiceId, status: rec.status, refundTx: rec.refundTx }));
+          done(200, rec, jobId);
+        } catch (e) {
+          if (e instanceof RefundInputError) return done(400, { error: { message: e.message } });
+          if (e instanceof RefundRefused) return done(409, { error: { message: e.message } }, jobId);
+          log(JSON.stringify({ ts: new Date().toISOString(), route: path, event: "refund_error", reason: String((e as Error).message ?? e).slice(0, 200) }));
+          done(502, { error: { message: "the refund could not be completed now (NEAR RPC); ask again: the same invoice always answers the same refund" } }, jobId);
+        }
+      });
+      return;
+    }
     if (req.method === "GET") {
       req.resume();
-      if (path === "/healthz") { const k = s.keys(); return done(200, { ok: true, ap2Kid: k.ap2!.keys[0].kid, receiptKeyId: k.receipt!.keyId, mandates: k.mandateAudience !== undefined }); }
+      if (path === "/healthz") { const k = s.keys(); return done(200, { ok: true, ap2Kid: k.ap2!.keys[0].kid, receiptKeyId: k.receipt!.keyId, mandates: k.mandateAudience !== undefined, ...(desk ? { refunds: "on", refundWallet: desk.walletState ?? "unknown" } : {}) }); }
       if (path === "/.well-known/keys") return done(200, s.keys());
       if (path === "/.well-known/ucp") return done(200, ucpProfile(s.keys().ap2!.keys[0]));
       return done(404, { error: "not found" });
@@ -190,7 +300,7 @@ export function signerHandler(cfg: SignerServerConfig, log: (line: string) => vo
 const isMain = process.argv[1] !== undefined && fileURLToPath(import.meta.url) === resolve(process.argv[1]);
 if (isMain) {
   const options = Object.fromEntries(
-    ["host", "port", "request-key-env", "ap2-key-env", "receipt-key-env", "pricing-catalog", ...FEE_FLAGS, "cost-model", "terms-url", "mandate-keys", "mandate-audience", "mandate-skew-sec", "mandate-max-lifetime-sec", "max-body-bytes"].map((n) => [n, { type: "string" as const }]),
+    ["host", "port", "request-key-env", "ap2-key-env", "receipt-key-env", "pricing-catalog", ...FEE_FLAGS, "cost-model", "terms-url", "mandate-keys", "mandate-audience", "mandate-skew-sec", "mandate-max-lifetime-sec", "max-body-bytes", ...REFUND_FLAGS].map((n) => [n, { type: "string" as const }]),
   );
   let cfg: SignerServerConfig;
   try {
@@ -200,6 +310,14 @@ if (isMain) {
     process.exit(2);
   }
   const server = createServer(signerHandler(cfg));
+  // privateAI-design-37 ARCH-674: pending refunds are finished (and the wallet's NEAR read) at start and then every sweep.
+  if (cfg.refunds) {
+    const sweep = (): void => {
+      cfg.refunds!.desk.sweep().catch((e: unknown) => console.log(JSON.stringify({ ts: new Date().toISOString(), event: "refund_sweep_failed", reason: String((e as Error).message ?? e).slice(0, 200) })));
+    };
+    sweep();
+    setInterval(sweep, cfg.refunds.sweepSec * 1000).unref();
+  }
   server.listen(cfg.port, cfg.host, () => {
     const a = server.address();
     const k = cfg.signer.keys();

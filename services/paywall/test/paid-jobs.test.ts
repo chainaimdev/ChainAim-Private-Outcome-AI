@@ -79,16 +79,17 @@ describe("paid jobs (PAID_JOBS=on, PAY_RAILS=xrpl,near)", () => {
   let now = Date.now();
   // The console's internal listener: held results by job id, x-jobs-key checked.
   const held = new Map<string, unknown>();
-  const consoleSeen: { method: string; path: string; key: string | undefined }[] = [];
+  const consoleSeen: { method: string; path: string; key: string | undefined; body?: string }[] = [];
   const consoleState = { failGet: false, failReleased: false, runStatus: 200 as 200 | 409 | 422 };
   /** ARCH-637: estimate-first offers the stand-in runs only when asked (POST /internal/jobs/:id/run), counted per id. */
   const offers = new Map<string, unknown>();
   const runs = new Map<string, number>();
   const consoleServer: Server = createServer((req, res) => {
-    req.resume();
+    let raw = "";
+    req.on("data", (d) => { raw += d; });
     req.on("end", () => {
       const key = req.headers["x-jobs-key"] as string | undefined;
-      consoleSeen.push({ method: req.method!, path: req.url!, key });
+      consoleSeen.push({ method: req.method!, path: req.url!, key, body: raw });
       const send = (status: number, body: unknown) => { res.writeHead(status, { "content-type": "application/json" }); res.end(JSON.stringify(body)); };
       if (key !== JOBS_KEY) return send(401, { error: "x-jobs-key is missing or wrong" });
       const get = /^\/internal\/jobs\/([0-9a-f]{32})$/.exec(req.url!);
@@ -415,6 +416,8 @@ describe("paid jobs (PAID_JOBS=on, PAY_RAILS=xrpl,near)", () => {
     assert.equal(double.state.transfers.length, 1, "settled once");
     assert.equal(double.state.transfers[0].amount, 20000n);
     await waitFor(() => consoleSeen.some((c) => c.path === `/internal/jobs/${id}/released`));
+    // privateAI-design-40 ARCH-691: the authorization flow is named in the release notice.
+    assert.equal(JSON.parse(consoleSeen.find((c) => c.path === `/internal/jobs/${id}/released`)!.body!).flow, "authorization");
     const call = consoleSeen.find((c) => c.path === `/internal/jobs/${id}/run`)!;
     assert.deepEqual([call.method, call.key], ["POST", JOBS_KEY]);
     assert.equal((await fetch(releaseUrl(id), { method: "POST" })).status, 409, "released: not payable again");

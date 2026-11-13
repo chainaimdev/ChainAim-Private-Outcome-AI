@@ -187,7 +187,13 @@ test("-Ship: test, commit and push in one command (owner, 2026-11-07); refuses b
   // ignored path) and is committed from the index with --include; anything staged but not listed stops the ship
   assert.match(s, /\$addPaths = @\(\$want \| Where-Object \{ \$stagedDel -notcontains \$_ \}\)/);
   assert.match(s, /\$addArgs = @\("add", "--"\) \+ \$addPaths/);
-  assert.match(s, /\$commitArgs \+= @\("--include", "--"\) \+ \$addPaths/, "commits the listed paths and the staged removals");
+  // 2026-11-13 (v2.1.0 ship): the commit takes the index with NO pathspec, after the staged set was read back and found to be
+  // exactly the list; a rename's old path or a staged removal is never named in `git commit -- <paths>`.
+  assert.match(s, /\$stagedNow = @\(Get-StagedChanges @\(Quiet \{ & git -c core\.quotePath=false diff --cached --name-status -M 2>\$null \}\)\)/);
+  assert.match(s, /\$outside = @\(Get-StagedOutside \$stagedNow \$want\)/);
+  assert.match(s, /if \(\$outside\.Count\) \{ Stop-Here \("staged but not in this commit's list: "/);
+  assert.ok(s.indexOf("$outside = @(Get-StagedOutside") < s.indexOf("Quiet { & git @commitArgs }"), "checked before the commit");
+  assert.ok(!/commitArgs \+= @\("--include"|commitArgs \+= @\("--"|"--include"/.test(s), "no pathspec on the commit");
   assert.match(s, /already staged but not in this commit's list/, "only the listed paths: a staged path not listed stops it");
   assert.ok(s.indexOf("already staged but not in this commit's list") < s.indexOf("@(\"add\""), "checked before anything is staged");
   assert.ok(!/add -A|add \.|"-A"|--force|push -f|reset|checkout|pull|stash/.test(s), "never force, pull, reset, checkout or stash");
@@ -430,4 +436,152 @@ test("privateAI-design-35 ARCH-651: -CrossaskMaxPromptChars (default desk.json c
   // Passed outside the paid-jobs block: the free /crossask and the quote use the same cap.
   const at = up.indexOf('$consoleCmd += "--crossask-max-prompt-chars');
   assert.ok(at > 0 && at < up.indexOf('if ($PaidJobs -eq "on") {\n    $consoleCmd += @("--paid-jobs=on"'), "before, not inside, the paid-jobs block");
+});
+
+test("privateAI-design-37: -PaidFlow (default desk.json paidJobs.flow, else authorization) goes to up.ps1; upfront needs the separate signer and its NEAR key; -Refunds [-RefundRetry] runs the Node script, which reads the request key itself", () => {
+  assert.match(ps, /\[string\]\$PaidFlow = "",/);
+  assert.match(ps, /\$paidFlow = if \(\$PaidFlow\) \{ \$PaidFlow \} elseif \(\$P\.paidJobs -and \$P\.paidJobs\.flow\) \{ \[string\]\$P\.paidJobs\.flow \} else \{ "authorization" \}/);
+  assert.match(ps, /\$privArgs\.PaidFlow = \$paidFlow/);
+  assert.match(ps, /\[switch\]\$Refunds,/);
+  assert.match(ps, /\$refArgs = @\("scripts\\refunds\.ts", "--signer-url", \$hostSigner, "--client-file", \(Join-Path \$secrets "signer-client\.env"\)\)/);
+  assert.match(ps, /if \(\$RefundRetry\) \{ \$refArgs \+= @\("--retry", \$RefundRetry\) \}/);
+  assert.equal(/SIGNER_REQUEST_KEY/.test(ps.slice(ps.indexOf("if ($Refunds) {"), ps.indexOf("if ($Refunds) {") + 1200)), false, "desk.ps1 never reads the request key for -Refunds");
+  const up = readFileSync(new URL("../../test-console/up.ps1", import.meta.url), "utf8");
+  assert.match(up, /\[ValidateSet\("authorization", "upfront"\)\]\[string\]\$PaidFlow = "authorization"/);
+  assert.match(up, /if \(\$Signer -ne "separate"\) \{ Stop-Here "-PaidFlow upfront needs -Signer separate/);
+  assert.match(up, /"--refunds=on", "--refund-store=\/data\/refunds", "--refund-account=\$nPayTo"/);
+  assert.match(up, /Set-Secret "PAID_JOBS_FLOW" "upfront"; Set-Secret "PAID_JOBS_REFUND_URL" \$SignerUrl\.TrimEnd\('\/'\); Set-Secret "PAID_JOBS_REFUND_KEY_ENV" "PAYWALL_SIGNER_KEY"; Set-Secret "PAYWALL_SIGNER_KEY" \$signerReqKey/);
+  // The payTo key goes to the signer's compose command only, and leaves this process with the other seller keys.
+  assert.match(up, /\$sigKeys = @\("AP2_SIGNING_KEY", "RECEIPT_SIGNING_KEY"\) \+ \$\(if \(\$refundKeyOn\) \{ @\("SELLER_NEAR_PRIVATE_KEY"\) \} else \{ @\(\) \}\)/);
+  assert.match(up, /finally \{ foreach \(\$k in \$sigKeys\) \{ Remove-Item "env:\$k"/);
+  assert.equal(/Set-Secret "SELLER_NEAR_PRIVATE_KEY"/.test(up), false, "never set for the data plane");
+  const compose = readFileSync(new URL("../../docker-compose.yml", import.meta.url), "utf8");
+  assert.equal(/SELLER_NEAR_PRIVATE_KEY/.test(compose), false, "the data plane's compose file never names the payTo key");
+  for (const n of ["PAID_JOBS_FLOW", "PAID_JOBS_REFUND_URL", "PAID_JOBS_REFUND_KEY_ENV", "PAYWALL_SIGNER_KEY"]) assert.ok(compose.split(/\r?\n/).some((line) => line.trim() === `- ${n}`), n);
+  const script = readFileSync(new URL("../refunds.ts", import.meta.url), "utf8");
+  assert.match(script, /const key = requestKeyOf\(text!\);/);
+});
+
+test("privateAI-design-37: scripts/refunds.ts reads SIGNER_REQUEST_KEY from the client file and prints amounts with 6 decimals", async () => {
+  const { requestKeyOf, formatRows } = await import("../refunds.ts");
+  assert.equal(requestKeyOf("﻿OTHER=1\r\nSIGNER_REQUEST_KEY=\"abc123\"\r\n"), "abc123");
+  assert.equal(requestKeyOf("NOPE=1\n"), undefined);
+  const [line] = formatRows([{ invoiceId: "C702E26D", jobId: "8314afbf", status: "refunded", payer: "chainaim-buyer-seller.testnet", amountUnits: "20000", paidTx: "4vv6", refundTx: "9xyz", reason: "over_estimate", at: "2026-11-13T12:00:00.000Z" }]);
+  assert.match(line, /refunded\s+0\.020000 USDC  to chainaim-buyer-seller\.testnet  invoice C702E26D  job 8314afbf  paid 4vv6  refund 9xyz  \(over_estimate\)/);
+  assert.deepEqual(formatRows([]), ["(no refunds in the ledger)"]);
+});
+
+test("ARCH-666 -MandateKey ADDS the tenant's new public key and keeps the ones already listed (owner run 2026-11-13: t01's 964b1199 was dropped)", async () => {
+  const mk = ps.slice(ps.indexOf("if ($MandateKey) {"), ps.indexOf("# ---------------------------------------------------------------- -Planes"));
+  assert.match(mk, /"scripts\\signer-keys\.ts", "mandate", .*"--registry", "config\\ap2-mandate-keys\.json"/);
+  const { mkdtempSync, writeFileSync, rmSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const { tmpdir } = await import("node:os");
+  const { ensureMandateKey } = await import("../signer-keys-core.ts");
+  const { parseMandateRegistry } = await import("../../packages/ap2/src/index.ts");
+  const d = mkdtempSync(join(tmpdir(), "mandate-add-"));
+  try {
+    const env = join(d, "agent-tenants.env"), reg = join(d, "ap2-mandate-keys.json");
+    writeFileSync(env, "");
+    const kids = () => parseMandateRegistry(JSON.parse(readFileSync(reg, "utf8"))).find((t) => t.tenant === "t01")!.keys.map((k) => (k as { kid: string }).kid);
+    const first = ensureMandateKey({ agentEnvFile: env, registryFile: reg, tenant: "t01", accountId: "chainaim-buyer-seller.testnet" });
+    const other = ensureMandateKey({ agentEnvFile: env, registryFile: reg, tenant: "t02", accountId: "chainaim-t02-seller.testnet" });
+    const second = ensureMandateKey({ agentEnvFile: env, registryFile: reg, tenant: "t01", accountId: "chainaim-buyer-seller.testnet", rotate: true });
+    assert.deepEqual(kids(), [second.kid, first.kid], "the new key first, the earlier one kept");
+    ensureMandateKey({ agentEnvFile: env, registryFile: reg, tenant: "t01", accountId: "chainaim-buyer-seller.testnet" });
+    assert.deepEqual(kids(), [second.kid, first.kid], "a kept key is not listed twice");
+    assert.deepEqual(parseMandateRegistry(JSON.parse(readFileSync(reg, "utf8"))).find((t) => t.tenant === "t02")!.keys.map((k) => (k as { kid: string }).kid), [other.kid], "other tenants untouched");
+  } finally {
+    rmSync(d, { recursive: true, force: true });
+  }
+});
+
+test("privateAI-design-39: -PayOnlyAttested (default desk.json paidJobs.payOnlyAttested, else evidence) and its deadline go to up.ps1; verified needs ca-attest and raises the paywall's run timeout", () => {
+  assert.match(ps, /\[string\]\$PayOnlyAttested = "",/);
+  assert.match(ps, /\[int\]\$PayOnlyAttestedDeadlineMs = 0,/);
+  assert.match(ps, /\$payOnly = if \(\$PayOnlyAttested\) \{ \$PayOnlyAttested \} elseif \(\$P\.paidJobs -and \$P\.paidJobs\.payOnlyAttested\) \{ \[string\]\$P\.paidJobs\.payOnlyAttested \} else \{ "evidence" \}/);
+  assert.match(ps, /if \(\$payOnlyMs -lt 1000 -or \$payOnlyMs -gt 240000\) \{ Stop-Here/);
+  assert.match(ps, /if \(\$payOnly -eq "verified" -and \$attestMode -eq "off"\) \{ Stop-Here/);
+  assert.match(ps, /\$privArgs\.PayOnlyAttested = \$payOnly/);
+  assert.match(ps, /\$privArgs\.PayOnlyAttestedDeadlineMs = \$payOnlyMs/);
+  assert.ok(ps.indexOf("$attestMode = ") < ps.indexOf("$payOnly = "), "attest mode is known before it is checked");
+  const up = readFileSync(new URL("../../test-console/up.ps1", import.meta.url), "utf8");
+  assert.match(up, /\[ValidateSet\("off", "evidence", "verified"\)\]\[string\]\$PayOnlyAttested = "evidence",/);
+  const blk = up.slice(up.indexOf("# privateAI-design-39 ARCH-685: what a paid job must show"), up.indexOf("$override = [ordered]@{ services"));
+  assert.ok(blk.length > 0);
+  assert.match(blk, /if \(\$PayOnlyAttested -ne "evidence"\) \{/, "evidence = the console's default, no flag: the command is as before");
+  assert.match(blk, /if \(\$PayOnlyAttested -eq "verified" -and \$Attest -ne "on"\) \{ Stop-Here/);
+  assert.match(blk, /\$consoleCmd \+= "--pay-only-attested=\$PayOnlyAttested"/);
+  assert.match(blk, /\$consoleCmd \+= "--pay-only-attested-deadline-ms=\$PayOnlyAttestedDeadlineMs"/);
+  assert.match(blk, /Set-Secret "PAID_JOBS_RUN_TIMEOUT_SEC" \(\[string\]\(300 \+ \[math\]::Ceiling\(\$PayOnlyAttestedDeadlineMs \/ 1000\) \+ 10\)\)/);
+  // 300 + 240 + 10 = 550: within the paywall's limit (XRPL_MAX_TIMEOUT_SECONDS 600 - 30) at the longest deadline.
+  assert.ok(300 + 240 + 10 <= 600 - 30);
+  const compose = readFileSync(new URL("../../docker-compose.yml", import.meta.url), "utf8");
+  const paywall = compose.slice(compose.indexOf("container_name: ca-paywall"), compose.indexOf("container_name: ca-paywall") + 6000);
+  assert.match(paywall, /\n {6}- PAID_JOBS_RUN_TIMEOUT_SEC\n/, "by name; unset = the paywall's default 300");
+});
+
+test("privateAI-design-39 section 5: -StopService / -StartService NAME stop or start one known container and nothing else; they run on their own, before any start", () => {
+  assert.match(ps, /\[string\]\$StopService = "",/);
+  assert.match(ps, /\[string\]\$StartService = "",/);
+  const blk = code.slice(code.indexOf("if ($StopService -or $StartService) {"), code.indexOf("# ---------------------------------------------------------------- -Logs"));
+  assert.ok(blk.length > 0);
+  assert.match(blk, /if \(\$StopService -and \$StartService\) \{ Stop-Here/);
+  assert.match(blk, /if \(\$otherModes -or \$keyModes -or \$Refunds -or \$AgentAsk -or \$VerifyReceipt\) \{ Stop-Here/);
+  assert.match(blk, /if \(-not \$LogContainers\.Contains\(\$svcName\)\) \{ Stop-Here/, "only a service of this stack");
+  assert.match(blk, /& docker \$svcVerb \$LogContainers\[\$svcName\]/);
+  assert.equal((blk.match(/& docker /g) ?? []).length, 1, "one docker call: this container only");
+  assert.ok(!/compose|down\.ps1|up\.ps1|nearadminup/.test(blk), "no other start or stop");
+  assert.match(blk, /exit 0/);
+  assert.ok(code.indexOf("if ($StopService -or $StartService) {") < code.indexOf("# 1. pre-flight"), "before anything starts");
+  assert.ok(code.indexOf("$otherModes = ") < code.indexOf("if ($StopService -or $StartService) {"), "the mode checks are known first");
+});
+
+test("-Ship (2026-11-13, v2.1.0 ship failed with \"pathspec did not match\"): a staged rename and a staged delete are read from the index, never named in the commit's pathspec", async () => {
+  const { spawnSync } = await import("node:child_process");
+  const fnOf = (name: string): string => {
+    const at = code.indexOf(`function ${name}(`);
+    assert.ok(at >= 0, name);
+    const end = code.indexOf("\n}\n", at);
+    return code.slice(at, end + 2);
+  };
+  // What `git diff --cached --name-status -M` printed for the v2.1.0 ship (tab-separated), plus a delete, an add and a change.
+  const lines = [
+    "R100\tdocs/judge/demo-script-2026-11-13T0530Z.md\tdocs/judge/older/demo-script-2026-11-13T0530Z.md",
+    "R100\tdocs/judge/sample-receipt-2026-11-13T0547Z.json\tdocs/judge/older/sample-receipt-2026-11-13T0547Z.json",
+    "D\tdocs/gone.md",
+    "A\tdocs/judge/sample-receipt-2026-11-13T1716Z.json",
+    "M\tREADME.md",
+  ];
+  // The list as -Ship builds it from git status: renames by their new path; for an unstaged move both halves were listed.
+  const want = ["docs/judge/older/demo-script-2026-11-13T0530Z.md", "docs/judge/sample-receipt-2026-11-13T0547Z.json", "docs/judge/older/sample-receipt-2026-11-13T0547Z.json", "docs/gone.md", "docs/judge/sample-receipt-2026-11-13T1716Z.json", "README.md"];
+  const ps1 = (list: string[], w: string[]) => [
+    fnOf("Get-StagedChanges"), fnOf("Get-StagedOutside"),
+    `$lines = @(${list.map((l) => `"${l.replace(/\t/g, "`t")}"`).join(", ")})`,
+    `$want = @(${w.map((x) => `"${x}"`).join(", ")})`,
+    "$c = @(Get-StagedChanges $lines)",
+    "$o = @(Get-StagedOutside $c $want)",
+    "ConvertTo-Json -Compress -Depth 3 @{ changes = $c; outside = $o }",
+  ].join("\n");
+  const run = (list: string[], w: string[]) => {
+    const r = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", ps1(list, w)], { encoding: "utf8", timeout: 60_000 });
+    assert.equal(r.status, 0, r.stderr);
+    return JSON.parse(r.stdout) as { changes: { Status: string; Path: string; From: string | null }[]; outside: string[] | null };
+  };
+  const ok = run(lines, want);
+  assert.deepEqual(ok.changes.map((c) => [c.Status, c.Path, c.From]), [
+    ["R", "docs/judge/older/demo-script-2026-11-13T0530Z.md", "docs/judge/demo-script-2026-11-13T0530Z.md"],
+    ["R", "docs/judge/older/sample-receipt-2026-11-13T0547Z.json", "docs/judge/sample-receipt-2026-11-13T0547Z.json"],
+    ["D", "docs/gone.md", null],
+    ["A", "docs/judge/sample-receipt-2026-11-13T1716Z.json", null],
+    ["M", "README.md", null],
+  ], "a rename is its new path, with the old one beside it");
+  assert.deepEqual(ok.outside ?? [], [], "the staged set is exactly the list: the commit takes the index");
+  // A staged path that is not in the list stops the ship: a delete, and a rename whose new path is not listed.
+  const bad = run(lines, want.filter((x) => x !== "docs/gone.md" && x !== "docs/judge/older/demo-script-2026-11-13T0530Z.md"));
+  assert.deepEqual([...(bad.outside ?? [])].sort(), ["docs/gone.md", "docs/judge/older/demo-script-2026-11-13T0530Z.md"]);
+  // And the commit names no path at all, so neither old path can reach `git commit -- <paths>`.
+  const s = code.slice(code.indexOf("if ($Ship) {"), code.indexOf("# ---------------------------------------------------------------- settings and paths"));
+  const commit = s.slice(s.indexOf('$commitArgs = @("commit"'), s.indexOf("Quiet { & git @commitArgs }"));
+  assert.ok(commit.length > 0 && !/"--"|--include|\$addPaths|\$want/.test(commit), "the commit takes the index, no pathspec");
 });

@@ -15,6 +15,7 @@
  */
 import { readFileSync } from "node:fs";
 import { keyFromJwk, verifyMerchantAuthorization, type Ap2ErrorCode } from "../../../packages/ap2/src/index.ts";
+import { parseLimits, type CheckoutLimits } from "../../../packages/offer/src/index.ts";
 
 /** The agent's quote check, from the --ap2-* flags of agent-jobs.ts. */
 export type Ap2Check = {
@@ -28,7 +29,9 @@ export type Ap2Check = {
   now?: () => number;
 };
 
-export type QuoteSignedEvent = { type: "quote_signed"; jobId: string; kid: string; cents: number };
+/** limits (privateAI-design-38 ARCH-683): the signed limits' sizes and model ids, shown under the quote; absent when the quote has none. */
+export type QuoteSignedEvent = { type: "quote_signed"; jobId: string; kid: string; cents: number; limits?: SignedLimitsView };
+export type SignedLimitsView = { models: string[]; modelCalls: number; maxTokens: number; files: number; totalBytes: number; attestation?: string };
 
 /** What the agent itself was quoted (the console's answer, outside the signed part). */
 export type QuotedJob = { jobId: string; amount: string; network: string; asset: string; payTo: string; expiresAt: number };
@@ -90,4 +93,33 @@ export function checkSignedQuote(check: Ap2Check, ap2: unknown, job: QuotedJob):
   if (exp !== job.expiresAt) return scope("the signed expiry is not the quoted expiry");
   if ((check.now ?? Date.now)() > exp + check.skewSec * 1000) return { ok: false, code: "merchant_authorization_invalid", reason: "the signed quote has expired" };
   return { ok: true, event: { type: "quote_signed", jobId: job.jobId, kid: v.kid, cents } };
+}
+
+/** The members of the console's estimate answer (`basis`) that the signed limits must equal (privateAI-design-38 ARCH-683). */
+export const ANSWER_LIMIT_FIELDS = ["files", "totalBytes", "maxPromptChars", "answerMaxPromptChars", "maxTokens", "sqlRetries", "modelCalls"] as const;
+const NO_MODEL_ROUTE = "analyst-only";
+
+export type LimitsVerdict = { ok: true; limits?: CheckoutLimits; view?: SignedLimitsView } | { ok: false; code: "limits_mismatch"; reason: string };
+
+/**
+ * privateAI-design-38 ARCH-683, after checkSignedQuote accepted the signature: the limits in the SIGNED checkout against
+ * what the console's estimate told the agent (answer `basis`) and the route it named. Any difference is `limits_mismatch`
+ * and nothing is signed. A quote without limits (a signer before v2.1.0) passes here with no view: the console's run step
+ * refuses it (--offer-limits-check on), so it never runs or settles.
+ */
+export function checkSignedLimits(ap2: unknown, answerBasis: unknown, route: string | undefined): LimitsVerdict {
+  const mismatch = (reason: string): LimitsVerdict => ({ ok: false, code: "limits_mismatch", reason });
+  const checkout = isObj(ap2) && isObj(ap2.checkout) ? ap2.checkout : undefined;
+  const ext = checkout && isObj(checkout["dev.chainaim.job"]) ? (checkout["dev.chainaim.job"] as Record<string, unknown>) : undefined;
+  if (ext?.limits === undefined) return { ok: true };
+  let l: CheckoutLimits;
+  try { l = parseLimits(ext.limits); } catch (e) { return mismatch(`the signed limits cannot be read (${(e as Error).message})`); }
+  if (!isObj(answerBasis)) return mismatch("the console's estimate shows no basis to compare with the signed limits");
+  for (const f of ANSWER_LIMIT_FIELDS) {
+    if (answerBasis[f] !== l[f]) return mismatch(`the signed ${f} (${l[f]}) is not the estimate's (${String(answerBasis[f])})`);
+  }
+  if (typeof route !== "string") return mismatch("the console's estimate names no route to compare with the signed models");
+  const models = new Set([l.model, l.answerModel]);
+  for (const m of route.split("+")) if (m !== NO_MODEL_ROUTE && !models.has(m)) return mismatch(`the route names ${m}, which the signed limits do not allow`);
+  return { ok: true, limits: l, view: { models: [...models], modelCalls: l.modelCalls, maxTokens: l.maxTokens, files: l.files, totalBytes: l.totalBytes, ...(l.attestation ? { attestation: l.attestation } : {}) } };
 }

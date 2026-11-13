@@ -174,6 +174,26 @@ export type PaidJobsConfig = {
   clockSkewSec: number;
   /** Most open jobs at once; registration beyond it is refused with 503. */
   max: number;
+  /**
+   * privateAI-design-37 ARCH-670 (PAID_JOBS_FLOW): authorization (default) = verify, run, settle only a 200; upfront = the
+   * payment settles before any work and every refusal after it is refunded by ChainAim's signer (refund below). Absent =
+   * authorization, so a configuration without PAID_JOBS_FLOW is exactly what it was.
+   */
+  flow?: PaidJobsFlow;
+  /** Upfront only: ChainAim's signer, which makes the refunds (PAID_JOBS_REFUND_URL, the key from PAID_JOBS_REFUND_KEY_ENV). */
+  refund?: RefundConfig;
+};
+
+export const PAID_JOBS_FLOWS = ["authorization", "upfront"] as const;
+export type PaidJobsFlow = (typeof PAID_JOBS_FLOWS)[number];
+
+export type RefundConfig = {
+  /** The signer's base URL, e.g. http://host.docker.internal:8780. */
+  url: string;
+  /** The signer's request key (X-Signer-Key), at least 24 characters; never logged. */
+  key: string;
+  /** How long POST /v1/refunds may take (PAID_JOBS_REFUND_TIMEOUT_MS, default 20000). */
+  timeoutMs: number;
 };
 
 /** The XRPL settings of a configuration that has the xrpl rail; throws on one that has not. */
@@ -376,7 +396,23 @@ export function loadConfig(env: Record<string, string | undefined>): PaywallConf
     if (max < 1 || max > 100_000) throw new Error("PAID_JOBS_MAX must be from 1 to 100000");
     const runTimeoutSec = integer("PAID_JOBS_RUN_TIMEOUT_SEC", 300);
     if (runTimeoutSec < 1 || runTimeoutSec > maxTimeoutSeconds - 30) throw new Error(`PAID_JOBS_RUN_TIMEOUT_SEC must be from 1 to ${maxTimeoutSeconds - 30} (30 s under XRPL_MAX_TIMEOUT_SECONDS, ${maxTimeoutSeconds} s, so the signed payment is still valid when the run ends)`);
+    const flowValue = value("PAID_JOBS_FLOW") ?? "authorization";
+    if (!(PAID_JOBS_FLOWS as readonly string[]).includes(flowValue)) throw new Error(`PAID_JOBS_FLOW must be authorization or upfront, got ${flowValue}`);
+    const flow = flowValue as PaidJobsFlow;
+    let refund: RefundConfig | undefined;
+    if (flow === "upfront") {
+      const refundRaw = value("PAID_JOBS_REFUND_URL");
+      if (refundRaw === undefined) throw new Error("PAID_JOBS_REFUND_URL is required with PAID_JOBS_FLOW=upfront: ChainAim's signer, which refunds a refused job, e.g. http://host.docker.internal:8780");
+      const keyEnv = value("PAID_JOBS_REFUND_KEY_ENV") ?? "SIGNER_REQUEST_KEY";
+      if (!/^[A-Z][A-Z0-9_]*$/.test(keyEnv)) throw new Error("PAID_JOBS_REFUND_KEY_ENV must name an environment variable (capitals, digits, _)");
+      const refundKey = value(keyEnv);
+      if (refundKey === undefined || refundKey.length < 24) throw new Error(`${keyEnv} (named by PAID_JOBS_REFUND_KEY_ENV) is required with PAID_JOBS_FLOW=upfront: the signer's request key, at least 24 characters`);
+      const refundTimeoutMs = integer("PAID_JOBS_REFUND_TIMEOUT_MS", 20_000);
+      if (refundTimeoutMs < 1000 || refundTimeoutMs > 120_000) throw new Error("PAID_JOBS_REFUND_TIMEOUT_MS must be from 1000 to 120000");
+      refund = { url: url("PAID_JOBS_REFUND_URL", refundRaw), key: refundKey, timeoutMs: refundTimeoutMs };
+    }
     paidJobs = { key: jobsKey, resultUrl: url("PAID_JOBS_RESULT_URL", resultRaw), ttlSec, clockSkewSec, max, runTimeoutSec };
+    if (refund) paidJobs = { ...paidJobs, flow, refund };
   }
   if (near) {
     for (const [name, p] of Object.entries(prices)) {

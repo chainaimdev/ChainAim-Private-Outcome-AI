@@ -98,6 +98,11 @@
  *   --attest-url URL            ca-attest, e.g. http://attest:8770 (default unset = off)
  *   --attest-timeout-ms N       one POST /verify (default 20000)
  *   --attest-keep N             job attestations kept in memory (default 500; oldest dropped first)
+ *   --pay-only-attested M       privateAI-design-39 ARCH-685: off | evidence (default: an estimate that said attested is
+ *                               void when a call lacks the gateway's evidence) | verified (needs --attest-url: /offers refuses
+ *                               a route that is not all attested models; the run step and the run-hold quote await
+ *                               ca-attest's verdict and answer 422 attestation_not_proven unless every call is verified)
+ *   --pay-only-attested-deadline-ms N  how long verified waits for the verdict (default 30000, 1000..240000)
  *   Job Evidence Receipts (privateAI-design-32 ARCH-613..616; off unless --receipts on, which needs --paid-jobs on): when
  *   a job is quoted, its dataset folder's files (inside allowedRoots; hidden folders such as _analyst left out) are hashed
  *   and held with it; when the paywall reports it released, a receipt (ids, hashes, amounts only) is signed with Ed25519,
@@ -177,14 +182,15 @@ import { RUN_LOG_MODES, RunLog, type RunLogMode } from "./run-log.ts";
 import { microsToUsd, quoteJob, USDC_DECIMALS } from "../../packages/crossask/src/cost.ts";
 import { JobStore, internalHandler, meterOf, paidJobsConfig, registerJob, type RunNotice } from "./jobs.ts";
 import { JobFeed, jobFeedConfig } from "./job-feed.ts";
-import { AttestClient, attestConfig } from "./attest.ts";
+import { AttestClient, attestConfig, payOnlyAttestedConfig, privacyProven } from "./attest.ts";
 import { calledModels, datasetFiles, datasetIdOf, receiptConfig, receiptConfigRemote, receiptOnRelease, ReceiptStore, routeOf, templateLabelOf } from "./receipt.ts";
 import type { HeldJob, ReceiptHold } from "./jobs.ts";
-import { ap2Answer, ap2Config, ap2ConfigRemote, ucpProfile, type Ap2Hold } from "./ap2.ts";
+import { ap2Answer, ap2Config, ap2ConfigRemote, JOB_EXTENSION, ucpProfile, type Ap2Hold } from "./ap2.ts";
 import { RemoteSigner, signerClientConfig, SignerRefused, SignerUnavailable, waitForSignerKeys } from "./signer-client.ts";
 import { SellerSigner, type SignedQuote, type SignerApi } from "../../packages/signer/src/index.ts";
-import { parseMandateRegistry } from "../../packages/ap2/src/index.ts";
-import { filesRoot } from "../../packages/receipt/src/index.ts";
+import { parseMandateRegistry, verifyMerchantAuthorization } from "../../packages/ap2/src/index.ts";
+import { limitsEqualBasis, parseLimits, pricedCalls, servedWithinLimits, withinLimits, type CheckoutLimits } from "../../packages/offer/src/index.ts";
+import { economicsOf, filesRoot } from "../../packages/receipt/src/index.ts";
 import { observe, observerConfig, ObserverError } from "../../packages/observer/src/index.ts";
 import { attestedRoute, crossaskBasis, folderSize, offerModels, OfferStore, offerConfig, withinBasis, type OfferRequest } from "./offers.ts";
 
@@ -241,6 +247,7 @@ const { values: flags } = parseArgs({
     "cost-model": { type: "string" },
     "offer-max-tokens": { type: "string" },
     "offer-size-tolerance-pct": { type: "string" },
+    "offer-limits-check": { type: "string" },
     "job-feed-url": { type: "string" },
     "job-feed-key-env": { type: "string" },
     "job-feed-timeout-ms": { type: "string" },
@@ -250,6 +257,8 @@ const { values: flags } = parseArgs({
     "attest-url": { type: "string" },
     "attest-timeout-ms": { type: "string" },
     "attest-keep": { type: "string" },
+    "pay-only-attested": { type: "string" },
+    "pay-only-attested-deadline-ms": { type: "string" },
     "attest-poll-ms": { type: "string", default: "3000" },
     "attest-poll-max": { type: "string", default: "40" },
     receipts: { type: "string" },
@@ -296,7 +305,7 @@ const MODE = flags.mode as "all" | "ui" | "api";
 if (!["all", "ui", "api"].includes(MODE)) throw new Error(`--mode must be all, ui or api, got ${flags.mode}`);
 if (MODE === "ui") {
   // The ui process runs nothing of the backend; a backend flag here would be silently unused, so it is refused.
-  for (const name of ["paid-jobs", "job-feed-url", "pricing-catalog", "dataset-root", "attest-url", "receipts", "ap2", "price-round", "signer", "signer-url", "ap2-mandate", "mandate-keys"] as const) {
+  for (const name of ["paid-jobs", "job-feed-url", "pricing-catalog", "dataset-root", "attest-url", "pay-only-attested", "pay-only-attested-deadline-ms", "receipts", "ap2", "price-round", "signer", "signer-url", "ap2-mandate", "mandate-keys"] as const) {
     if (flags[name] !== undefined) throw new Error(`--${name} belongs to the api process, not --mode ui (use --paid-jobs-page on for the tab 03 pay box)`);
   }
   if (!flags.api) throw new Error("--mode ui needs --api URL: the console API, e.g. http://127.0.0.1:8735");
@@ -349,6 +358,10 @@ const JOB_FEED = JOB_FEED_CONFIG ? new JobFeed(JOB_FEED_CONFIG) : undefined;
 const ATTEST_CONFIG = MODE === "ui" ? undefined : attestConfig(flags, PAID_JOBS !== undefined);
 // The finished result goes to near-watch as job_attested when the job feed is on (adminUI ARCH-501).
 const ATTEST = ATTEST_CONFIG ? new AttestClient(ATTEST_CONFIG, undefined, JOB_FEED ? (a) => JOB_FEED.attested(a) : undefined) : undefined;
+/** privateAI-design-39 ARCH-685: what a paid job must show about attestation before delivery; start-up stops here on a bad flag. */
+const PAY_ONLY_ATTESTED = MODE === "ui" ? undefined : payOnlyAttestedConfig(flags, ATTEST !== undefined);
+/** ARCH-687: the 422 body of a job whose privacy was not proven (verified mode); the paywall then delivers nothing. */
+const notProven = (summary: string, nothingPaid: boolean) => ({ error: `privacy was not proven for this job (NEAR AI attestation: ${summary})${nothingPaid ? ", so nothing can be paid" : ""}`, code: "attestation_not_proven", summary });
 const JOBS = PAID_JOBS ? new JobStore(PAID_JOBS.max, PAID_JOBS.ttlMs, Date.now, JOB_FEED ? (j) => JOB_FEED.expired(j.jobId) : undefined) : undefined;
 /**
  * privateAI-design-36 ARCH-663: --signer local (default) signs in this process with the keys of --ap2-key-env and
@@ -406,24 +419,61 @@ async function runOffer(jobId: string, notice?: RunNotice): Promise<{ status: nu
       return { status: 422, body: { error: "a checkout mandate is required (mandate_required): the buyer's agent signs one per payment", code: "mandate_required" } };
     }
   }
+  // privateAI-design-38 ARCH-682: what runs is what was signed. With a signed quote and --offer-limits-check on, the run's
+  // limits are read from the SIGNED checkout (verified with the signer's public key, equal to the held basis), before any
+  // model call; a held quote changed in memory, or one without limits, is 422 and nothing runs or settles.
+  let limits: CheckoutLimits | undefined;
+  if (o.ap2 && AP2_CONFIG && OFFER_CONFIG.limitsCheck) {
+    const ext = o.ap2.checkout[JOB_EXTENSION] as Record<string, unknown> | undefined;
+    if (ext?.limits === undefined) return { status: 422, body: { error: "the signed quote carries no limits (a signer before v2.1.0?), so the job cannot be held to what was signed; nothing ran", code: "limits_missing" } };
+    const sig = verifyMerchantAuthorization(o.ap2.merchantAuthorization, o.ap2.checkout, [AP2_CONFIG.signer.publicJwk]);
+    if (!sig.ok) return { status: 422, body: { error: `the held signed quote does not verify with ChainAim's signer key (${sig.code}); nothing ran`, code: "limits_unsigned" } };
+    try { limits = parseLimits(ext.limits); }
+    catch (e) { return { status: 422, body: { error: `the signed limits cannot be read (${(e as Error).message}); nothing ran`, code: "limits_unsigned" } }; }
+    const differs = limitsEqualBasis(limits, o.basis);
+    if (differs) return { status: 422, body: { error: `the held basis is not the signed limits (${differs}); nothing ran`, code: "limits_mismatch" } };
+  }
   const { config, error } = readDataConfig();
   if (!config) return { status: 422, body: { error: `the job cannot run: ${error}` } };
   let now;
   try { now = await folderSize(o.request.folder, (n) => usableName(n, config), config.maxFiles); }
   catch (e) { return { status: 422, body: { error: `the folder cannot be read: ${(e as Error).message}` } }; }
-  const grown = withinBasis(o.basis, now, OFFER_CONFIG.tolerancePct);
+  const grown = limits ? withinLimits(limits, now) : withinBasis(o.basis, now, OFFER_CONFIG.tolerancePct);
   if (grown) return { status: 409, body: { error: grown } };
-  const r = o.request, bs = o.basis;
+  // Every limit of the run from the signed limits when there are some (equal to the held basis, checked above).
+  const r = o.request, bs = limits ?? o.basis;
   let out;
   try {
-    out = await crossAsk({ folder: r.folder, question: r.question, model: r.model, answerModel: r.answerModel, phrase: r.phrase, sqlRetries: bs.sqlRetries, answerMaxRows: bs.answerMaxRows, maxPromptChars: bs.maxPromptChars, answerMaxPromptChars: bs.answerMaxPromptChars, retryErrorMaxChars: CROSSASK_ERROR_CHARS, sql: r.sql, checkSmallNumbers: CHECK_SMALL },
+    out = await crossAsk({ folder: r.folder, question: r.question, model: limits?.model ?? r.model, answerModel: limits?.answerModel ?? r.answerModel, phrase: bs.phrase, sqlRetries: bs.sqlRetries, answerMaxRows: bs.answerMaxRows, maxPromptChars: bs.maxPromptChars, answerMaxPromptChars: bs.answerMaxPromptChars, retryErrorMaxChars: CROSSASK_ERROR_CHARS, sql: r.sql, checkSmallNumbers: CHECK_SMALL },
       { analyst: analystClient(ANALYST, CROSSASK_TIMEOUT_MS), chat: gatewayChat({ url: GATEWAY, key: KEY, timeoutMs: CROSSASK_TIMEOUT_MS, maxTokens: bs.maxTokens }), ...(JOB_FEED ? { clock: () => performance.now() } : {}) });
   } catch (e) { return { status: 422, body: { error: `the job did not run: ${(e as Error).message}` } }; }
   if (out.error || !out.result) return { status: 422, body: { error: "the job did not produce a result (run it unpaid to see why)" } };
-  const priced = (bs.userSql ? 0 : 1 + bs.sqlRetries) + (bs.phrase === "llm" ? 1 : 0);
-  if (out.served.length > priced) return { status: 409, body: { error: `the job made ${out.served.length} model calls, more than the ${priced} estimated` } };
+  if (limits) {
+    // ARCH-682 after the run: the signed call count, the signed models (the catalog id the meter prices by), max_tokens per call.
+    const outside = servedWithinLimits(limits, out.served.map((s) => ({ model: s.model, completionTokens: s.usage?.completionTokens })));
+    if (outside) {
+      console.log(JSON.stringify({ ts: new Date().toISOString(), route: "offer", event: "offer_outside_limits", offerId: jobId, calls: out.served.length }));
+      return { status: 409, body: { error: outside, code: "outside_limits" } };
+    }
+  } else {
+    const priced = pricedCalls(o.basis);
+    if (out.served.length > priced) return { status: 409, body: { error: `the job made ${out.served.length} model calls, more than the ${priced} estimated` } };
+  }
+  // privateAI-design-39 ARCH-688: the attestation rule is the one SIGNED into the offer's limits (a flag changed between the
+  // estimate and the run cannot weaken a paid offer); an offer without a signed mode runs under the console's flag.
+  const attestMode = limits?.attestation ?? PAY_ONLY_ATTESTED?.mode;
   // An estimate that promised an attested route (the buyer's policy may have paid for that) is void when a call lacks the evidence.
-  if (o.attested && !out.served.every((s) => s.attest !== undefined)) return { status: 422, body: { error: "the job ran on a route without NEAR AI attestation evidence, though the estimate said attested" } };
+  if (attestMode === "evidence" && o.attested && !out.served.every((s) => s.attest !== undefined)) return { status: 422, body: { error: "the job ran on a route without NEAR AI attestation evidence, though the estimate said attested" } };
+  // privateAI-design-39 ARCH-687: verified = ca-attest's verdict before the 200; not proven = 422, so the paywall delivers nothing.
+  if (attestMode === "verified") {
+    // Signed verified but this console now runs without --attest-url: nothing can prove it, so it is not proven.
+    const a = ATTEST ? await ATTEST.verifyNow(jobId, out.served, PAY_ONLY_ATTESTED!.deadlineMs) : undefined;
+    if (!a || !privacyProven(a, out.served)) {
+      const summary = a?.summary ?? "unavailable";
+      console.log(JSON.stringify({ ts: new Date().toISOString(), route: "offer", event: "attestation_not_proven", offerId: jobId, summary, calls: out.served.length }));
+      return { status: 422, body: notProven(summary, false) };
+    }
+  }
   let metered;
   try { metered = quoteJob(meterOf(out.served), PAID_JOBS.prices, PAID_JOBS.fees); }
   catch (e) { return { status: 422, body: { error: `the job's calls could not be metered: ${(e as Error).message}` } }; }
@@ -438,7 +488,10 @@ async function runOffer(jobId: string, notice?: RunNotice): Promise<{ status: nu
       network: o.network, quoteId: jobId, route: routeOf(calledModels(r, out.sentToModel)), datasetId: datasetIdOf(r.datasetId, r.folder),
       ...(templateLabelOf(r.templateLabel) ? { templateLabel: templateLabelOf(r.templateLabel) } : {}), files, sql: out.sql,
       priceUsd: o.quote.totalUsd, actualUsd: metered.totalUsd,
-      quoteBasis: { pricing: "estimate-first", phrase: bs.phrase, userSql: bs.userSql, sqlRetries: bs.sqlRetries, answerMaxRows: bs.answerMaxRows, maxPromptChars: bs.maxPromptChars, maxTokens: bs.maxTokens, files: bs.files, totalBytes: bs.totalBytes, calls: out.served.length },
+      // privateAI-design-40 ARCH-690: paid price vs the metered cost parts (an overrun is ChainAim's, shown as absorbed).
+      economics: economicsOf(o.quote.totalUsd, metered.totalUsd, metered.breakdown),
+      // ARCH-682 step 7: with signed limits, their numeric and flag members (verify-receipt checks them against the quote).
+      quoteBasis: { pricing: "estimate-first", phrase: bs.phrase, userSql: bs.userSql, sqlRetries: bs.sqlRetries, answerMaxRows: bs.answerMaxRows, maxPromptChars: bs.maxPromptChars, maxTokens: bs.maxTokens, files: bs.files, totalBytes: bs.totalBytes, ...(limits ? { answerMaxPromptChars: limits.answerMaxPromptChars, sizeTolerancePct: limits.sizeTolerancePct } : {}), calls: out.served.length },
     };
   }
   const { timings: _timings, ...result } = out;
@@ -447,7 +500,9 @@ async function runOffer(jobId: string, notice?: RunNotice): Promise<{ status: nu
   OFFERS!.drop(jobId);
   // The feed: each step at its metered cost; the total is the estimate the buyer paid (near-watch reconciles on it).
   JOB_FEED?.quoted({ jobId, network: o.network, expiresAt: o.expiresAt, out, quote: { ...metered, totalUsd: o.quote.totalUsd, amount: o.amount }, ...(o.ap2 ? { ap2: { kid: o.ap2.kid, merchantAuthSha256: o.ap2.merchantAuthSha256 } } : {}) });
-  ATTEST?.start(jobId, out.served);
+  // ARCH-687: in verified mode the verdict is already stored; the feed gets it now that the job is quoted.
+  if (attestMode === "verified") ATTEST!.announce(jobId);
+  else ATTEST?.start(jobId, out.served);
   console.log(JSON.stringify({ ts: new Date().toISOString(), route: "offer", event: "offer_ran", offerId: jobId, calls: out.served.length, priceUsd: o.quote.totalUsd, actualUsd: metered.totalUsd }));
   return { status: 200, body: { jobId, result } };
 }
@@ -985,7 +1040,9 @@ createServer(async (req, res) => {
       const quote = RECEIPTS.getQuote(url.pathname.split("/")[2]);
       // ARCH-668: and the checkout mandate the receipt records, so verify-receipt re-checks the buyer's signature too.
       const mandateToken = RECEIPTS.getMandate(url.pathname.split("/")[2]);
-      return dataJson(res, 200, { receipt, publicKeyPem: RECEIPTS.publicKeyPem(), ...(quote ? { ap2: quote } : {}), ...(mandateToken ? { mandate: mandateToken } : {}) });
+      // privateAI-design-40 ARCH-692: and the attestation bundle the receipt's evidenceBundleSha256 commits to.
+      const attestation = RECEIPTS.getAttestation(url.pathname.split("/")[2]);
+      return dataJson(res, 200, { receipt, publicKeyPem: RECEIPTS.publicKeyPem(), ...(quote ? { ap2: quote } : {}), ...(mandateToken ? { mandate: mandateToken } : {}), ...(attestation ? { attestation } : {}) });
     }
     // ARCH-650: what anyone reading NEAR learns about this job, from public RPC (no key; only the transaction hash and
     // the payer account, both already public, are sent).
@@ -1032,6 +1089,8 @@ createServer(async (req, res) => {
         // ARCH-662: priced by ChainAim's signer from these sizes and limits, never by this process's own arithmetic.
         quote = await SIGNER!.price({ kind: "offer", basis });
       } catch (e) { return dataJson(res, e instanceof SignerUnavailable ? 502 : 422, { error: `no price for this job, so nothing can be paid: ${(e as Error).message}` }); }
+      // privateAI-design-39 ARCH-687: this console sells only attested private inference; refused before the paywall is asked.
+      if (PAY_ONLY_ATTESTED?.mode === "verified" && !attestedRoute(basis, PAID_JOBS.attestable)) return dataJson(res, 422, { error: "this job's models are not all NEAR AI attested models, and this console sells only attested private inference (--pay-only-attested verified), so nothing can be paid", code: "route_not_attested" });
       const offerId = JOBS.newJobId();
       const expiresAt = JOBS.expiryFromNow();
       let offer;
@@ -1041,7 +1100,7 @@ createServer(async (req, res) => {
       const route = routeOf(offerModels(basis));
       let ap2Hold: Ap2Hold | undefined;
       if (AP2_CONFIG) {
-        try { ap2Hold = holdOf(await SIGNER!.signQuote({ jobId: offerId, expiresAt, offer, pricing: { kind: "offer", basis }, route, datasetId: datasetIdOf(b.datasetId, folder), mode: "estimate-first" })); }
+        try { ap2Hold = holdOf(await SIGNER!.signQuote({ jobId: offerId, expiresAt, offer, pricing: { kind: "offer", basis }, route, datasetId: datasetIdOf(b.datasetId, folder), mode: "estimate-first", sizeTolerancePct: OFFER_CONFIG.tolerancePct, ...(PAY_ONLY_ATTESTED ? { attestation: PAY_ONLY_ATTESTED.mode } : {}) })); }
         catch (e) { return dataJson(res, signFailStatus(e), { error: `the estimate could not be signed, so nothing can be paid: ${(e as Error).message}` }); }
       }
       const attested = attestedRoute(basis, PAID_JOBS.attestable);
@@ -1075,6 +1134,15 @@ createServer(async (req, res) => {
       }
       // A job that did not produce a result is not sold (the free /crossask shows why).
       if (out.error || !out.result) return dataJson(res, 422, { error: "the job did not produce a result, so nothing can be paid; run it unpaid to see why" });
+      // privateAI-design-39 ARCH-687: verified = ca-attest's verdict before anything is priced or asked for (nothing paid yet).
+      const jobId = JOBS.newJobId();
+      if (PAY_ONLY_ATTESTED?.mode === "verified") {
+        const a = await ATTEST!.verifyNow(jobId, out.served, PAY_ONLY_ATTESTED.deadlineMs);
+        if (!privacyProven(a, out.served)) {
+          console.log(JSON.stringify({ ts: new Date().toISOString(), route: "paid-job", event: "attestation_not_proven", jobId, summary: a.summary, calls: out.served.length }));
+          return dataJson(res, 422, notProven(a.summary, true));
+        }
+      }
       let quote;
       const meter = meterOf(out.served);
       // ARCH-662: the signer prices the metered calls (model ids and token counts only).
@@ -1095,7 +1163,6 @@ createServer(async (req, res) => {
           return dataJson(res, 422, { error: `no receipt can be made, so nothing can be paid: ${(e as Error).message}` });
         }
       }
-      const jobId = JOBS.newJobId();
       const expiresAt = JOBS.expiryFromNow();
       let offer;
       try { offer = await registerJob(PAYWALL, PAID_JOBS.key, { jobId, amount: quote.amount, expiresAt }); }
@@ -1109,6 +1176,8 @@ createServer(async (req, res) => {
         network: offer.network, quoteId: jobId, route, datasetId: datasetIdOf(b.datasetId, resolvedFolder),
         ...(templateLabelOf(b.templateLabel) ? { templateLabel: templateLabelOf(b.templateLabel) } : {}), files: receiptFiles, sql: out.sql as string,
         priceUsd: quote.totalUsd, actualUsd: quote.totalUsd,
+        // ARCH-690: priced from its own meter, so no overrun by construction.
+        economics: economicsOf(quote.totalUsd, quote.totalUsd, quote.breakdown),
         quoteBasis: { pricing: "after", phrase, userSql: typeof b.sql === "string" && b.sql.trim() !== "", sqlRetries: CROSSASK_RETRIES, answerMaxRows: CROSSASK_ROWS, maxPromptChars: CROSSASK_MAX_PROMPT, calls: out.served.length },
       } : undefined;
       // ARCH-628: the quote as a signed UCP checkout, only with --ap2 on. A quote that cannot be signed is not sold.
@@ -1123,8 +1192,10 @@ createServer(async (req, res) => {
       }
       JOBS.hold({ jobId, result, amount: quote.amount, breakdown: quote.breakdown, expiresAt, ...(receiptHold ? { receipt: receiptHold } : {}), ...(ap2Hold ? { ap2: ap2Hold } : {}) });
       JOB_FEED?.quoted({ jobId, network: offer.network, expiresAt, out, quote, ...(ap2Hold ? { ap2: { kid: ap2Hold.kid, merchantAuthSha256: ap2Hold.merchantAuthSha256 } } : {}) });
-      // ARCH-411: in the background; the quote below is returned without waiting for it.
-      ATTEST?.start(jobId, out.served);
+      // ARCH-411: in the background; the quote below is returned without waiting for it. ARCH-687: in verified mode the
+      // verdict was awaited above and is stored; the feed gets it now that the job is quoted.
+      if (PAY_ONLY_ATTESTED?.mode === "verified") ATTEST!.announce(jobId);
+      else ATTEST?.start(jobId, out.served);
       // Ids and amounts only.
       console.log(JSON.stringify({ ts: new Date().toISOString(), route: "paid-job", event: "job_quoted", jobId, amount: quote.amount, calls: quote.breakdown.calls.length }));
       // route / attested (privateAI-design-32 ARCH-620): what the buyer's spending policy checks. attested = every model
@@ -1292,6 +1363,7 @@ createServer(async (req, res) => {
   if (MODE === "api") console.log(`[test-console] api mode: listening on ${flags.bind}:${PORT}; hosts ${ALLOWED_HOSTS.join(",")}; ledger ${LEDGER_SOURCE}`);
   if (AGENT_SERVICE) console.log(`[test-console] agent mode on: /agent/config and /agent/crossask relayed to ${AGENT_SERVICE} (up to ${AGENT_FORWARD_TIMEOUT_MS / 1000} s per run)`);
   if (ATTEST_CONFIG) console.log(`[test-console] model attestation on: ${ATTEST_CONFIG.url}/verify after each quoted job (GET /jobs/<id>/attestation)`);
+  if (PAY_ONLY_ATTESTED?.mode === "verified") console.log(`[test-console] pay only for attested private inference: every NEAR AI call verified by ca-attest within ${PAY_ONLY_ATTESTED.deadlineMs} ms before delivery, else 422 attestation_not_proven (the paywall's PAID_JOBS_RUN_TIMEOUT_SEC must cover the run plus this wait)`);
   console.log(`[test-console] run log: ${RUN_LOG.opt.mode}${RUN_LOG.opt.mode === "off" ? "" : ` -> ${RUN_LOG.opt.dir} (keep ${RUN_LOG.opt.keepDays} days${RUN_LOG.opt.mode === "full" ? `, up to ${RUN_LOG.opt.maxRows} rows per run` : ""})`}`);
   console.log(`[test-console] http://127.0.0.1:${PORT}  default model: ${DEFAULT_MODEL}${NEAR_WALLET ? `  NEAR wallet: ${NEAR_WALLET}` : ""}`);
   // The internal listener for the paywall (ARCH-105), only with --paid-jobs on; the key is never shown.

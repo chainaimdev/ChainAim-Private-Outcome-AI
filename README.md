@@ -60,23 +60,29 @@ receipt and a settlement on NEAR.
 Needs only Node.js 22.22 or later and this repository (no `npm install`, no account, no key). Run from the repository root.
 
 ```powershell
-# 1. A real paid job, a two-sided AP2 deal (testnet, 2026-11-13: tenant t01's AI agent paid 0.02 USDC for "Biggest
-#    payments out"): its signed receipt, checked offline against the pinned public key (config/receipt-public-key.pem),
-#    with ChainAim's AP2 signed quote (config/ap2-public-key.jwk.json) and the agent's checkout mandate it points at
-#    (config/ap2-mandate-keys.json: the tenants' public keys).
-node scripts/verify-receipt.ts --file docs/judge/sample-receipt-2026-11-13T0547Z.json --result none
-#    expected last line: OK      receipt valid: signed by the pinned key d27d1e9f..., settlement signed too, signed quote matches, checkout mandate matches
+# 1. A real paid job, v2.1.0 (testnet, 2026-11-13 17:16Z: tenant t01's AI agent paid 0.02 USDC BEFORE the work for
+#    "Biggest payments out"; the result was released only after ca-attest verified the NEAR AI call): its signed receipt,
+#    checked offline against the pinned public key (config/receipt-public-key.pem), with ChainAim's AP2 signed quote and
+#    its signed limits (config/ap2-public-key.jwk.json), the agent's checkout mandate (config/ap2-mandate-keys.json: the
+#    tenants' public keys), the money trail and the attestation bundle the receipt's hash commits to.
+node scripts/verify-receipt.ts --file docs/judge/sample-receipt-2026-11-13T1716Z.json --result none
+#    expected last three lines:
+#    OK      receipt valid: signed by the pinned key d27d1e9f..., settlement signed too, signed quote matches, checkout mandate matches, signed limits match
+#    OK      money trail: paid 0.020000 USDC (tx HehY...) · NEAR AI cost 0.000445 · gas 0.002000 · cost 0.002445 · margin 0.017555 · overrun absorbed 0.000000 (costs at ChainAim's catalog prices)
+#    OK      attestation bundle matches evidenceBundleSha256 (1/1 NEAR AI calls verified)
 
 # 2. The same job's payment, read from NEAR the way anyone can: who paid, how much and when, and that the content is not there.
-node scripts/observe-receipt.ts --file docs/judge/sample-receipt-2026-11-13T0547Z.json
-#    expected last line: OK      the chain shows this receipt's payment (0.02, as the receipt's price for job 8314afbf...)
+node scripts/observe-receipt.ts --file docs/judge/sample-receipt-2026-11-13T1716Z.json
+#    expected last line: OK      the chain shows this receipt's payment (0.02, as the receipt's price for job b277f065...)
 
-# 3. The masking, pricing, receipt, AP2, signer, mandate and observer tests (no service needed; 481 pass on 2026-11-13).
+# 3. The masking, pricing, receipt, AP2, signer, mandate and observer tests (no service needed; 534 pass on 2026-11-13, v2.1.0).
 node --test "packages/receipt/test/*.test.ts" "packages/ap2/test/*.test.ts" "packages/offer/test/*.test.ts" "packages/observer/test/*.test.ts" "packages/signer/test/*.test.ts" "services/signer/test/*.test.ts" "test-console/test/*.test.ts" "services/gateway/test/*.test.ts"
 ```
 
-The demo scenes (a paid outcome; the agent refusing a route that is not attested) and the 1-minute video script:
-[docs/judge/demo-script-2026-11-13T0530Z.md](docs/judge/demo-script-2026-11-13T0530Z.md).
+The demo scenes (a paid outcome, paid before the work; privacy not proven, so refused and refunded on NEAR; the agent
+refusing a route that is not attested) and the 1-minute video script:
+[docs/judge/demo-script-2026-11-13T1730Z.md](docs/judge/demo-script-2026-11-13T1730Z.md). Earlier samples and scripts:
+docs/judge/older/ (the 0547Z receipt still verifies, without a money trail).
 
 `--result none`: the released result (the answer) is not published; with it, step 1 also checks the receipt's result
 hash. The sample receipt names the dataset `smb-erp-fin` and the template "Biggest payments out": the demo ERPNext books in

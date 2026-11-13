@@ -69,6 +69,8 @@ export function parseFrame(frame: string): { type: string; data: Record<string, 
 const CHECK: Record<string, (c: { limit: string; value: string }) => string> = {
   not_expired: () => "quote still valid", attested_route: () => "attested route", max_per_job: (c) => `at most ${c.limit} a job (quote ${c.value})`,
   daily_cap: (c) => `${c.limit} a day (with this job ${c.value})`, auto_approve: (c) => `pays by itself up to ${c.limit}`,
+  // privateAI-design-39 ARCH-688
+  require_attestation: (c) => `attestation ${c.limit} or stronger (signed: ${c.value})`,
 };
 
 /** The terminal line for one step, worded as tab 03's step list (actor tag first); undefined for released (shown as a table). */
@@ -97,6 +99,10 @@ export function stepLine(tenant: string, type: string, d: Record<string, unknown
     case "signed": return `${A} Payment signed by ${String(d.account)} (ChainAim's relayer pays the gas)`;
     case "settled": return `[NEAR] Settled on NEAR · transaction ${String(d.transaction)} (${nearblocks(String(d.network), String(d.transaction))})`;
     case "released": return undefined;
+    // privateAI-design-37 ARCH-677: paid upfront, the run was refused, ChainAim's signer refunded it.
+    // privateAI-design-39 ARCH-689: d.privacy = refused because NEAR AI attestation was not proven (ca-attest's summary).
+    case "refund_pending": return `[ChainAim] ${d.privacy ? `Refused: privacy not proven (${String(d.privacy)})` : "Run refused after the payment"}: refund pending (invoice ${String(d.invoiceId ?? "?")})`;
+    case "refunded": return `[ChainAim] ${d.privacy ? `Refused: privacy not proven (${String(d.privacy)}) -> refunded OK` : "Refunded OK"} (record signed by ChainAim, verified by the agent) · transaction ${String(d.refundTx)} (${nearblocks(String(d.network), String(d.refundTx))})`;
     case "receipt_verified": return `${A} Agent verified the receipt OK · signed by the pinned key ${String(d.keyId).slice(0, 8)}… · result, job and amount${d.settled ? " and transaction" : ""} match${d.settled ? "" : " (settlement not attached yet)"}`;
     case "receipt_failed": return `${A} Receipt check FAILED: ${String(d.reason)} (the payment stands)`;
     case "done": return "Done";

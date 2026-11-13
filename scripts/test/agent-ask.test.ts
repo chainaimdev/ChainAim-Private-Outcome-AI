@@ -135,6 +135,11 @@ describe("step C -AgentAsk: the run body is the page's", () => {
     assert.deepEqual(parseFrame('event: settled\ndata: {"transaction":"T"}'), { type: "settled", data: { transaction: "T" } });
     assert.equal(stepLine("t01", "quoted", { totalUsd: "0.010000", network: "near:testnet", payTo: "p.testnet" }), "[ChainAim] Quoted 0.01 USDC on near:testnet to p.testnet");
     assert.equal(stepLine("t03", "policy", { decision: "refuse", checks: [{ check: "max_per_job", limit: "0.005", value: "0.01", ok: false }] }), "[Agent t03] Spending policy: refused · at most 0.005 a job (quote 0.01) NO");
+    // privateAI-design-39 ARCH-689 / ARCH-688: a refund because privacy was not proven names it; the policy row for the signed mode.
+    assert.match(stepLine("t01", "refunded", { refundTx: "R1", network: "near:testnet", privacy: "unavailable" })!, /^\[ChainAim\] Refused: privacy not proven \(unavailable\) -> refunded OK \(record signed by ChainAim, verified by the agent\) · transaction R1 /);
+    assert.match(stepLine("t01", "refunded", { refundTx: "R1", network: "near:testnet" })!, /^\[ChainAim\] Refunded OK \(record signed/);
+    assert.match(stepLine("t01", "refund_pending", { invoiceId: "INV1", privacy: "unverified" })!, /^\[ChainAim\] Refused: privacy not proven \(unverified\): refund pending \(invoice INV1\)$/);
+    assert.equal(stepLine("t01", "policy", { decision: "refuse", checks: [{ check: "require_attestation", limit: "verified", value: "evidence", ok: false }] }), "[Agent t01] Spending policy: refused · attestation verified or stronger (signed: evidence) NO");
     assert.match(stepLine("t01", "receipt_verified", { keyId: "d27d1e9f17a0", settled: true })!, /^\[Agent t01\] Agent verified the receipt OK · signed by the pinned key d27d1e9f… · result, job and amount and transaction match$/);
     assert.equal(resultText(RESULT, 20), ["Answer:", "  Net cash flow was 742.25.", "Result (1 row(s)):", "  month    net_cash_flow", "  -------  -------------", "  2026-10  742.25       "].join("\n"));
   });

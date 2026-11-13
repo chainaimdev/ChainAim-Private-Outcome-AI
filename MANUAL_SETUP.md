@@ -555,3 +555,91 @@ line), and `config\ap2-mandate-keys.json` (public keys, committed) is what verif
 
 Optional, cloud signer (step 1c): docs/deploy/signer-cloud.md (Railway or AWS App Runner); then desk.json
 `"signer": { "mode": "separate", "url": "https://..." }`.
+
+## 2026-11-13 — Upfront pay and automatic refund (privateAI-design-37), paywall variables
+
+Nothing to do yet: the upfront flow is off by default (`PAID_JOBS_FLOW` unset = `authorization`, exactly as before), and
+up.ps1 / desk.ps1 do not pass it until ChainAim's signer can make refunds (design-37 step 1c, `-PaidFlow upfront`).
+The variables ca-paywall reads, only with `PAID_JOBS=on`:
+
+| Variable | Value | Notes |
+|---|---|---|
+| `PAID_JOBS_FLOW` | `authorization` (default) or `upfront` | upfront = the payment settles before any work; a refused job is refunded by the signer |
+| `PAID_JOBS_REFUND_URL` | the signer's base URL, e.g. `http://host.docker.internal:8780` | required with upfront |
+| `PAID_JOBS_REFUND_KEY_ENV` | name of the variable holding the signer request key; default `SIGNER_REQUEST_KEY` | the value must be at least 24 characters; never logged |
+| `PAID_JOBS_REFUND_TIMEOUT_MS` | default 20000 (1000..120000) | the wait for the signer's `POST /v1/refunds` |
+
+## 2026-11-13 — Upfront pay and automatic refund (privateAI-design-37), owner steps
+
+Built: ca-control-signer can now refund (`--refunds on`), and `desk.ps1 -All -PaidFlow upfront` turns the flow on. Without
+`-PaidFlow upfront` (or desk.json `paidJobs.flow`) everything runs exactly as before (authorization). One step at a time:
+
+1. The payTo account's key, for refunds only. Put the full-access key of the payTo account (`chainaim-payto-seller.testnet`,
+   the account the paywall is paid to) into `C:\CHAINAIM-SELLER-SECRETS\signer.env` as one line
+   `SELLER_NEAR_PRIVATE_KEY=ed25519:...`. `near account export-account ... using-private-key` PRINTS the key: run it where
+   nobody watches the screen and do not paste the output into a chat. Only ca-control-signer receives it (by name, for its
+   compose command only); `desk.ps1 -Planes` shows no data-plane container holding it.
+2. Gas money: keep at least 0.5 NEAR in the payTo account (each refund is one ft_transfer paid by it).
+   `desk.ps1 -Planes` prints `payTo wallet NEAR ok|low` on the signer line once the signer runs with refunds.
+3. `.\test-console\desk.ps1 -Test` — expect all terminal suites to pass (new: packages\near-refund).
+4. `.\test-console\desk.ps1 -All -AllSkipTests -PaidFlow upfront` — expect from up.ps1 `OK paid flow upfront: ...` and the
+   READY table. (To make it the default, desk.json `"paidJobs": { "flow": "upfront" }`.)
+5. Live check, tab 03, AI agent t01, estimate-first: a normal paid job shows `Settled on NEAR` BEFORE `Result released`
+   (the money moved before the run). For a refusal, design-39's deliberate refusal (or any 409/422 from the run) shows
+   `Settled on NEAR`, then `Refunded ✓` with the refund transaction; both transactions are visible on testnet.nearblocks.io.
+6. `.\test-console\desk.ps1 -Refunds` — the signer's refund ledger (ids, payer, amount, status). If a refund failed
+   (e.g. no NEAR for gas): fix the cause, then `.\test-console\desk.ps1 -Refunds -RefundRetry <invoiceId>`.
+
+Variables (names only; values never printed or written to the repository):
+
+| Variable | Where | What |
+|---|---|---|
+| `SELLER_NEAR_PRIVATE_KEY` | `C:\CHAINAIM-SELLER-SECRETS\signer.env` → ca-control-signer (`--refund-key-env`, default this name) | payTo account key, sends refunds |
+| `PAYWALL_SIGNER_KEY` | set by up.ps1 for ca-paywall only with `-PaidFlow upfront` (= the signer request key) | named by `PAID_JOBS_REFUND_KEY_ENV` |
+| `PAID_JOBS_FLOW`, `PAID_JOBS_REFUND_URL`, `PAID_JOBS_REFUND_KEY_ENV` | set by up.ps1 for ca-paywall with `-PaidFlow upfront` | see the earlier 2026-11-13 entry |
+
+The refund ledger lives on the Docker volume `chainaim-refunds` (`refunds.jsonl`, every line signed with the receipt key).
+Do not delete that volume while a refund is pending: it holds the signed refund transactions until they are final.
+
+## 2026-11-13 Pay only for attested private inference (privateAI-design-39, ARCH-685..689), owner steps
+
+Built: `desk.ps1 -All -PayOnlyAttested verified` makes the console wait for ca-attest's verdict before it delivers a paid
+job; a job whose NEAR AI calls are not all verified is refused (422 `attestation_not_proven`) and, with `-PaidFlow upfront`,
+refunded by ca-control-signer under the reason `attestation_not_proven`. The mode is signed into the offer's limits
+(`limits.attestation`), so the run follows what was signed. Without `-PayOnlyAttested` (or desk.json
+`paidJobs.payOnlyAttested`) the rule is `evidence`, exactly as before. Owner decision (design-39 section 6): a verdict still
+`pending` at the deadline = not proven = refused and refunded.
+
+Variables (names only):
+
+| Variable / flag | Where | What |
+|---|---|---|
+| `PAID_JOBS_RUN_TIMEOUT_SEC` | set by up.ps1 for ca-paywall only with `-PayOnlyAttested verified` | 300 (the console's `--crossask-timeout-sec`) + deadline seconds + 10; unset = 300 as before |
+| `--pay-only-attested off\|evidence\|verified` | console-api command (up.ps1 adds it only when not `evidence`) | the rule |
+| `--pay-only-attested-deadline-ms N` | console-api command, with `verified` (default 30000, 1000..240000) | how long the verdict is awaited |
+| desk.json `paidJobs.payOnlyAttested`, `paidJobs.payOnlyAttestedDeadlineMs` | `config/local/desk.json` (optional) | defaults for `-PayOnlyAttested` / `-PayOnlyAttestedDeadlineMs` |
+
+Tenant policy (optional, `rig/tenants/<id>/tenant.json` `policy.requireAttestation`: `off|evidence|verified`): the agent
+then pays only quotes whose SIGNED limits promise at least that rule. Absent = no check (as before).
+
+The live refused run (design-39 section 5), one step at a time:
+1. `.\test-console\desk.ps1 -All -AllSkipTests -PaidFlow upfront -PayOnlyAttested verified` — expect `OK pay only for
+   attested private inference: verified (...)` from up.ps1, and ca-attest in the READY table.
+2. Tab 03, AI agent t01, estimate-first, an attested model (nearai/...) for both query and answer: estimate it. The step list
+   shows `Quoted`. Do not pay yet.
+3. `.\test-console\desk.ps1 -StopService attest` — expect `OK ca-attest stopped`.
+4. Pay the estimate in tab 03. Expect `Settled on NEAR`, then after up to 30 s `Refused: privacy not proven (unavailable) →
+   refunded ✓` with the refund transaction (both on testnet.nearblocks.io).
+5. `.\test-console\desk.ps1 -StartService attest` — expect `OK ca-attest started`.
+6. `.\test-console\desk.ps1 -Refunds` — the ledger line for that invoice: status refunded, reason attestation_not_proven.
+A normal run (ca-attest up) in the same mode shows `Settled on NEAR` before `Result released`, and the receipt's
+attestation says verified (not pending).
+
+## 2026-11-13 v2.1.0 live check done (owner, desktop-6ncrq82)
+
+Designs 37-40 checked live on testnet with `.\test-console\desk.ps1 -All -AllSkipTests -PaidFlow upfront -PayOnlyAttested
+verified`: a normal paid job (paid before the work, result after ca-attest's verdict), and a refused job (ca-attest stopped
+with `-StopService attest`) refunded on NEAR about 17 s after the refusal. Remember `.\test-console\desk.ps1 -StartService
+attest` after such a run. Receipts downloaded from tab 03 from now on carry the attestation bundle, so `-VerifyReceipt`
+also re-hashes it ("OK attestation bundle matches ..."); receipts settled from now on name the flow in their settlement.
+The judge sample is docs/judge/sample-receipt-2026-11-13T1716Z.json.

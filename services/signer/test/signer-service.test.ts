@@ -71,7 +71,7 @@ test("ARCH-660 service: public keys without a request key; every signing route n
     assert.equal(price.status, 200);
     const q = await price.json();
     assert.match(q.amount, /^[1-9]\d*0000$/, "whole cents (AP2 totals)");
-    const signed = await post(`${svc.url}/v1/quotes`, { jobId: "0123456789abcdef0123456789abcdef", expiresAt: Date.now() + 600_000, offer: { network: "near:testnet", asset: "usdc.fakes.testnet", payTo: "chainaim-payto-seller.testnet", amount: q.amount }, pricing: { kind: "offer", basis: BASIS }, route: "nearai/deepseek-v4.1-flash", mode: "estimate-first" });
+    const signed = await post(`${svc.url}/v1/quotes`, { jobId: "0123456789abcdef0123456789abcdef", expiresAt: Date.now() + 600_000, offer: { network: "near:testnet", asset: "usdc.fakes.testnet", payTo: "chainaim-payto-seller.testnet", amount: q.amount }, pricing: { kind: "offer", basis: BASIS }, sizeTolerancePct: 10, route: "nearai/deepseek-v4.1-flash", mode: "estimate-first" });
     assert.equal(signed.status, 200);
     const sq = await signed.json();
     assert.match(sq.merchant_authorization, /^[A-Za-z0-9_-]+\.\.[A-Za-z0-9_-]+$/);
@@ -92,7 +92,7 @@ test("ARCH-661 service: a body carrying content is 400 naming the field; an amou
     const big = await post(`${svc.url}/v1/receipts`, { body: { rows: [[1, 2]] } });
     assert.equal(big.status, 400);
     const q = await (await post(`${svc.url}/v1/price`, { kind: "offer", basis: BASIS })).json();
-    const wrong = await post(`${svc.url}/v1/quotes`, { jobId: "0123456789abcdef0123456789abcdef", expiresAt: Date.now() + 600_000, offer: { network: "near:testnet", asset: "usdc.fakes.testnet", payTo: "p.testnet", amount: String(Number(q.amount) + 10_000) }, pricing: { kind: "offer", basis: BASIS }, route: "nearai/deepseek-v4.1-flash" });
+    const wrong = await post(`${svc.url}/v1/quotes`, { jobId: "0123456789abcdef0123456789abcdef", expiresAt: Date.now() + 600_000, offer: { network: "near:testnet", asset: "usdc.fakes.testnet", payTo: "p.testnet", amount: String(Number(q.amount) + 10_000) }, pricing: { kind: "offer", basis: BASIS }, sizeTolerancePct: 10, route: "nearai/deepseek-v4.1-flash" });
     assert.equal(wrong.status, 409);
   } finally { await svc.close(); }
 });
@@ -103,7 +103,7 @@ test("ARCH-667 service: a mandate verifies once (200), a replay or a wrong nonce
   try {
     const q = await (await post(`${svc.url}/v1/price`, { kind: "offer", basis: BASIS })).json();
     const jobId = "0123456789abcdef0123456789abcdef";
-    const sq = await (await post(`${svc.url}/v1/quotes`, { jobId, expiresAt: Date.now() + 600_000, offer: { network: "near:testnet", asset: "usdc.fakes.testnet", payTo: "p.testnet", amount: q.amount }, pricing: { kind: "offer", basis: BASIS }, route: "nearai/deepseek-v4.1-flash" })).json();
+    const sq = await (await post(`${svc.url}/v1/quotes`, { jobId, expiresAt: Date.now() + 600_000, offer: { network: "near:testnet", asset: "usdc.fakes.testnet", payTo: "p.testnet", amount: q.amount }, pricing: { kind: "offer", basis: BASIS }, sizeTolerancePct: 10, route: "nearai/deepseek-v4.1-flash" })).json();
     const ap2 = { checkout: sq.checkout, merchant_authorization: sq.merchant_authorization };
     const iat = Math.floor(Date.now() / 1000);
     const mandate = buildCheckoutMandate({ checkoutJwt: attachedJws(sq.merchant_authorization, sq.checkout), key: s.tenant, kid: publicJwkOf(s.tenant).kid, aud: "chainaim", nonce: "INV42", iat, exp: iat + 300 });

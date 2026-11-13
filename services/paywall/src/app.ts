@@ -24,6 +24,7 @@ import { JobBook, JobInvoices, jobIdOfPath, parseJob } from "./jobs.ts";
 import type { NearRail } from "./near/rail.ts";
 import { PAID_ROUTES, routesConfig } from "./routes.ts";
 import { createSink, type PaymentSink } from "./sink.ts";
+import { requestRefund, UpfrontBook, type RefundReason, type UpfrontPayment } from "./upfront.ts";
 
 /** The same limit as the gateway's default --max-body-bytes. */
 export const MAX_BODY_BYTES = 4 * 1024 * 1024;
@@ -160,6 +161,9 @@ export function createPaywall(config: PaywallConfig, deps: PaywallDeps = {}): Ho
   const paidJobs = config.paidJobs;
   const jobs = paidJobs ? new JobBook(paidJobs.max, paidJobs.ttlSec * 1000, deps.now) : undefined;
   const jobInvoices = paidJobs ? new JobInvoices(config.maxTimeoutSeconds * 1000, deps.now, deps.maxOpenInvoices) : undefined;
+  // privateAI-design-37 ARCH-671: with PAID_JOBS_FLOW=upfront the release is settled before its handler; undefined otherwise.
+  const refundSigner = paidJobs?.flow === "upfront" ? paidJobs.refund : undefined;
+  const upfront = refundSigner ? new UpfrontBook(config.maxTimeoutSeconds * 4000, deps.now, deps.maxOpenInvoices) : undefined;
   const pathOf = (transportContext: unknown): string | undefined => (transportContext as { request?: { path?: string } } | undefined)?.request?.path;
   server.onBeforeVerify(async (ctx) => {
     const m = mark();
@@ -209,6 +213,39 @@ export function createPaywall(config: PaywallConfig, deps: PaywallDeps = {}): Ho
   // ledger-watch's join key to the ledger payment and the buyer's trace, and is handed on without being awaited.
   server.onAfterSettle(async (ctx) => {
     const request = (ctx.transportContext as { request?: { method?: string; path?: string } } | undefined)?.request;
+    // ARCH-671: an upfront release settled before its handler is stored by invoice; it is released (and the console told)
+    // only after the handler's 200, and refunded after any other answer. The log line says which phase settled it.
+    const upfrontJob = upfront && ctx.phase === "before-handler" ? jobIdOfPath(request?.path) : undefined;
+    if (upfrontJob !== undefined) {
+      const invoiceId = (ctx.requirements.extra as { invoiceId?: unknown } | undefined)?.invoiceId;
+      const line = JSON.stringify({
+        ts: new Date().toISOString(),
+        event: "payment_settled",
+        route: `${request?.method ?? "?"} ${request?.path ?? "?"}`,
+        amount: ctx.requirements.amount,
+        asset: ctx.requirements.asset,
+        network: ctx.result.network,
+        payer: ctx.result.payer ?? null,
+        transaction: ctx.result.transaction,
+        ...(typeof invoiceId === "string" ? { invoiceId } : {}),
+        phase: "before-handler",
+      });
+      log(line);
+      sink?.send(line);
+      if (typeof invoiceId === "string") {
+        upfront!.put({
+          invoiceId,
+          jobId: upfrontJob,
+          transaction: ctx.result.transaction,
+          payer: ctx.result.payer ?? null,
+          network: ctx.result.network,
+          amount: ctx.requirements.amount,
+          asset: ctx.requirements.asset,
+          settledAt: (deps.now ?? Date.now)(),
+        });
+      }
+      return;
+    }
     const m = mark();
     const phases = m ? settledPhases(m, clock()) : undefined;
     const invoiceId = sink ? (ctx.requirements.extra as { invoiceId?: unknown } | undefined)?.invoiceId : undefined;
@@ -237,6 +274,8 @@ export function createPaywall(config: PaywallConfig, deps: PaywallDeps = {}): Ho
         network: ctx.result.network,
         payer: ctx.result.payer ?? null,
         ...(typeof jobInvoice === "string" ? { invoiceId: jobInvoice } : {}),
+        // privateAI-design-40 ARCH-691: which x402 flow moved the money (signed into the receipt's settlement).
+        flow: "authorization",
       });
     }
   });
@@ -262,6 +301,80 @@ export function createPaywall(config: PaywallConfig, deps: PaywallDeps = {}): Ho
     if (reason !== undefined) log(JSON.stringify({ ts: new Date().toISOString(), event: "job_release_notify_failed", jobId, reason }));
   }
 
+  // ARCH-672 safety net: @x402 cancels a payment whose handler threw or answered >= 400. An upfront settlement the handler
+  // did not close (it threw) is refunded here; one it closed is left alone (the signer is idempotent per invoice anyway).
+  if (upfront && refundSigner) {
+    server.onVerifiedPaymentCanceled(async (ctx) => {
+      const invoiceId = (ctx.requirements.extra as { invoiceId?: unknown } | undefined)?.invoiceId;
+      const paid = typeof invoiceId === "string" ? upfront.get(invoiceId) : undefined;
+      if (!paid || paid.outcome !== undefined) return;
+      const refund = await refundOf(paid, "canceled");
+      upfront.close(paid.invoiceId, refund.status);
+      jobs!.endPaying(paid.jobId);
+    });
+  }
+
+  /** Asks ChainAim's signer to refund an upfront payment, and logs the outcome with ids only. */
+  async function refundOf(paid: UpfrontPayment, reason: RefundReason) {
+    const refund = await requestRefund(refundSigner!, { invoiceId: paid.invoiceId, jobId: paid.jobId, paidTx: paid.transaction, network: paid.network, amountUnits: paid.amount, reason }, log);
+    log(
+      JSON.stringify({
+        ts: new Date().toISOString(),
+        event: "job_refund",
+        jobId: paid.jobId,
+        invoiceId: paid.invoiceId,
+        paidTx: paid.transaction,
+        status: refund.status,
+        reason,
+        ...(typeof refund.refundTx === "string" ? { refundTx: refund.refundTx } : {}),
+      }),
+    );
+    return refund;
+  }
+
+  /** ARCH-671: the upfront settlement this release request paid with (by the invoice its payment names), while still open. */
+  function paidOf(c: Context, jobId: string): UpfrontPayment | undefined {
+    if (!upfront) return undefined;
+    const invoiceId = invoiceIdOf(c.req.header("payment-signature"));
+    const paid = invoiceId === undefined ? undefined : upfront.get(invoiceId);
+    return paid && paid.jobId === jobId && paid.outcome === undefined ? paid : undefined;
+  }
+
+  /**
+   * The 200 of a release. Authorization flow: as before (the middleware settles it, then onAfterSettle releases). Upfront
+   * (ARCH-671): the money already settled, so the job is released here and the console told with the stored settlement.
+   */
+  function delivered(c: Context, jobId: string, result: unknown): Response {
+    const paid = paidOf(c, jobId);
+    if (paid) {
+      jobs!.markReleased(jobId);
+      upfront!.close(paid.invoiceId, "released");
+      void notifyReleased(jobId, { transaction: paid.transaction, network: paid.network, payer: paid.payer, invoiceId: paid.invoiceId, flow: "upfront" });
+    }
+    return c.json(result as object, 200);
+  }
+
+  /**
+   * Every refusal of a release (ARCH-672). Authorization flow: today's body, "...; you were not charged", nothing settles.
+   * Upfront: the payment already moved, so ChainAim's signer is asked for the refund before answering, and the body carries
+   * its refund record. began = this request holds the job's paying mark (false for a second payment refused with 409).
+   */
+  async function answerUnpaid(c: Context, jobId: string, status: 400 | 409 | 422 | 502, message: string, reason: RefundReason, began = true): Promise<Response> {
+    const paid = paidOf(c, jobId);
+    if (!paid) {
+      if (began) jobs!.endPaying(jobId);
+      return errorBody(c, status, `${message}; you were not charged`);
+    }
+    const refund = await refundOf(paid, reason);
+    upfront!.close(paid.invoiceId, refund.status);
+    if (began) jobs!.endPaying(jobId);
+    const said =
+      refund.status === "refunded" ? `was refunded in ${refund.refundTx}`
+      : refund.status === "refund_pending" ? `is being refunded (GET /v1/refunds/${paid.invoiceId})`
+      : `was not refunded automatically (${refund.reason ?? "refused"}); ChainAim's operator settles it by hand`;
+    return c.json({ error: { message: `${message}; your payment ${paid.transaction} ${said}`, type: status >= 500 ? "gateway_error" : "invalid_request_error", code: status }, refund }, status);
+  }
+
   /** The x-jobs-key header equals PAID_JOBS_KEY (constant time). */
   const jobsKeyOk = (c: Context): boolean => {
     const given = Buffer.from(c.req.header("x-jobs-key") ?? "", "utf8");
@@ -277,7 +390,7 @@ export function createPaywall(config: PaywallConfig, deps: PaywallDeps = {}): Ho
    */
   async function release(c: Context): Promise<Response> {
     const jobId = jobIdOfPath(c.req.path)!;
-    if (!jobs!.beginPaying(jobId)) return errorBody(c, 409, "this job is already being paid or was released; you were not charged");
+    if (!jobs!.beginPaying(jobId)) return answerUnpaid(c, jobId, 409, "this job is already being paid or was released", "already_paying", false);
     if (jobs!.isRun(jobId)) return runOffer(c, jobId);
     let held: { jobId?: unknown; result?: unknown };
     try {
@@ -289,10 +402,9 @@ export function createPaywall(config: PaywallConfig, deps: PaywallDeps = {}): Ho
       held = (await r.json()) as { jobId?: unknown; result?: unknown };
       if (held?.jobId !== jobId || held.result === undefined) throw new Error("not the job asked for");
     } catch {
-      jobs!.endPaying(jobId);
-      return errorBody(c, 502, "the job's result could not be read; you were not charged");
+      return answerUnpaid(c, jobId, 502, "the job's result could not be read", "bad_result");
     }
-    return c.json(held.result as object, 200);
+    return delivered(c, jobId, held.result);
   }
 
   /**
@@ -306,29 +418,30 @@ export function createPaywall(config: PaywallConfig, deps: PaywallDeps = {}): Ho
     const invoiceId = invoiceIdOf(c.req.header("payment-signature"));
     const mandate = c.req.header("x-ap2-checkout-mandate");
     if (mandate !== undefined && (mandate.length > MANDATE_HEADER_MAX || !/^[A-Za-z0-9_.~-]+$/.test(mandate))) {
-      jobs!.endPaying(jobId);
-      return errorBody(c, 400, `x-ap2-checkout-mandate must be an SD-JWT presentation of at most ${MANDATE_HEADER_MAX} characters; you were not charged`);
+      return answerUnpaid(c, jobId, 400, `x-ap2-checkout-mandate must be an SD-JWT presentation of at most ${MANDATE_HEADER_MAX} characters`, "bad_request");
     }
-    const notice = JSON.stringify({ ...(invoiceId ? { invoiceId } : {}), ...(mandate ? { checkoutMandate: mandate } : {}) });
+    // ARCH-671: with upfront, the run notice also names the settled payment (ids only).
+    const paid = paidOf(c, jobId);
+    const notice = JSON.stringify({ ...(invoiceId ? { invoiceId } : {}), ...(mandate ? { checkoutMandate: mandate } : {}), ...(paid ? { paidTx: paid.transaction, ...(paid.payer ? { payer: paid.payer } : {}) } : {}) });
     let r: Response;
     try {
       r = await fetch(`${paidJobs!.resultUrl}/internal/jobs/${jobId}/run`, { method: "POST", headers: { "x-jobs-key": paidJobs!.key, "content-type": "application/json" }, body: notice, signal: AbortSignal.timeout(timeoutMs) });
     } catch (e) {
-      jobs!.endPaying(jobId);
-      return errorBody(c, 502, (e as Error).name === "TimeoutError" ? `the job did not finish within ${timeoutMs / 1000} s; you were not charged` : "the console could not be reached to run the job; you were not charged");
+      const timedOut = (e as Error).name === "TimeoutError";
+      return answerUnpaid(c, jobId, 502, timedOut ? `the job did not finish within ${timeoutMs / 1000} s` : "the console could not be reached to run the job", timedOut ? "timeout" : "unreachable");
     }
-    let body: { jobId?: unknown; result?: unknown; error?: unknown } | null;
+    let body: { jobId?: unknown; result?: unknown; error?: unknown; code?: unknown } | null;
     try { body = (await r.json()) as typeof body; } catch { body = null; }
     if (r.status === 409 || r.status === 422) {
-      jobs!.endPaying(jobId);
       const why = typeof body?.error === "string" ? body.error : "the job could not be run as estimated";
-      return errorBody(c, r.status as 409 | 422, `${why}; you were not charged`);
+      // privateAI-design-39 ARCH-689: the console's 422 code attestation_not_proven (--pay-only-attested verified) is its own reason.
+      const reason: RefundReason = r.status === 409 ? "over_estimate" : body?.code === "attestation_not_proven" ? "attestation_not_proven" : /mandate|AP2/i.test(why) ? "mandate_refused" : "refused";
+      return answerUnpaid(c, jobId, r.status as 409 | 422, why, reason);
     }
     if (r.status !== 200 || body?.jobId !== jobId || body.result === undefined) {
-      jobs!.endPaying(jobId);
-      return errorBody(c, 502, "the job's result could not be read; you were not charged");
+      return answerUnpaid(c, jobId, 502, "the job's result could not be read", "bad_result");
     }
-    return c.json(body.result as object, 200);
+    return delivered(c, jobId, body.result);
   }
 
   /**
@@ -431,6 +544,24 @@ export function createPaywall(config: PaywallConfig, deps: PaywallDeps = {}): Ho
 
   for (const route of PAID_ROUTES) app.post(route.path, proxy);
   if (jobs) app.post("/v1/jobs/:id/release", release);
+  // ARCH-672: the refund record of an upfront release, from ChainAim's signer (no payment; ids and amounts only).
+  if (refundSigner) {
+    app.get("/v1/refunds/:invoiceId", async (c) => {
+      const invoiceId = c.req.param("invoiceId");
+      if (!/^[0-9A-F]{32}$/.test(invoiceId)) return errorBody(c, 404, "no refund for this invoice");
+      let r: Response;
+      try {
+        r = await fetch(`${refundSigner.url}/v1/refunds/${invoiceId}`, { headers: { "x-signer-key": refundSigner.key }, signal: AbortSignal.timeout(refundSigner.timeoutMs) });
+      } catch {
+        return errorBody(c, 502, "ChainAim's signer could not be reached; ask again later");
+      }
+      if (r.status === 404) { await r.body?.cancel(); return errorBody(c, 404, "no refund for this invoice"); }
+      let body: unknown;
+      try { body = await r.json(); } catch { body = undefined; }
+      if (r.status !== 200 || typeof body !== "object" || body === null) return errorBody(c, 502, "ChainAim's signer gave no refund record; ask again later");
+      return c.json(body as object, 200);
+    });
+  }
   app.get("/", (c) => c.html(ROOT_PAGE));
   app.get("/v1/models", proxy);
   app.get("/healthz", proxy);

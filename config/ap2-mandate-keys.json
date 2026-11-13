@@ -1,50 +1,59 @@
 {
-  "note": "Tenants' PUBLIC AP2 checkout mandate keys (privateAI-design-36 ARCH-666). Written by desk.ps1 -MandateKey; the private keys are only in the agent's env file. ca-control-signer and verify-receipt check mandates with these.",
-  "tenants": [
-    {
-      "tenant": "t01",
-      "accountId": "chainaim-buyer-seller.testnet",
-      "keys": [
-        {
-          "kid": "964b1199a73a9b22e6be8bc2e4b2ce26",
-          "kty": "EC",
-          "crv": "P-256",
-          "x": "Z3zd5656BRYtQc0MDNnudlwMBHlmzuu9h5tlfG55qf8",
-          "y": "IfwFMcEVgsKH92lCgLTxG5SLxeAVj2yxEeBkX_p1SDc",
-          "use": "sig",
-          "alg": "ES256"
-        }
-      ]
-    },
-    {
-      "tenant": "t02",
-      "accountId": "chainaim-t02-seller.testnet",
-      "keys": [
-        {
-          "kid": "c1bc880b8251c0061f118eff29231ee1",
-          "kty": "EC",
-          "crv": "P-256",
-          "x": "ew4tOsXA-GWLvmK1798phS9FvQDo52UuHB3NPvklTJM",
-          "y": "QQ_dtngHBr615ElJfoAV3s5CesnC0M5RlrwBq4MySMY",
-          "use": "sig",
-          "alg": "ES256"
-        }
-      ]
-    },
-    {
-      "tenant": "t03",
-      "accountId": "chainaim-t03-seller.testnet",
-      "keys": [
-        {
-          "kid": "d7590463d3b973d15f3eb755263c0a18",
-          "kty": "EC",
-          "crv": "P-256",
-          "x": "FBHTlV9Nt3ftK_9yj8HqsrL-6HTu4PAFYjRlhHgZa70",
-          "y": "4EIa-1p9_pNjw3B80HtGAIW20EX2DuDFGSxnHPdTYWw",
-          "use": "sig",
-          "alg": "ES256"
-        }
-      ]
-    }
-  ]
+    "note":  "Tenants\u0027 PUBLIC AP2 checkout mandate keys (privateAI-design-36 ARCH-666). Written by desk.ps1 -MandateKey; the private keys are only in the agent\u0027s env file. ca-control-signer and verify-receipt check mandates with these.",
+    "tenants":  [
+                    {
+                        "tenant":  "t01",
+                        "accountId":  "chainaim-buyer-seller.testnet",
+                        "keys":  [
+                                     {
+                                         "kid":  "a11b664a9da2395291eed23cdecba132",
+                                         "kty":  "EC",
+                                         "crv":  "P-256",
+                                         "x":  "9At_9e07kI5uR8KWf_MmukhI5NI7094gUAR5HvH64I0",
+                                         "y":  "WU9RgQaxfgFx0V-e5-CfMilSSmvN7TTZvYDI02VW2Oc",
+                                         "use":  "sig",
+                                         "alg":  "ES256"
+                                     },
+                                     {
+                                         "kid":  "964b1199a73a9b22e6be8bc2e4b2ce26",
+                                         "kty":  "EC",
+                                         "crv":  "P-256",
+                                         "x":  "Z3zd5656BRYtQc0MDNnudlwMBHlmzuu9h5tlfG55qf8",
+                                         "y":  "IfwFMcEVgsKH92lCgLTxG5SLxeAVj2yxEeBkX_p1SDc",
+                                         "use":  "sig",
+                                         "alg":  "ES256"
+                                     }
+                                 ]
+                    },
+                    {
+                        "tenant":  "t02",
+                        "accountId":  "chainaim-t02-seller.testnet",
+                        "keys":  [
+                                     {
+                                         "kid":  "c1bc880b8251c0061f118eff29231ee1",
+                                         "kty":  "EC",
+                                         "crv":  "P-256",
+                                         "x":  "ew4tOsXA-GWLvmK1798phS9FvQDo52UuHB3NPvklTJM",
+                                         "y":  "QQ_dtngHBr615ElJfoAV3s5CesnC0M5RlrwBq4MySMY",
+                                         "use":  "sig",
+                                         "alg":  "ES256"
+                                     }
+                                 ]
+                    },
+                    {
+                        "tenant":  "t03",
+                        "accountId":  "chainaim-t03-seller.testnet",
+                        "keys":  [
+                                     {
+                                         "kid":  "d7590463d3b973d15f3eb755263c0a18",
+                                         "kty":  "EC",
+                                         "crv":  "P-256",
+                                         "x":  "FBHTlV9Nt3ftK_9yj8HqsrL-6HTu4PAFYjRlhHgZa70",
+                                         "y":  "4EIa-1p9_pNjw3B80HtGAIW20EX2DuDFGSxnHPdTYWw",
+                                         "use":  "sig",
+                                         "alg":  "ES256"
+                                     }
+                                 ]
+                    }
+                ]
 }

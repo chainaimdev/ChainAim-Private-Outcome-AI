@@ -10,7 +10,7 @@ import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { after, before, beforeEach, describe, it } from "node:test";
 import { gatewayChat, parseAttestHeaders, type ChatReply } from "../../packages/crossask/src/index.ts";
-import { AttestClient, attestConfig, summarize, type JobAttestation } from "../console/attest.ts";
+import { AttestClient, attestConfig, payOnlyAttestedConfig, privacyProven, summarize, type JobAttestation } from "../console/attest.ts";
 
 const MODEL = "deepseek-ai/DeepSeek-V4.1-Flash-1017";
 const H1 = "1".repeat(64), H2 = "2".repeat(64);
@@ -174,5 +174,105 @@ describe("ARCH-411 AttestClient against a loopback ca-attest", () => {
     for (const id of ["a", "b", "c"]) { c.start(id, [attested(0)]); await c.idle(); }
     assert.equal(c.get("a"), undefined);
     assert.equal(c.get("c")?.summary, "verified");
+  });
+});
+
+describe("privateAI-design-39 ARCH-685 --pay-only-attested", () => {
+  it("ARCH-685: evidence by default; off / verified accepted; verified needs --attest-url; deadline 1000..240000", () => {
+    assert.deepEqual(payOnlyAttestedConfig({}, false), { mode: "evidence", deadlineMs: 30000 });
+    assert.deepEqual(payOnlyAttestedConfig({ "pay-only-attested": "off" }, false), { mode: "off", deadlineMs: 30000 });
+    assert.deepEqual(payOnlyAttestedConfig({ "pay-only-attested": "verified", "pay-only-attested-deadline-ms": "1000" }, true), { mode: "verified", deadlineMs: 1000 });
+    assert.throws(() => payOnlyAttestedConfig({ "pay-only-attested": "verified" }, false), /--pay-only-attested verified needs --attest-url/);
+    assert.throws(() => payOnlyAttestedConfig({ "pay-only-attested": "strict" }, true), /must be off, evidence or verified, got strict/);
+    for (const bad of ["999", "240001", "1.5", "x"]) assert.throws(() => payOnlyAttestedConfig({ "pay-only-attested-deadline-ms": bad }, true), /--pay-only-attested-deadline-ms must be a whole number from 1000 to 240000/, bad);
+  });
+});
+
+describe("privateAI-design-39 ARCH-686 AttestClient.verifyNow against a loopback ca-attest", () => {
+  let svc: Server;
+  let url = "";
+  let delayMs = 0;
+  let status: "verified" | "unverified" = "verified";
+  before(async () => {
+    svc = createServer(async (req, res) => {
+      let raw = "";
+      for await (const c of req) raw += c;
+      const calls = (JSON.parse(raw) as { calls: { chatId?: string; servedModel: string }[] }).calls;
+      await new Promise((r) => setTimeout(r, delayMs));
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ results: calls.map((c) => ({ chatId: c.chatId ?? null, servedModel: c.servedModel, status, reason: status === "verified" ? null : "signature mismatch", signatureKind: "provider_tee", signingAlgo: "ecdsa", signingAddress: "0xfe0071895500a9755c18044948ab4f4e1a7f337e", reportFetchedAt: "2026-11-13T10:00:00.000Z", tdx: true, gpu: true, signature: status === "verified", hashes: true, signedText: EV_TEXT, signatureHex: EV_SIG })) }));
+    });
+    url = await listen(svc);
+  });
+  after(() => close(svc));
+  beforeEach(() => { delayMs = 0; status = "verified"; });
+
+  const attested = (i: number): ChatReply => ({ text: `${MARKER} reply ${i}`, model: "nearai/deepseek-v4.1-flash", attest: { chatId: `chatcmpl-${i}`, servedModel: MODEL, requestSha256: H1, responseSha256: H2, calledAt: "2026-11-13T10:00:00.000Z" } });
+  const local: ChatReply = { text: `${MARKER} local`, model: "local/qwen2.5-3b" };
+
+  it("ARCH-686: verifyNow resolves the verdict, stores it and logs job_attested; onDone waits for announce()", async () => {
+    const lines: string[] = [];
+    const done: JobAttestation[] = [];
+    const c = new AttestClient({ url, timeoutMs: 3000, keep: 500 }, (l) => lines.push(l), (a) => done.push(a));
+    const a = await c.verifyNow("v1", [attested(0), attested(1)], 5000);
+    assert.equal(a.summary, "verified");
+    assert.equal(c.get("v1")?.summary, "verified", "stored: the receipt and GET /jobs/<id>/attestation read it");
+    assert.equal(lines.filter((l) => l.includes('"event":"job_attested"') && l.includes('"jobId":"v1"')).length, 1);
+    assert.equal(done.length, 0, "the job feed is told only once the job is quoted");
+    c.announce("v1");
+    assert.deepEqual(done.map((d) => [d.jobId, d.summary]), [["v1", "verified"]]);
+    status = "unverified";
+    assert.equal((await c.verifyNow("v2", [attested(0)], 5000)).summary, "unverified");
+  });
+
+  it("ARCH-686: job_attested logs durationMs, from asking ca-attest to its verdict (verifyNow and start)", async () => {
+    let clock = 1_000;
+    const lines: string[] = [];
+    const c = new AttestClient({ url, timeoutMs: 3000, keep: 500 }, (l) => lines.push(l), undefined, () => (clock += 250));
+    await c.verifyNow("d1", [attested(0)], 5000);
+    c.start("d2", [attested(1)]);
+    await c.idle();
+    const dur = (id: string) => JSON.parse(lines.find((l) => l.includes(`"jobId":"${id}"`) && l.includes('"event":"job_attested"'))!).durationMs;
+    // The injected clock moves 250 ms per read: the start read, the verdict's "at", then the log's own read.
+    assert.equal(dur("d1"), 500);
+    assert.equal(dur("d2"), 500);
+  });
+
+  it("ARCH-686: past the deadline verifyNow resolves pending without throwing; the late verdict is still stored and logged", async () => {
+    delayMs = 600;
+    const lines: string[] = [];
+    const c = new AttestClient({ url, timeoutMs: 3000, keep: 500 }, (l) => lines.push(l));
+    const t0 = Date.now();
+    const a = await c.verifyNow("late", [attested(0)], 100);
+    assert.ok(Date.now() - t0 < 500, "answered at the deadline, not when ca-attest did");
+    assert.equal(a.summary, "pending");
+    c.announce("late");
+    await c.idle();
+    assert.equal(c.get("late")?.summary, "verified", "the real verdict replaces pending (the job feed shows it)");
+    assert.ok(lines.some((l) => l.includes('"jobId":"late"') && l.includes('"summary":"verified"')));
+  });
+
+  it("ARCH-686: ca-attest down -> unavailable; start() is unchanged (still never awaited, onDone still called)", async () => {
+    const down = new AttestClient({ url: "http://127.0.0.1:1", timeoutMs: 3000, keep: 500 }, () => undefined);
+    assert.equal((await down.verifyNow("d1", [attested(0)], 5000)).summary, "unavailable");
+    const done: JobAttestation[] = [];
+    const c = new AttestClient({ url, timeoutMs: 3000, keep: 500 }, () => undefined, (x) => done.push(x));
+    c.start("s1", [attested(0)]);
+    assert.equal(c.get("s1")?.summary, "pending");
+    await c.idle();
+    assert.deepEqual(done.map((d) => d.summary), ["verified"]);
+  });
+
+  it("ARCH-687: privacyProven needs a verified verdict and evidence on every call (a mixed or empty job is not proven)", async () => {
+    const c = new AttestClient({ url, timeoutMs: 3000, keep: 500 }, () => undefined);
+    const all = [attested(0), attested(1)];
+    assert.equal(privacyProven(await c.verifyNow("p1", all, 5000), all), true);
+    const mixed = [local, attested(1)];
+    const m = await c.verifyNow("p2", mixed, 5000);
+    assert.equal(m.summary, "verified", "summarize ignores the local call");
+    assert.equal(privacyProven(m, mixed), false, "but a local call in the job means privacy is not proven");
+    assert.equal(privacyProven(await c.verifyNow("p3", [], 5000), []), false);
+    status = "unverified";
+    assert.equal(privacyProven(await c.verifyNow("p4", all, 5000), all), false);
   });
 });

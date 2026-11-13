@@ -287,5 +287,7 @@ export async function run(argv: string[], out: (s: string) => void = (s) => proc
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  run(process.argv.slice(2)).then((code) => process.exit(code), (e) => { console.error(`calibrate: ${(e as Error).stack ?? e}`); process.exit(2); });
+  // The exit code is SET and the process ends on its own: process.exit() while fetch's sockets are still closing trips a
+  // libuv assertion on Windows (src\win\async.c: !(handle->flags & UV_HANDLE_CLOSING), exit 3221226505).
+  run(process.argv.slice(2)).then((code) => { process.exitCode = code; }, (e) => { console.error(`calibrate: ${(e as Error).stack ?? e}`); process.exitCode = 2; });
 }

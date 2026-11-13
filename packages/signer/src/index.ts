@@ -29,8 +29,9 @@ import {
   type MandateKeyEntry,
   type PublicJwk,
 } from "../../ap2/src/index.ts";
-import { addSettlement, checkBody, keyIdOf, signReceipt, verifyReceipt, type ReceiptBody, type ReceiptSigner, type Settlement, type SignedReceipt } from "../../receipt/src/index.ts";
-import { checkBasis, quoteOffer, type CostModel, type OfferBasis } from "../../offer/src/index.ts";
+import { addSettlement, checkBody, ECONOMICS_FIELDS, keyIdOf, SETTLEMENT_FLOWS, SIGNED_USD6, signReceipt, USD6, verifyReceipt, type ReceiptBody, type ReceiptSigner, type Settlement, type SettlementFlow, type SignedReceipt } from "../../receipt/src/index.ts";
+import { ATTESTATION_MODES, checkBasis, LIMIT_FIELDS, limitsOf, parseLimits, quoteOffer, type AttestationMode, type CheckoutLimits, type CostModel, type OfferBasis } from "../../offer/src/index.ts";
+import type { RefundBook } from "./refund-book.ts";
 import { centsOfAmount, quoteJob, USDC_DECIMALS, type Fees, type JobQuote, type MeterLine, type ModelPrice, type PriceRound } from "../../crossask/src/cost.ts";
 
 // ---- UCP checkout of a paid job (moved here from test-console/console/ap2.ts: the signer builds what it signs) ---------
@@ -59,6 +60,8 @@ export type JobCheckoutInput = {
   datasetId?: string;
   filesRoot?: string;
   mode?: "estimate-first";
+  /** ARCH-680: the signed limits of an estimate-first offer (packages/offer limitsOf); none for a run-hold quote. */
+  limits?: CheckoutLimits;
 };
 
 /** The paid job as a UCP checkout (design-33 section 2). Throws when the amount is not whole cents or the offer differs. */
@@ -86,6 +89,7 @@ export function jobCheckout(i: JobCheckoutInput): Record<string, unknown> {
       ...(i.datasetId !== undefined ? { datasetId: i.datasetId } : {}),
       ...(i.filesRoot !== undefined ? { filesRoot: i.filesRoot } : {}),
       ...(i.mode !== undefined ? { mode: i.mode } : {}),
+      ...(i.limits !== undefined ? { limits: i.limits } : {}),
     },
   };
 }
@@ -181,11 +185,20 @@ export function parsePriceRequest(raw: unknown, path = "$"): PriceRequest {
   return fail(`${path}.kind`, "offer or metered");
 }
 
-export type QuoteRequest = { jobId: string; expiresAt: number; offer: JobOffer; pricing: PriceRequest; route: string; datasetId?: string; filesRoot?: string; mode?: "estimate-first" };
+/**
+ * sizeTolerancePct (ARCH-680): the console's --offer-size-tolerance-pct, signed into an offer's limits; required for an offer, absent for a metered job.
+ * attestation (privateAI-design-39 ARCH-688): the console's --pay-only-attested mode, signed into an offer's limits; absent for a metered job.
+ */
+export type QuoteRequest = { jobId: string; expiresAt: number; offer: JobOffer; pricing: PriceRequest; route: string; datasetId?: string; filesRoot?: string; mode?: "estimate-first"; sizeTolerancePct?: number; attestation?: AttestationMode };
 
 export function parseQuoteRequest(raw: unknown): QuoteRequest {
-  const o = onlyFields(raw, ["jobId", "expiresAt", "offer", "pricing", "route", "datasetId", "filesRoot", "mode"], "$");
+  const o = onlyFields(raw, ["jobId", "expiresAt", "offer", "pricing", "route", "datasetId", "filesRoot", "mode", "sizeTolerancePct", "attestation"], "$");
   const of = onlyFields(o.offer, ["network", "asset", "payTo", "amount"], "$.offer");
+  const pricing = parsePriceRequest(o.pricing, "$.pricing");
+  if (pricing.kind === "offer" && o.sizeTolerancePct === undefined) fail("$.sizeTolerancePct", "a whole number from 0 to 100 for an offer (it is signed into the limits)");
+  if (pricing.kind === "metered" && o.sizeTolerancePct !== undefined) fail("$.sizeTolerancePct", "absent for a metered job");
+  if (pricing.kind === "metered" && o.attestation !== undefined) fail("$.attestation", "absent for a metered job");
+  if (o.attestation !== undefined && !(ATTESTATION_MODES as readonly unknown[]).includes(o.attestation)) fail("$.attestation", ATTESTATION_MODES.join(", "));
   return {
     jobId: str(o.jobId, RE.jobId, "$.jobId", "32 lowercase hex characters"),
     expiresAt: int(o.expiresAt, "$.expiresAt", 1),
@@ -195,11 +208,13 @@ export function parseQuoteRequest(raw: unknown): QuoteRequest {
       payTo: str(of.payTo, RE.account, "$.offer.payTo", "a NEAR account id"),
       amount: str(of.amount, RE.amount, "$.offer.amount", "a positive whole number of USDC base units"),
     },
-    pricing: parsePriceRequest(o.pricing, "$.pricing"),
+    pricing,
     route: str(o.route, RE.route, "$.route", "the job's model route"),
     ...(o.datasetId !== undefined ? { datasetId: str(o.datasetId, RE.datasetId, "$.datasetId", "a dataset id") } : {}),
     ...(o.filesRoot !== undefined ? { filesRoot: str(o.filesRoot, RE.sha256, "$.filesRoot", "64 lowercase hex characters") } : {}),
     ...(o.mode !== undefined ? { mode: o.mode === "estimate-first" ? ("estimate-first" as const) : fail("$.mode", "estimate-first") } : {}),
+    ...(o.sizeTolerancePct !== undefined ? { sizeTolerancePct: int(o.sizeTolerancePct, "$.sizeTolerancePct", 0, 100) } : {}),
+    ...(o.attestation !== undefined ? { attestation: o.attestation as AttestationMode } : {}),
   };
 }
 
@@ -213,11 +228,18 @@ function parseAp2Quote(raw: unknown, path: string): Ap2Quote {
   if (typeof o.merchant_authorization !== "string" || o.merchant_authorization.length > 1024) fail(`${path}.merchant_authorization`, "the detached JWS");
   // Only the members jobCheckout writes: a checkout carrying anything else was not built by this signer.
   onlyFields(o.checkout, ["ucp", "id", "status", "currency", "line_items", "totals", "links", "expires_at", JOB_EXTENSION], `${path}.checkout`);
+  // ARCH-681: the job extension's members, and inside limits exactly the members limitsOf writes, with their types.
+  const ext = onlyFields(o.checkout[JOB_EXTENSION], ["network", "asset", "payTo", "amountUnits", "usdcDecimals", "datasetId", "filesRoot", "mode", "limits"], `${path}.checkout["${JOB_EXTENSION}"]`);
+  if (ext.limits !== undefined) {
+    const lp = `${path}.checkout["${JOB_EXTENSION}"].limits`;
+    onlyFields(ext.limits, LIMIT_FIELDS, lp);
+    try { parseLimits(ext.limits, lp); } catch (e) { throw new SignerInputError((e as Error).message); }
+  }
   return { checkout: o.checkout as Record<string, unknown>, merchant_authorization: o.merchant_authorization as string };
 }
 
 const RECEIPT_FIELDS = ["v", "receiptId", "jobId", "quoteId", "counterOf", "reduced", "route", "datasetId", "files", "filesRoot", "templateLabel", "sqlSha256", "resultSha256", "calls", "evidenceBundleSha256", "merchantAuthSha256", "mandate", "price", "createdAt"] as const;
-const QUOTE_BASIS_FIELDS = ["pricing", "phrase", "userSql", "sqlRetries", "answerMaxRows", "maxPromptChars", "maxTokens", "files", "totalBytes", "calls"] as const;
+const QUOTE_BASIS_FIELDS = ["pricing", "phrase", "userSql", "sqlRetries", "answerMaxRows", "maxPromptChars", "answerMaxPromptChars", "maxTokens", "files", "totalBytes", "sizeTolerancePct", "calls"] as const;
 const MANDATE_REF_FIELDS = ["sha256", "kid", "tenant", "accountId", "nonce"] as const;
 
 /** A receipt body checked against the allowlist, down to every file, call and price member, then by checkBody. */
@@ -244,7 +266,14 @@ export function parseReceiptBody(raw: unknown, path = "$.body"): ReceiptBody {
     if (x.zone !== undefined) str(x.zone, /^[\w.-]{1,64}$/, `${path}.calls[${i}].zone`, "a zone id");
     if (x.chatId !== undefined) str(x.chatId, /^[\w.:-]{1,200}$/, `${path}.calls[${i}].chatId`, "a provider chat id");
   });
-  const p = onlyFields(b.price, ["amountUnits", "usdcDecimals", "priceUsd", "quoteBasis", "actualUsd"], `${path}.price`);
+  const p = onlyFields(b.price, ["amountUnits", "usdcDecimals", "priceUsd", "quoteBasis", "actualUsd", "economics"], `${path}.price`);
+  // privateAI-design-40 ARCH-690: the money trail, amounts only; checkBody then checks that its numbers add up.
+  if (p.economics !== undefined) {
+    const e = onlyFields(p.economics, ECONOMICS_FIELDS, `${path}.price.economics`);
+    if (e.costBasis !== "catalog") fail(`${path}.price.economics.costBasis`, "catalog");
+    for (const k of ["nearAiCostUsd", "callFeesUsd", "analystUsd", "nearGasUsd", "costUsd", "overrunAbsorbedUsd"] as const) str(e[k], USD6, `${path}.price.economics.${k}`, "a USD amount with 6 decimals");
+    str(e.marginUsd, SIGNED_USD6, `${path}.price.economics.marginUsd`, "a signed USD amount with 6 decimals");
+  }
   const qb = onlyFields(p.quoteBasis, QUOTE_BASIS_FIELDS, `${path}.price.quoteBasis`);
   for (const [k, v] of Object.entries(qb)) {
     if (k === "pricing") str(v, /^(estimate-first|after)$/, `${path}.price.quoteBasis.pricing`, "estimate-first or after");
@@ -283,13 +312,15 @@ export function parseSettleRequest(raw: unknown): SettleRequest {
   if (sig.alg !== "ed25519") fail("$.receipt.sig.alg", "ed25519");
   str(sig.keyId, RE.keyId, "$.receipt.sig.keyId", "32 hex characters");
   str(sig.value, RE.b64, "$.receipt.sig.value", "base64");
-  const s = onlyFields(o.settlement, ["network", "transaction", "invoiceId", "payer", "settledAt"], "$.settlement");
+  const s = onlyFields(o.settlement, ["network", "transaction", "invoiceId", "payer", "settledAt", "flow"], "$.settlement");
   const settlement: Settlement = {
     network: str(s.network, RE.network, "$.settlement.network", "near:testnet or near:mainnet"),
     transaction: str(s.transaction, RE.tx, "$.settlement.transaction", "a NEAR transaction hash"),
     invoiceId: str(s.invoiceId, RE.invoice, "$.settlement.invoiceId", "the payment's invoice id"),
     payer: s.payer === null ? null : str(s.payer, RE.account, "$.settlement.payer", "a NEAR account id or null"),
     settledAt: str(s.settledAt, RE.iso, "$.settlement.settledAt", "an ISO 8601 UTC time"),
+    // privateAI-design-40 ARCH-691: which x402 flow moved the money (optional).
+    ...(s.flow !== undefined ? { flow: (SETTLEMENT_FLOWS as readonly unknown[]).includes(s.flow) ? (s.flow as SettlementFlow) : fail("$.settlement.flow", "authorization or upfront") } : {}),
   };
   return { receipt: { body: parseReceiptBody(r.body, "$.receipt.body"), sig: sig as SignedReceipt["sig"] }, settlement };
 }
@@ -313,7 +344,14 @@ export type MandateSettings = { registry: readonly MandateKeyEntry[]; aud: strin
  * ap2 / receipt: the two signing keys. ca-control-signer always has both; the console's in-process signer (--signer local,
  * one-process development) has the ones its flags turned on, and a request needing a missing one is refused (409).
  */
-export type SignerSettings = { ap2?: Ap2Signer; receipt?: ReceiptSigner; pricing: Pricing; termsUrl: string; mandates?: MandateSettings; now?: () => number };
+export type SignerSettings = {
+  ap2?: Ap2Signer; receipt?: ReceiptSigner; pricing: Pricing; termsUrl: string; mandates?: MandateSettings; now?: () => number;
+  /**
+   * privateAI-design-37 ARCH-674/675 (--refunds on): the persisted refund ledger. Accepted mandates and delivered receipts
+   * are recorded in it, a mandate nonce stays used across restarts, and a refunding/refunded job gets no receipt (I3).
+   */
+  refunds?: RefundBook;
+};
 
 export type SignedQuote = { quote: JobQuote } & Ap2Quote & { merchantAuthSha256: string; kid: string };
 export type MandateRef = { sha256: string; kid: string; tenant: string; accountId: string; nonce: string };
@@ -378,7 +416,13 @@ export class SellerSigner {
   signQuote(r: QuoteRequest): SignedQuote {
     const quote = this.price(r.pricing);
     if (r.offer.amount !== quote.amount) throw new SignerScopeError("the offer's amount is not the price this signer computed for the job");
-    const checkout = jobCheckout({ jobId: r.jobId, route: r.route, amount: quote.amount, expiresAt: r.expiresAt, offer: r.offer, termsUrl: this.s.termsUrl, ...(r.datasetId ? { datasetId: r.datasetId } : {}), ...(r.filesRoot ? { filesRoot: r.filesRoot } : {}), ...(r.mode ? { mode: r.mode } : {}) });
+    // ARCH-680: the limits come from the same parsed basis that was priced, so the signed price and the signed limits cannot differ.
+    let limits: CheckoutLimits | undefined;
+    if (r.pricing.kind === "offer") {
+      if (r.sizeTolerancePct === undefined) throw new SignerInputError("$.sizeTolerancePct is required for an offer (it is signed into the limits)");
+      try { limits = limitsOf(r.pricing.basis, r.sizeTolerancePct, r.attestation); } catch (e) { throw new SignerInputError(`$.pricing.basis: ${(e as Error).message}`); }
+    }
+    const checkout = jobCheckout({ jobId: r.jobId, route: r.route, amount: quote.amount, expiresAt: r.expiresAt, offer: r.offer, termsUrl: this.s.termsUrl, ...(r.datasetId ? { datasetId: r.datasetId } : {}), ...(r.filesRoot ? { filesRoot: r.filesRoot } : {}), ...(r.mode ? { mode: r.mode } : {}), ...(limits ? { limits } : {}) });
     const key = this.ap2();
     const merchant_authorization = signMerchantAuthorization(checkout, key);
     return { quote, checkout, merchant_authorization, merchantAuthSha256: merchantAuthSha256(merchant_authorization), kid: key.kid };
@@ -404,12 +448,13 @@ export class SellerSigner {
     const m = this.s.mandates;
     const nowMs = this.now();
     for (const [n, until] of this.nonces) if (until <= nowMs) this.nonces.delete(n);
-    if (this.nonces.has(r.nonce)) return { ok: false, code: "mandate_scope_mismatch", reason: "a mandate for this invoice was already accepted" };
+    if (this.nonces.has(r.nonce) || this.s.refunds?.mandateFor(r.nonce)) return { ok: false, code: "mandate_scope_mismatch", reason: "a mandate for this invoice was already accepted" };
     const v = verifyCheckoutMandate(r.mandate, { registry: m.registry, aud: m.aud, nonce: r.nonce, now: Math.floor(nowMs / 1000), skewSec: m.skewSec, maxLifetimeSec: m.maxLifetimeSec });
     if (!v.ok) return v;
     try { this.ownQuote(r.ap2, r.jobId); } catch (e) { return { ok: false, code: "mandate_scope_mismatch", reason: (e as Error).message }; }
     if (v.checkoutJwt !== attachedJws(r.ap2.merchant_authorization, r.ap2.checkout)) return { ok: false, code: "mandate_scope_mismatch", reason: "the mandate permits another checkout than this job's signed quote" };
     this.nonces.set(r.nonce, (v.exp + m.skewSec) * 1000);
+    this.s.refunds?.append({ kind: "mandate_accepted", invoiceId: r.nonce, jobId: r.jobId, accountId: v.accountId, exp: v.exp });
     return { ok: true, sha256: v.sha256, kid: v.kid, tenant: v.tenant, accountId: v.accountId, nonce: v.nonce };
   }
 
@@ -420,6 +465,10 @@ export class SellerSigner {
    */
   signReceipt(r: ReceiptRequest): SignedReceipt {
     const b = r.body;
+    // privateAI-design-37 ARCH-675 (I3): a job whose upfront payment is being or was refunded never gets a receipt.
+    const book = this.s.refunds;
+    const nonce = (b as ReceiptBody & { mandate?: MandateRef }).mandate?.nonce;
+    if (book && (book.refundOfJob(b.jobId) || (nonce !== undefined && book.refundOf(nonce)))) throw new SignerScopeError("this job was refunded; no receipt");
     if (b.merchantAuthSha256 !== undefined) {
       if (!r.ap2) throw new SignerInputError("$.ap2 is required: the body points at a signed quote (merchantAuthSha256)");
       if (merchantAuthSha256(r.ap2.merchant_authorization) !== b.merchantAuthSha256) throw new SignerScopeError("merchantAuthSha256 is not the hash of this signed quote");
@@ -434,7 +483,10 @@ export class SellerSigner {
       if (v.sha256 !== ref.sha256 || v.kid !== ref.kid || v.tenant !== ref.tenant || v.accountId !== ref.accountId) throw new SignerScopeError("the body's mandate record is not this mandate");
       if (v.checkoutJwt !== attachedJws(r.ap2.merchant_authorization, r.ap2.checkout)) throw new SignerScopeError("the mandate permits another checkout than the receipt's signed quote");
     }
-    return signReceipt(b, this.receiptKey());
+    const signed = signReceipt(b, this.receiptKey());
+    // Recorded before it is returned: from here on the job can no longer be refunded (I3).
+    book?.append({ kind: "delivered", jobId: b.jobId, ...(nonce !== undefined ? { invoiceId: nonce } : {}) });
+    return signed;
   }
 
   /** ARCH-668: appends the settlement to a receipt this signer signed; with a mandate, the invoice must be the mandate's nonce. */

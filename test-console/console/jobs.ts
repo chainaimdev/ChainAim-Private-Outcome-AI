@@ -12,7 +12,7 @@ import { readFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { ChatReply, CrossAskResult } from "../../packages/crossask/src/index.ts";
 import { parseDecimal, PRICE_ROUNDS, pricesFromCatalog, quoteJob, type Fees, type JobQuote, type MeterLine, type ModelPrice, type PriceRound } from "../../packages/crossask/src/cost.ts";
-import type { ReceiptFile, ReceiptMandate } from "../../packages/receipt/src/index.ts";
+import type { ReceiptEconomics, ReceiptFile, ReceiptMandate } from "../../packages/receipt/src/index.ts";
 import type { Ap2Hold } from "./ap2.ts";
 
 export type PaidJobsFlags = {
@@ -115,6 +115,8 @@ export function meterOf(served: readonly ChatReply[]): MeterLine[] {
 export type ReceiptHold = {
   network: string; quoteId: string; route: string; datasetId: string; templateLabel?: string; files: ReceiptFile[]; sql: string;
   priceUsd: string; quoteBasis: Record<string, string | number | boolean>; actualUsd?: string;
+  /** privateAI-design-40 ARCH-690: the money trail (packages/receipt economicsOf), amounts only. */
+  economics?: ReceiptEconomics;
 };
 /** ap2 (privateAI-design-33 ARCH-628): the signed UCP checkout of the quote, only with --ap2 on. */
 /**
@@ -187,7 +189,7 @@ export type RunOffer = (jobId: string, notice?: RunNotice) => Promise<{ status: 
  * The paywall checks neither: ChainAim's signer verifies the mandate before the run. Malformed members are dropped here
  * (and a required mandate is then missing: refused, nothing settles).
  */
-export type RunNotice = { invoiceId?: string; checkoutMandate?: string };
+export type RunNotice = { invoiceId?: string; checkoutMandate?: string; paidTx?: string; payer?: string };
 /** The largest run notice body: a checkout mandate is far below this. */
 export const RUN_NOTICE_MAX_BYTES = 32_768;
 export function parseRunNotice(body: unknown): RunNotice | undefined {
@@ -195,7 +197,10 @@ export function parseRunNotice(body: unknown): RunNotice | undefined {
   if (typeof b !== "object" || b === null) return undefined;
   const invoiceId = typeof b.invoiceId === "string" && /^[A-Za-z0-9_-]{1,100}$/.test(b.invoiceId) ? b.invoiceId : undefined;
   const checkoutMandate = typeof b.checkoutMandate === "string" && b.checkoutMandate.length <= 16_384 && /^[A-Za-z0-9_.~-]+$/.test(b.checkoutMandate) ? b.checkoutMandate : undefined;
-  return { ...(invoiceId ? { invoiceId } : {}), ...(checkoutMandate ? { checkoutMandate } : {}) };
+  // privateAI-design-37 ARCH-671: with the upfront flow the paywall also names the payment that already settled (ids only).
+  const paidTx = typeof b.paidTx === "string" && /^[1-9A-HJ-NP-Za-km-z]{32,64}$/.test(b.paidTx) ? b.paidTx : undefined;
+  const payer = typeof b.payer === "string" && b.payer.length <= 64 && /^(([a-z\d]+[-_])*[a-z\d]+\.)*([a-z\d]+[-_])*[a-z\d]+$/.test(b.payer) ? b.payer : undefined;
+  return { ...(invoiceId ? { invoiceId } : {}), ...(checkoutMandate ? { checkoutMandate } : {}), ...(paidTx ? { paidTx } : {}), ...(payer ? { payer } : {}) };
 }
 export function internalHandler(store: JobStore, key: string, onReleased?: (jobId: string, job: HeldJob, notice: unknown) => void, run?: RunOffer): (req: IncomingMessage, res: ServerResponse) => void {
   const want = Buffer.from(key, "utf8");

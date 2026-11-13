@@ -135,3 +135,11 @@ test("ARCH-637 ARCH-638: POST /internal/jobs/:id/run runs an offer through the h
     await new Promise<void>((ok) => b.server.close(() => ok()));
   }
 });
+
+test("ARCH-671: the run notice keeps the upfront paidTx and payer when well formed, and drops malformed ones", async () => {
+  const { parseRunNotice } = await import("../console/jobs.ts");
+  const paidTx = "4vv6QJSaB1cdEFGhijkLMNoPQRstuVWXyz23456789ab";
+  assert.deepEqual(parseRunNotice({ invoiceId: "C702E26D", paidTx, payer: "chainaim-buyer-seller.testnet" }), { invoiceId: "C702E26D", paidTx, payer: "chainaim-buyer-seller.testnet" });
+  assert.deepEqual(parseRunNotice({ invoiceId: "C702E26D", paidTx: "0OIl not base58", payer: "Not An Account" }), { invoiceId: "C702E26D" });
+  assert.deepEqual(parseRunNotice({ invoiceId: "C702E26D" }), { invoiceId: "C702E26D" }, "the authorization flow's notice is unchanged");
+});

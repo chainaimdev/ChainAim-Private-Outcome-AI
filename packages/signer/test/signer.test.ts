@@ -55,7 +55,7 @@ const OFFER = { network: "near:testnet", asset: "usdc.fakes.testnet", payTo: "ch
 
 function quoteRequest(signer: SellerSigner, over: Partial<QuoteRequest> = {}): QuoteRequest {
   const amount = signer.price({ kind: "offer", basis: BASIS }).amount;
-  return { jobId: JOB, expiresAt: Date.parse("2026-11-13T05:15:00Z"), offer: { ...OFFER, amount }, pricing: { kind: "offer", basis: BASIS }, route: "nearai/deepseek-v4.1-flash", datasetId: "smb-erp-fin", mode: "estimate-first", ...over };
+  return { jobId: JOB, expiresAt: Date.parse("2026-11-13T05:15:00Z"), offer: { ...OFFER, amount }, pricing: { kind: "offer", basis: BASIS }, route: "nearai/deepseek-v4.1-flash", datasetId: "smb-erp-fin", mode: "estimate-first", sizeTolerancePct: 10, ...over };
 }
 
 test("ARCH-661 allowlist: a question, SQL or answer in any request is refused by field name, never signed", () => {

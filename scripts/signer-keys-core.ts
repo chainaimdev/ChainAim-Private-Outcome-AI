@@ -85,8 +85,9 @@ export type MandateKeyResult = { tenant: string; variable: string; kid: string; 
 
 /**
  * Makes sure the agent's env file holds tenant <id>'s mandate key and the PUBLIC key registry (committed,
- * config/ap2-mandate-keys.json) lists its public key for that tenant and NEAR account. Kept when both agree; replaced with
- * rotate (mandates signed before then no longer verify at the signer). The private key goes only into the agent's env file.
+ * config/ap2-mandate-keys.json) lists its public key for that tenant and NEAR account. Kept when both agree; a new private
+ * key with rotate. The registry only ever gains keys: the tenant's earlier public keys stay listed after the new one, so
+ * mandates signed before still verify. The private key goes only into the agent's env file.
  */
 export function ensureMandateKey(o: { agentEnvFile: string; registryFile: string; tenant: string; accountId: string; rotate?: boolean }): MandateKeyResult {
   const variable = mandateKeyVariable(o.tenant);
@@ -105,8 +106,13 @@ export function ensureMandateKey(o: { agentEnvFile: string; registryFile: string
     kid = k.kid; jwk = k.jwk; outcome = current === undefined ? "created" : "rotated";
   }
   const reg = existsSync(o.registryFile) ? (JSON.parse(readFileSync(o.registryFile, "utf8").replace(/^﻿/, "")) as { tenants?: { tenant: string; accountId: string; keys: unknown[] }[] }) : { tenants: [] };
+  // The new (or kept) public key is ADDED in front of the tenant's list; the keys already there stay, so mandates signed
+  // with them (and the judge sample) still verify. Taking a public key out is a hand edit of the registry.
+  const before = (reg.tenants ?? []).find((t) => t.tenant === o.tenant);
+  const kidOf = (k: unknown) => (typeof k === "object" && k !== null ? (k as { kid?: unknown }).kid : undefined);
+  const kept = (Array.isArray(before?.keys) ? before!.keys : []).filter((k) => kidOf(k) !== kid);
   const tenants = (reg.tenants ?? []).filter((t) => t.tenant !== o.tenant);
-  tenants.push({ tenant: o.tenant, accountId: o.accountId, keys: [jwk] });
+  tenants.push({ tenant: o.tenant, accountId: o.accountId, keys: [jwk, ...kept] });
   tenants.sort((a, b) => (a.tenant < b.tenant ? -1 : a.tenant > b.tenant ? 1 : 0));
   writeAtomic(o.registryFile, `${JSON.stringify({ note: "Tenants' PUBLIC AP2 checkout mandate keys (privateAI-design-36 ARCH-666). Written by desk.ps1 -MandateKey; the private keys are only in the agent's env file. ca-control-signer and verify-receipt check mandates with these.", tenants }, null, 2)}\n`);
   return { tenant: o.tenant, variable, kid: kid!, outcome };
