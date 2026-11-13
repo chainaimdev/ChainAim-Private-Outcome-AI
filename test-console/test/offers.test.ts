@@ -19,7 +19,7 @@ test("ARCH-636: estimate-first is the default and needs config/cost-model.json; 
   assert.deepEqual([c.mode, c.modes, c.maxTokens, c.tolerancePct], ["estimate-first", ["estimate-first", "run-hold"], 2048, 10]);
   assert.equal(c.costModel?.machine, "CHAINAIMMAIN", "the committed calibration");
   assert.throws(() => offerConfig({}, true, read({})), /estimate-first offers need the cost model config\/cost-model\.json: run \.\\test-console\\desk\.ps1 -Calibrate/);
-  assert.throws(() => offerConfig({}, true, read({ "config/cost-model.json": "{}" })), /is not valid \(cost model version must be 1\)/);
+  assert.throws(() => offerConfig({}, true, read({ "config/cost-model.json": "{}" })), /is not valid \(cost model version must be 1 or 2\)/);
   const hold = offerConfig({ "offer-mode": "run-hold", "offer-modes": "run-hold" }, true, read({}))!;
   assert.deepEqual([hold.mode, hold.modes, hold.costModel], ["run-hold", ["run-hold"], undefined]);
   assert.equal(offerConfig({}, false, read({})), undefined);
@@ -28,7 +28,9 @@ test("ARCH-636: estimate-first is the default and needs config/cost-model.json; 
   assert.throws(() => offerConfig({ "offer-mode": "estimate-first", "offer-modes": "run-hold" }, true, read({})), /must be one of --offer-modes \(run-hold\)/);
   assert.throws(() => offerConfig({ "offer-modes": "estimate-first,maybe" }, true, read({ "config/cost-model.json": CM })), /--offer-modes must list/);
   assert.throws(() => offerConfig({ "offer-max-tokens": "8" }, true, read({ "config/cost-model.json": CM })), /--offer-max-tokens must be a whole number from 16/);
-  assert.equal(offerConfig({ "cost-model": "elsewhere.json" }, true, read({ "elsewhere.json": CM }))?.costModel?.version, 1);
+  // --cost-model reads another path: the same file gives the same model (the committed one is version 2 since ARCH-635b/c)
+  assert.deepEqual(offerConfig({ "cost-model": "elsewhere.json" }, true, read({ "elsewhere.json": CM }))?.costModel, c.costModel);
+  assert.equal(c.costModel?.version, JSON.parse(CM).version);
 });
 
 test("ARCH-636: a folder is sized by stat only (an unreadable file still counts); only usable data files, at most maxFiles", async () => {
@@ -47,7 +49,7 @@ test("ARCH-636: a folder is sized by stat only (an unreadable file still counts)
 });
 
 test("ARCH-636 ARCH-638: the crossask basis is checked by packages/offer; the run-time size check allows the tolerance, never more files", () => {
-  const limits = { maxPromptChars: 40000, maxTokens: 2048, sqlRetries: 1, answerMaxRows: 50 };
+  const limits = { maxPromptChars: 40000, answerMaxPromptChars: 8000, maxTokens: 2048, sqlRetries: 1, answerMaxRows: 50 };
   const b = crossaskBasis({ folder: "/d", question: "q", model: "nearai/m", phrase: "llm", sql: "SELECT 1" }, { files: 3, totalBytes: 1000 }, limits);
   assert.deepEqual(b, { kind: "crossask", model: "nearai/m", phrase: "llm", userSql: true, totalBytes: 1000, files: 3, ...limits });
   assert.throws(() => crossaskBasis({ folder: "/d", question: "q", model: "bad", phrase: "llm" }, { files: 1, totalBytes: 1 }, limits), /model must look like provider\/name/);
@@ -75,7 +77,7 @@ test("ARCH-636: the offer store holds until expiry (reported once), and a run dr
 
 test("ARCH-636: attested before the run only when every model the job calls is attestable (exact SQL + NEAR AI answer: owner run 2026-11-12, t02 refused)", async () => {
   const { attestedRoute, offerModels } = await import("../console/offers.ts");
-  const limits = { maxPromptChars: 40000, maxTokens: 2048, sqlRetries: 1, answerMaxRows: 50 };
+  const limits = { maxPromptChars: 40000, answerMaxPromptChars: 8000, maxTokens: 2048, sqlRetries: 1, answerMaxRows: 50 };
   const NEAR = "nearai/deepseek-v4.1-flash", BED = "bedrock/nemotron-nano-3-30b";
   const att = new Set([NEAR]);
   const exactSql = crossaskBasis({ folder: "/d", question: "q", model: BED, answerModel: NEAR, phrase: "llm", sql: "SELECT 1" }, { files: 1, totalBytes: 1 }, limits);

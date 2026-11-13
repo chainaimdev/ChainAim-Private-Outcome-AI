@@ -92,7 +92,7 @@ export function attestedRoute(b: Extract<OfferBasis, { kind: "crossask" }>, atte
 }
 
 /** The crossask basis of a request: sizes and this console's limits, checked by packages/offer. */
-export function crossaskBasis(req: OfferRequest, size: { files: number; totalBytes: number }, limits: { maxPromptChars: number; maxTokens: number; sqlRetries: number; answerMaxRows: number }): Extract<OfferBasis, { kind: "crossask" }> {
+export function crossaskBasis(req: OfferRequest, size: { files: number; totalBytes: number }, limits: { maxPromptChars: number; answerMaxPromptChars: number; maxTokens: number; sqlRetries: number; answerMaxRows: number }): Extract<OfferBasis, { kind: "crossask" }> {
   const b = {
     kind: "crossask" as const, model: req.model, ...(req.answerModel ? { answerModel: req.answerModel } : {}), phrase: req.phrase, userSql: req.sql !== undefined,
     totalBytes: size.totalBytes, files: size.files, ...limits,

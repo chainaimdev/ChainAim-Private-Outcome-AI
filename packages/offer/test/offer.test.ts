@@ -41,7 +41,7 @@ test("ARCH-634: chat is priced at its whole prompt and full max_tokens on the ch
 });
 
 test("ARCH-634: crossask counts 1 + retries query calls and the answer call, each at maxPromptChars x bytesPerChar and max_tokens", () => {
-  const b = { kind: "crossask" as const, model: MODEL, phrase: "llm" as const, userSql: false, totalBytes: 3 * 1024 * 1024, files: 4, maxPromptChars: 8000, maxTokens: 512, sqlRetries: 1, answerMaxRows: 50 };
+  const b = { kind: "crossask" as const, model: MODEL, phrase: "llm" as const, userSql: false, totalBytes: 3 * 1024 * 1024, files: 4, maxPromptChars: 8000, answerMaxPromptChars: 8000, maxTokens: 512, sqlRetries: 1, answerMaxRows: 50 };
   const w = worstCase(b, CM);
   assert.equal(w.meter.length, 3);
   assert.deepEqual(w.meter[0], { model: MODEL, promptTokens: 10000, completionTokens: 512 });
@@ -51,10 +51,39 @@ test("ARCH-634: crossask counts 1 + retries query calls and the answer call, eac
   assert.ok(BigInt(quoteOffer({ ...b, sqlRetries: 3 }, PRICES, FEES, CM).amount) >= BigInt(quoteOffer(b, PRICES, FEES, CM).amount), "more retries never costs less");
 });
 
+const ANSWER = "local/answer-model";
+const PRICES2 = { ...PRICES, [ANSWER]: { inputPerM: "0.10", outputPerM: "0.40" } };
+test("ARCH-638: the answer call is priced at answerMaxPromptChars (the answer cap), the query calls at maxPromptChars", () => {
+  const b = { kind: "crossask" as const, model: MODEL, answerModel: ANSWER, phrase: "llm" as const, userSql: false, totalBytes: 1024, files: 1, maxPromptChars: 40000, answerMaxPromptChars: 8000, maxTokens: 512, sqlRetries: 1, answerMaxRows: 50 };
+  const w = worstCase(b, CM);
+  assert.deepEqual(w.meter.map((m) => [m.model, m.promptTokens]), [[MODEL, 50000], [MODEL, 50000], [ANSWER, 10000]]); // x bytesPerChar 1.25
+  // exact SQL + worded answer: only the answer call, at the answer cap
+  const exact = worstCase({ ...b, userSql: true }, CM);
+  assert.deepEqual(exact.meter.map((m) => [m.model, m.promptTokens]), [[ANSWER, 10000]]);
+  // the gateway line counts every priced prompt byte: 2 x 50,000 + 10,000 vs 10,000 alone
+  assert.ok(Number(w.extras[1].usd) > Number(exact.extras[1].usd));
+  assert.ok(BigInt(quoteOffer({ ...b, userSql: true, answerMaxPromptChars: 40000 }, PRICES2, FEES, CM).amount) >= BigInt(quoteOffer({ ...b, userSql: true }, PRICES2, FEES, CM).amount), "a larger answer cap never costs less");
+  assert.throws(() => checkBasis({ ...b, answerMaxPromptChars: 0 }), /answerMaxPromptChars/);
+});
+
 test("ARCH-634: a bad basis is refused naming the field (sizes come over the wire)", () => {
   assert.throws(() => checkBasis({ kind: "scan", textBytes: 0 }), /textBytes/);
   assert.throws(() => checkBasis({ kind: "chat", model: "x", promptBytes: 1, maxTokens: 1 }), /provider\/name/);
   assert.throws(() => checkBasis({ kind: "chat", model: MODEL, promptBytes: 1.5, maxTokens: 1 }), /promptBytes/);
   assert.throws(() => checkBasis({ kind: "nope" } as never), /kind must be one of/);
   assert.throws(() => quoteOffer({ kind: "chat", model: "openai/unpriced", promptBytes: 10, maxTokens: 10 }, PRICES, FEES, CM), /has no price/);
+});
+
+test("ARCH-635b: a version 2 model prices the analyst as base + per MB, both raised by safetyPct; version 1 has no base line", () => {
+  const v2 = parseCostModel({ ...CM_RAW, version: 2, units: { ...CM_RAW.units, analystBaseUsd: "0.001", analystPerMbUsd: "0.0001", gatewayBaseUsd: "0.0005" } });
+  const b = { kind: "crossask" as const, model: MODEL, phrase: "none" as const, userSql: true, totalBytes: 2 * 1024 * 1024, files: 1, maxPromptChars: 8000, answerMaxPromptChars: 8000, maxTokens: 512, sqlRetries: 1, answerMaxRows: 50 };
+  const w = worstCase(b, v2);
+  assert.deepEqual(w.extras.find((e) => e.name === "analyst"), { name: "analyst", usd: "0.000240000000" }); // 0.0001 x 2 MB x 1.2
+  assert.deepEqual(w.extras.find((e) => e.name === "analystBase"), { name: "analystBase", usd: "0.001200000000" }); // 0.001 x 1.2
+  assert.equal(w.extras.some((e) => e.name === "gatewayBase"), false, "an exact query worded by no model: no call, no call base");
+  // ARCH-635c: one base per priced model call: 1 + 1 retry query calls + the answer call = 3 x 0.0005 x 1.2
+  const free = worstCase({ ...b, userSql: false, phrase: "llm" }, v2);
+  assert.deepEqual(free.extras.find((e) => e.name === "gatewayBase"), { name: "gatewayBase", usd: "0.001800000000" });
+  assert.equal(worstCase(b, CM).extras.some((e) => e.name === "analystBase" || e.name === "gatewayBase"), false);
+  assert.match(quoteOffer(b, PRICES, FEES, v2).amount, /^\d+0000$/);
 });

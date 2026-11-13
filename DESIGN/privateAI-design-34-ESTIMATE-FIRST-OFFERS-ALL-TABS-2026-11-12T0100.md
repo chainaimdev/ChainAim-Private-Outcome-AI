@@ -159,3 +159,33 @@ Deviation (AI choice, owner to confirm): §1 sends only sizes in step 1 and the 
 sent with the estimate and HELD by the console with the offer; it is never sent to a model, the analyst or the gateway, and
 nothing is run, before payment. Reason: the paid release carries no body today (services/web payNearRelease and the agent
 post it empty), so the stricter form needs a wallet-bundle change; it can follow without changing the paywall.
+
+Fixes after the live run (2026-11-12 ~23:30Z, chat near-ai-impl-9), owner-approved:
+- ARCH-644 (route): the route on the /offers answer, the AP2 checkout and every receipt is the models the job calls, never
+  the request's model fields. Estimate: offerModels(basis) (the models priced); run-first quote and every receipt: the
+  run's own steps (receipt.ts calledModels over sentToModel). An exact query worded by a model names only the answer model;
+  one worded by no model is "analyst-only". Before: an exact-SQL template's receipt named the unused query model.
+- ARCH-638 (answer cap): new console flag --crossask-answer-max-prompt-chars N (default 8000). crossask leaves result rows
+  out from the end until the answer prompt fits and says how many are shown; when one row does not fit, no model is asked
+  and the result is kept with the reason (an estimate-first run then answers 422, not charged). The basis carries
+  answerMaxPromptChars; worstCase prices the answer call at it (query calls stay at maxPromptChars). Before: the answer call
+  was priced at the query cap (40,000) and the answer prompt had no cap at all, so the priced bound was not enforced.
+  Effect with the 2026-11-12 cost model: smb-fin-1 exact template + nearai answer 0.04 -> 0.02; Orion 0.09 -> 0.07 (the rest
+  is the analyst line, ARCH-635b: per-MB rate calibrated on 3.4 KB files only).
+- ARCH-635b (analyst line): cost model version 2 adds units.analystBaseUsd. Calibration takes each dataset size's slowest
+  analyst run as a point and fits base + slope x bytes: of the lines on or above every point (slope 0 or between two sizes,
+  base never below 0), the one with the least total excess. It refuses one size, or sizes less than --analyst-size-ratio
+  (default 16) apart. worstCase prices "analyst" (per MB) and "analystBase" (per run), both raised by safetyPct. Version 1
+  files still load with base 0. Before: one per-MB rate from smb-fin-1 (5,395 B, 648 ms = 125,945 ms/MB) priced Orion's
+  2 MB at about 252 s of analyst time; it runs in about 7 s. Projection (assumes Orion about 7.1 s, to be replaced by the
+  owner's -Calibrate): Orion template 0.07 -> 0.02; a free question on nearai stays 0.08 (two query calls at the 40,000
+  character query cap), above t01/t02's 0.05 auto-approve: an owner decision (cap, retries or policy), not changed here.
+- ARCH-635c (model call line + calibration robustness): cost model version 2 also has units.gatewayBaseUsd (per model call);
+  calibration fits base + per-KB over each prompt size's slowest call with the same least-excess supporting line
+  (--gateway-size-ratio, default 4); worstCase adds "gatewayBase" x the priced calls. The analyst is timed on each
+  template's exact query (phrase none, no model), so a model writing a bad query cannot fail it; a free run whose
+  model-written query does not run is SKIPPED (printed, in the report's "skipped", left out of the numbers); a rate limit
+  left after the retries and every other failure still write nothing. Calibration prints the largest query prompt seen,
+  for the owner to set --crossask-max-prompt-chars from data. Projection (recorded smb-fin-1 calls; Orion analyst assumed
+  about 7.1 s): Orion template 0.02 (nearai and bedrock); free question nearai 0.07, bedrock 0.04. Open owner decision:
+  the 40,000-character query cap, which prices the free question's two query calls.

@@ -266,12 +266,26 @@ export function templateLabelOf(named: unknown): string | undefined {
   return typeof named === "string" && TEMPLATE_LABEL.test(named.trim()) ? named.trim() : undefined;
 }
 
+/** The route of a job that calls no model: an exact query worded by no model (phrase none). */
+export const NO_MODEL_ROUTE = "analyst-only";
+
 /**
- * The route a run-then-quote job took (--pricing after): the query model, and the answer model when it differs. Firm
- * pricing (ARCH-605) will name its route itself.
+ * A job's route (quote, AP2 checkout, receipt): the models it calls, each once, in call order, joined by "+"; NO_MODEL_ROUTE
+ * when it calls none. Built from the calls themselves, never from the request's model fields: an exact-SQL template carries a
+ * query model that nothing calls (ARCH-644), and a route naming it would claim a model that never saw the data.
  */
-export function routeOf(model: string, answerModel: string | undefined): string {
-  return answerModel && answerModel !== model ? `${model}+${answerModel}` : model;
+export function routeOf(models: readonly string[]): string {
+  const once = [...new Set(models)];
+  return once.length ? once.join("+") : NO_MODEL_ROUTE;
+}
+
+/**
+ * The models a finished crossask run called, in call order, from its own step log (sentToModel): each query step called the
+ * query model, the answer step the answer model (the query model when none is set). A run's served[] names the provider's
+ * model id, not the catalog id the price and the attestable list use, so the steps are the source here.
+ */
+export function calledModels(r: { model: string; answerModel?: string }, steps: readonly { step: string }[]): string[] {
+  return steps.map((s) => (s.step === "answer" ? r.answerModel || r.model : r.model));
 }
 
 /**

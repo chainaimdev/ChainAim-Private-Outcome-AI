@@ -73,7 +73,7 @@ export function ap2Config(flags: Ap2Flags, env: Record<string, string | undefine
 
 export type JobCheckoutInput = {
   jobId: string;
-  /** The job's route (receipt.ts routeOf), e.g. "bedrock/nemotron-nano-3-30b". */
+  /** The job's route (receipt.ts routeOf): the models it calls, e.g. "nearai/deepseek-v4.1-flash", or "analyst-only". */
   route: string;
   /** x402 amount, USDC base units; must be whole cents (--price-round cent). */
   amount: string;

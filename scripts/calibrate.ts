@@ -6,7 +6,9 @@
  *
  *   crossask   each template question (free, so a model writes the query) of each crossask dataset, --runs times:
  *              POST /crossask {folder, question, model, answerModel?, phrase, timings: true}
- *              -> analyst = relationsMs + sqlMs over the dataset's file bytes (GET /data/files?path=<folder>);
+ *              -> analyst = relationsMs + sqlMs over the dataset's file bytes (GET /data/files?path=<folder>), from the
+ *                 template's exact query when it has one (phrase none, no model: ARCH-635b), else from this run;
+ *                 a run whose model-written query does not run is SKIPPED (reported, left out of the numbers: ARCH-635c);
  *                 one call sample per model call: callsMs[i], sentToModel[i].bytes / .chars, served[i].usage.promptTokens
  *   presidio   POST /gateway/scan and /gateway/mask {text} for each --presidio-kb size, --runs times, timed here (so the
  *              console relay and the gateway's own time count too: a worst case). The text is the start of the calibrated
@@ -22,6 +24,11 @@
  *   --answer-model same|none|ID same (default): the query model also words the answer (phrase llm); none: phrase none
  *                        (no answer call is measured); ID: that model words it
  *   --runs N             each measurement N times (default 3, at least 2: safetyPct is the run-to-run spread)
+ *   --analyst-size-ratio N  the largest calibrated dataset must be at least N times the smallest (default 16, at least 2):
+ *                        the analyst is priced as a fixed time per run plus a time per MB (ARCH-635b), and the per-MB part
+ *                        needs sizes far apart to be measured; --datasets all includes smb-erp-fin (about 2 MB) for that
+ *   --gateway-size-ratio N  the largest model prompt must be at least N times the smallest (default 4, at least 2): a model
+ *                        call is priced as a fixed time per call plus a time per KB of prompt (ARCH-635c)
  *   --tokens-per-byte    bound (default; design-32 --tokens-per-byte 1, checked against every call: V-P4) or observed
  *   --dry-run            list what would run (reads /datasets only; no model, no Presidio call), write nothing
  * Output: config/cost-model.json (+ an "observed" block: counts, worst ms per unit, spread, observed ratios) and
@@ -59,6 +66,8 @@ function options(argv: string[]) {
         runs: { type: "string", default: "3" },
         "presidio-kb": { type: "string", default: "1,4,16" },
         "tokens-per-byte": { type: "string", default: "bound" },
+        "analyst-size-ratio": { type: "string", default: "16" },
+        "gateway-size-ratio": { type: "string", default: "4" },
         machine: { type: "string", default: hostname() },
         out: { type: "string", default: fileURLToPath(new URL("../config/cost-model.json", import.meta.url)) },
         "sample-root": { type: "string", default: fileURLToPath(new URL("../sample-data", import.meta.url)) },
@@ -100,7 +109,7 @@ function options(argv: string[]) {
     phrase: (am === "none" ? "none" : "llm") as "llm" | "none", runs: int("runs", 2, 20), presidioKb: [...new Set(kb)].sort((a, b) => a - b),
     tokensPerByte: v["tokens-per-byte"] as "bound" | "observed", machine: v.machine!, out: resolve(v.out!), sampleRoot: resolve(v["sample-root"]!),
     datasetsConfig: resolve(v["datasets-config"]!), reportDir: resolve(v["report-dir"]!), timeoutMs: int("timeout-sec", 1, 3600) * 1000,
-    rlRetries: int("rate-limit-retries", 0, 20), rlWaitMs: int("rate-limit-wait-sec", 0, 600) * 1000, dryRun,
+    analystSizeRatio: int("analyst-size-ratio", 2, 1_000_000), gatewaySizeRatio: int("gateway-size-ratio", 2, 1_000_000), rlRetries: int("rate-limit-retries", 0, 20), rlWaitMs: int("rate-limit-wait-sec", 0, 600) * 1000, dryRun,
   };
 }
 type Opt = ReturnType<typeof options>;
@@ -176,6 +185,7 @@ export async function run(argv: string[], out: (s: string) => void = (s) => proc
   const started = new Date();
   const samples: CalibrationSample[] = [];
   const problems: string[] = [];
+  const skipped: string[] = [];
   for (const d of chosen) {
     const set = setOf(d), folder = join2(d.folder, set);
     const files = await call("GET", `/data/files?path=${encodeURIComponent(folder)}`);
@@ -185,13 +195,31 @@ export async function run(argv: string[], out: (s: string) => void = (s) => proc
     if (!bytes) { problems.push(`${d.id}: the folder has no data bytes`); continue; }
     for (const [ti, t] of d.templates.entries()) {
       if (!t.q?.trim()) continue;
+      const g = `${d.id}|t${ti + 1}`;
+      // ARCH-635b: a template with an exact query times the analyst on it, with no model in the run: deterministic, and a
+      // model that writes a bad query cannot fail it. Such a run failing is a real problem (the template is broken).
+      const exact = typeof t.sql === "string" && t.sql.trim() !== "";
+      if (exact) for (let r = 1; r <= o.runs; r++) {
+        let res;
+        try { res = await call("POST", "/crossask", { folder, question: t.q, sql: t.sql, model: o.model, phrase: "none", timings: true }); }
+        catch (e) { problems.push(`${g} exact run ${r}: ${(e as Error).message}`); out(`  FAIL ${g} exact run ${r}: ${(e as Error).message}`); continue; }
+        const j = res.json ?? {};
+        if (res.status !== 200 || j.error || !j.result) { const why = j.error ?? `HTTP ${res.status}`; problems.push(`${g} exact run ${r}: ${why}`); out(`  FAIL ${g} exact run ${r}: ${String(why).slice(0, 160)}`); continue; }
+        if (!j.timings) { out("calibrate: the console API returned no step timings: it is older than ARCH-635. Rebuild it (.\\test-console\\desk.ps1 -All -AllSkipTests), then run -Calibrate again"); return 1; }
+        samples.push({ kind: "analyst", group: `${g}|exact`, bytes, ms: j.timings.relationsMs + j.timings.sqlMs });
+        out(`  ok   ${g} exact run ${r}: analyst ${j.timings.relationsMs + j.timings.sqlMs} ms over ${bytes} B, no model`);
+      }
       for (let r = 1; r <= o.runs; r++) {
-        const g = `${d.id}|t${ti + 1}`;
         const t0 = performance.now();
         let res;
         try { res = await modelCall("/crossask", { folder, question: t.q, model: o.model, ...(o.answerModel ? { answerModel: o.answerModel } : {}), phrase: o.phrase, timings: true }); }
         catch (e) { problems.push(`${g} run ${r}: ${(e as Error).message}`); out(`  FAIL ${g} run ${r}: ${(e as Error).message}`); continue; }
         const j = res.json ?? {};
+        // ARCH-635c: the model wrote a query that did not run (or no query). That is the model's answer, not a fault of the
+        // machine being measured: the run is reported and left out of the numbers, and calibration goes on. Anything else
+        // (no answer, HTTP errors) is still a problem that writes nothing.
+        // A rate limit still there after the retries is the gateway's, not the model's query: a problem, not a skip.
+        if (res.status === 200 && typeof j.error === "string" && !j.result && !/rate_limited/.test(j.error)) { skipped.push(`${g} run ${r}: ${j.error}`); out(`  SKIP ${g} run ${r}: ${j.error.slice(0, 160)}`); continue; }
         if (res.status !== 200 || j.error || !j.result) { const why = j.error ?? `HTTP ${res.status}`; problems.push(`${g} run ${r}: ${why}`); out(`  FAIL ${g} run ${r}: ${String(why).slice(0, 160)}`); continue; }
         if (!j.timings) { out("calibrate: the console API returned no step timings: it is older than ARCH-635. Rebuild it (.\\test-console\\desk.ps1 -All -AllSkipTests), then run -Calibrate again"); return 1; }
         const tm = j.timings, served = j.served ?? [], sent = j.sentToModel ?? [];
@@ -199,11 +227,11 @@ export async function run(argv: string[], out: (s: string) => void = (s) => proc
           problems.push(`${g} run ${r}: the calls, their timings and their sizes do not line up (${served.length}/${tm.callsMs.length}/${sent.length}); run skipped`);
           continue;
         }
-        samples.push({ kind: "analyst", group: g, bytes, ms: tm.relationsMs + tm.sqlMs });
+        if (!exact) samples.push({ kind: "analyst", group: g, bytes, ms: tm.relationsMs + tm.sqlMs });
         served.forEach((s: { usage?: { promptTokens?: number } }, i: number) => samples.push({
           kind: "call", group: `${g}|${sent[i].step}|${i}`, promptBytes: sent[i].bytes, promptChars: sent[i].chars, promptTokens: typeof s.usage?.promptTokens === "number" ? s.usage.promptTokens : null, ms: tm.callsMs[i],
         }));
-        out(`  ok   ${g} run ${r}: analyst ${tm.relationsMs + tm.sqlMs} ms over ${bytes} B, ${served.length} call(s) ${tm.callsMs.join("+")} ms  (${Math.round(performance.now() - t0)} ms)`);
+        out(`  ok   ${g} run ${r}: analyst ${tm.relationsMs + tm.sqlMs} ms over ${bytes} B, ${served.length} call(s) ${tm.callsMs.join("+")} ms, prompt ${sent.map((x: { bytes: number }) => x.bytes).join("+")} B  (${Math.round(performance.now() - t0)} ms)`);
       }
     }
   }
@@ -230,15 +258,16 @@ export async function run(argv: string[], out: (s: string) => void = (s) => proc
   }
 
   const report = { tool: "calibrate", startedAt: started.toISOString(), finishedAt: new Date().toISOString(), api: o.api, model: o.model, answerModel: o.answerModel ?? null, runs: o.runs,
-    presidioKb: o.presidioKb, presidioKbRepeatedText: repeated, tokensPerByte: o.tokensPerByte, machine: o.machine, rateLimitWaits: waits, problems, samples };
+    presidioKb: o.presidioKb, presidioKbRepeatedText: repeated, tokensPerByte: o.tokensPerByte, machine: o.machine, rateLimitWaits: waits, problems, skipped, samples };
   try { mkdirSync(o.reportDir, { recursive: true }); const f = join(o.reportDir, `calibrate-${started.toISOString().replace(/[:.]/g, "-")}.json`); writeFileSync(f, JSON.stringify(report, null, 2) + "\n"); out(`report: ${f}`); }
   catch (e) { out(`NOTE: the report could not be written to ${o.reportDir}: ${(e as Error).message}`); }
+  if (skipped.length) { out(`\n${skipped.length} model run(s) skipped: the model's query did not run; left out of the numbers (listed in the report):`); for (const p of skipped) out(`  - ${p.slice(0, 200)}`); }
   if (problems.length) { out(`\n${problems.length} problem(s); nothing written, so offers stay off until a clean run:`); for (const p of problems) out(`  - ${p}`); return 1; }
 
   let made;
   try {
     made = costModelFrom(samples, {
-      computeUsdPerHour: o.computeUsdPerHour, tokensPerByte: o.tokensPerByte, calibratedAt: started.toISOString(), machine: o.machine,
+      computeUsdPerHour: o.computeUsdPerHour, tokensPerByte: o.tokensPerByte, analystSizeRatio: o.analystSizeRatio, gatewaySizeRatio: o.gatewaySizeRatio, calibratedAt: started.toISOString(), machine: o.machine,
       source: `desk.ps1 -Calibrate run of ${started.toISOString().slice(0, 10)} over sample datasets ${chosen.map((d) => d.id).join(", ")}; model ${o.model}, answer ${o.answerModel ?? "none"}; ${o.runs} runs; compute ${o.computeUsdPerHour} USD/h`,
     });
   } catch (e) { out(`\ncalibrate: ${(e as Error).message}; nothing written`); return 1; }
@@ -246,7 +275,12 @@ export async function run(argv: string[], out: (s: string) => void = (s) => proc
   writeFileSync(o.out, JSON.stringify({ ...made.model, observed: made.observed }, null, 2) + "\n");
   const m = made.model;
   out(`\nwritten ${o.out}`);
-  out(`  presidio ${m.units.presidioPerKbUsd} USD/KB  analyst ${m.units.analystPerMbUsd} USD/MB  gateway ${m.units.gatewayPerKbPromptUsd} USD/KB prompt`);
+  out(`  presidio ${m.units.presidioPerKbUsd} USD/KB  analyst ${m.units.analystBaseUsd} USD/run + ${m.units.analystPerMbUsd} USD/MB (sizes ${made.observed.analystSizes.join(", ")} B)`);
+  // The query prompts' real size (schema + question), so the owner can set --crossask-max-prompt-chars from data: offers
+  // price every query call at that cap, and the run refuses a larger prompt (nothing charged).
+  const qChars = samples.flatMap((x) => (x.kind === "call" && /\|query/.test(x.group) ? [x.promptChars] : []));
+  if (qChars.length) out(`  largest query prompt ${Math.max(...qChars)} characters (the console's --crossask-max-prompt-chars caps it; offers price each query call at that cap)`);
+  out(`  model call ${m.units.gatewayBaseUsd} USD/call + ${m.units.gatewayPerKbPromptUsd} USD/KB prompt (prompts ${made.observed.gatewayPromptBytes.join(" to ")} B)`);
   out(`  safety ${m.safetyPct} %  tokensPerByte ${m.tokensPerByte} (observed max ${made.observed.tokensPerByteObservedMax})  bytesPerChar ${m.bytesPerChar}  (${Math.round((Date.now() - started.getTime()) / 1000)} s${waits ? `, ${waits} rate-limit wait(s)` : ""})`);
   return 0;
 }

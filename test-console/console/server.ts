@@ -38,6 +38,9 @@
  *   --crossask-answer-rows N   result rows sent for the worded answer (default 50)
  *   --crossask-max-prompt-chars N  text of one query request at most (default 40000; the gateway refuses over 48,000 characters
  *                              with the JSON keys counted): older failed attempts are left out first (crossask fitPrompt)
+ *   --crossask-answer-max-prompt-chars N  text of the worded-answer request at most (default 8000): result rows are left
+ *                              out from the end until the question and the rows fit (crossask); estimate-first offers price
+ *                              the answer call at this size (privateAI-design-34 ARCH-638), so a run never sends more
  *   --crossask-retry-error-chars N  a failed query's error fed back to the model is cut to N characters (default 2000)
  *   --check-small-numbers on|off  also check whole numbers under 100 in the worded answer ("37 claims"; crossask verify.ts
  *                              smallNumbers; owner 2026-11-07, tab 03 "Calculated, NOT made up by the AI"). Default on.
@@ -164,12 +167,12 @@ import { microsToUsd, quoteJob, USDC_DECIMALS } from "../../packages/crossask/sr
 import { JobStore, internalHandler, meterOf, paidJobsConfig, registerJob } from "./jobs.ts";
 import { JobFeed, jobFeedConfig } from "./job-feed.ts";
 import { AttestClient, attestConfig } from "./attest.ts";
-import { datasetFiles, datasetIdOf, receiptConfig, receiptOnRelease, ReceiptStore, routeOf, templateLabelOf } from "./receipt.ts";
+import { calledModels, datasetFiles, datasetIdOf, receiptConfig, receiptOnRelease, ReceiptStore, routeOf, templateLabelOf } from "./receipt.ts";
 import type { HeldJob, ReceiptHold } from "./jobs.ts";
 import { ap2Answer, ap2Config, signJobCheckout, ucpProfile, type Ap2Hold } from "./ap2.ts";
 import { filesRoot } from "../../packages/receipt/src/index.ts";
 import { quoteOffer } from "../../packages/offer/src/index.ts";
-import { attestedRoute, crossaskBasis, folderSize, OfferStore, offerConfig, withinBasis, type OfferRequest } from "./offers.ts";
+import { attestedRoute, crossaskBasis, folderSize, offerModels, OfferStore, offerConfig, withinBasis, type OfferRequest } from "./offers.ts";
 
 const { values: flags } = parseArgs({
   args: process.argv.slice(2),
@@ -197,6 +200,7 @@ const { values: flags } = parseArgs({
     "crossask-sql-retries": { type: "string", default: "1" },
     "crossask-answer-rows": { type: "string", default: "50" },
     "crossask-max-prompt-chars": { type: "string", default: "40000" },
+    "crossask-answer-max-prompt-chars": { type: "string", default: "8000" },
     "crossask-retry-error-chars": { type: "string", default: "2000" },
     "check-small-numbers": { type: "string", default: "on" },
     "default-answer-model": { type: "string", default: "" },
@@ -283,7 +287,7 @@ for (const pair of flags["dataset-root"] ?? []) {
   if (!m) throw new Error(`--dataset-root must be NAME=PATH, got ${pair}`);
   DATASET_ROOTS[m[1]] = m[2];
 }
-function positiveInt(name: "view-max" | "view-ttl-min" | "view-max-bytes" | "paid-timeout-sec" | "crossask-timeout-sec" | "crossask-sql-retries" | "crossask-answer-rows" | "crossask-max-prompt-chars" | "crossask-retry-error-chars" | "agent-forward-timeout-sec", min = 1): number {
+function positiveInt(name: "view-max" | "view-ttl-min" | "view-max-bytes" | "paid-timeout-sec" | "crossask-timeout-sec" | "crossask-sql-retries" | "crossask-answer-rows" | "crossask-max-prompt-chars" | "crossask-answer-max-prompt-chars" | "crossask-retry-error-chars" | "agent-forward-timeout-sec", min = 1): number {
   const n = Number(flags[name]);
   if (!Number.isInteger(n) || n < min) throw new Error(`--${name} must be a positive integer, got ${flags[name]}`);
   return n;
@@ -343,7 +347,7 @@ async function runOffer(jobId: string): Promise<{ status: number; body: unknown 
   const r = o.request, bs = o.basis;
   let out;
   try {
-    out = await crossAsk({ folder: r.folder, question: r.question, model: r.model, answerModel: r.answerModel, phrase: r.phrase, sqlRetries: bs.sqlRetries, answerMaxRows: bs.answerMaxRows, maxPromptChars: bs.maxPromptChars, retryErrorMaxChars: CROSSASK_ERROR_CHARS, sql: r.sql, checkSmallNumbers: CHECK_SMALL },
+    out = await crossAsk({ folder: r.folder, question: r.question, model: r.model, answerModel: r.answerModel, phrase: r.phrase, sqlRetries: bs.sqlRetries, answerMaxRows: bs.answerMaxRows, maxPromptChars: bs.maxPromptChars, answerMaxPromptChars: bs.answerMaxPromptChars, retryErrorMaxChars: CROSSASK_ERROR_CHARS, sql: r.sql, checkSmallNumbers: CHECK_SMALL },
       { analyst: analystClient(ANALYST, CROSSASK_TIMEOUT_MS), chat: gatewayChat({ url: GATEWAY, key: KEY, timeoutMs: CROSSASK_TIMEOUT_MS, maxTokens: bs.maxTokens }), ...(JOB_FEED ? { clock: () => performance.now() } : {}) });
   } catch (e) { return { status: 422, body: { error: `the job did not run: ${(e as Error).message}` } }; }
   if (out.error || !out.result) return { status: 422, body: { error: "the job did not produce a result (run it unpaid to see why)" } };
@@ -362,7 +366,7 @@ async function runOffer(jobId: string): Promise<{ status: number; body: unknown 
     try { files = await datasetFiles(r.folder, RECEIPT_CONFIG.maxFiles, (n) => config.hideFolders.some((re) => re.test(n))); }
     catch (e) { return { status: 422, body: { error: `no receipt can be made: ${(e as Error).message}` } }; }
     receiptHold = {
-      network: o.network, quoteId: jobId, route: routeOf(r.model, r.answerModel), datasetId: datasetIdOf(r.datasetId, r.folder),
+      network: o.network, quoteId: jobId, route: routeOf(calledModels(r, out.sentToModel)), datasetId: datasetIdOf(r.datasetId, r.folder),
       ...(templateLabelOf(r.templateLabel) ? { templateLabel: templateLabelOf(r.templateLabel) } : {}), files, sql: out.sql,
       priceUsd: o.quote.totalUsd, actualUsd: metered.totalUsd,
       quoteBasis: { pricing: "estimate-first", phrase: bs.phrase, userSql: bs.userSql, sqlRetries: bs.sqlRetries, answerMaxRows: bs.answerMaxRows, maxPromptChars: bs.maxPromptChars, maxTokens: bs.maxTokens, files: bs.files, totalBytes: bs.totalBytes, calls: out.served.length },
@@ -400,6 +404,7 @@ const CROSSASK_TIMEOUT_MS = positiveInt("crossask-timeout-sec") * 1000;
 const CROSSASK_RETRIES = positiveInt("crossask-sql-retries", 0);
 const CROSSASK_ROWS = positiveInt("crossask-answer-rows");
 const CROSSASK_MAX_PROMPT = positiveInt("crossask-max-prompt-chars", 2000);
+const CROSSASK_ANSWER_MAX_PROMPT = positiveInt("crossask-answer-max-prompt-chars", 500);
 const CROSSASK_ERROR_CHARS = positiveInt("crossask-retry-error-chars", 100);
 if (!["on", "off"].includes(flags["check-small-numbers"]!)) throw new Error(`--check-small-numbers must be on or off, got ${flags["check-small-numbers"]}`);
 /** Tab 03's figures line says "NOT made up by the AI": with on (default) small whole numbers in the AI's wording are checked too. */
@@ -841,7 +846,7 @@ createServer(async (req, res) => {
       try {
         // timings: true (privateAI-design-34 ARCH-635, desk.ps1 -Calibrate): the step timings in ms (ARCH-204) come back with the
         // result. Whole milliseconds per step, no data; off unless asked, so the page's answer is as before.
-        const out = await crossAsk({ folder: b.folder, question: b.question, model, answerModel, phrase, sqlRetries: CROSSASK_RETRIES, answerMaxRows: CROSSASK_ROWS, maxPromptChars: CROSSASK_MAX_PROMPT, retryErrorMaxChars: CROSSASK_ERROR_CHARS, sql: userSql, checkSmallNumbers: CHECK_SMALL },
+        const out = await crossAsk({ folder: b.folder, question: b.question, model, answerModel, phrase, sqlRetries: CROSSASK_RETRIES, answerMaxRows: CROSSASK_ROWS, maxPromptChars: CROSSASK_MAX_PROMPT, answerMaxPromptChars: CROSSASK_ANSWER_MAX_PROMPT, retryErrorMaxChars: CROSSASK_ERROR_CHARS, sql: userSql, checkSmallNumbers: CHECK_SMALL },
           { analyst: analystClient(ANALYST, CROSSASK_TIMEOUT_MS), chat: gatewayChat({ url: GATEWAY, key: KEY, timeoutMs: CROSSASK_TIMEOUT_MS }), ...(b.timings === true ? { clock: () => performance.now() } : {}) });
         return dataJson(res, 200, { ...out, runLog: RUN_LOG.write(runIn, out, undefined, Date.now() - started) });
       } catch (e) {
@@ -905,7 +910,7 @@ createServer(async (req, res) => {
       const request: OfferRequest = { folder, question: b.question, model, ...(answerModel ? { answerModel } : {}), phrase, ...(typeof b.sql === "string" && b.sql.trim() ? { sql: b.sql } : {}), datasetId: b.datasetId, templateLabel: b.templateLabel };
       let basis, quote;
       try {
-        basis = crossaskBasis(request, size, { maxPromptChars: CROSSASK_MAX_PROMPT, maxTokens: OFFER_CONFIG.maxTokens, sqlRetries: CROSSASK_RETRIES, answerMaxRows: CROSSASK_ROWS });
+        basis = crossaskBasis(request, size, { maxPromptChars: CROSSASK_MAX_PROMPT, answerMaxPromptChars: CROSSASK_ANSWER_MAX_PROMPT, maxTokens: OFFER_CONFIG.maxTokens, sqlRetries: CROSSASK_RETRIES, answerMaxRows: CROSSASK_ROWS });
         quote = quoteOffer(basis, PAID_JOBS.prices, PAID_JOBS.fees, OFFER_CONFIG.costModel, PAID_JOBS.priceRound);
       } catch (e) { return dataJson(res, 422, { error: `no price for this job, so nothing can be paid: ${(e as Error).message}` }); }
       const offerId = JOBS.newJobId();
@@ -913,9 +918,11 @@ createServer(async (req, res) => {
       let offer;
       try { offer = await registerJob(PAYWALL, PAID_JOBS.key, { jobId: offerId, amount: quote.amount, expiresAt, run: true }); }
       catch (e) { return dataJson(res, 502, { error: (e as Error).message }); }
+      // ARCH-644: the route names the models the estimate lets the run call (the ones it priced), not the request's fields.
+      const route = routeOf(offerModels(basis));
       let ap2Hold: Ap2Hold | undefined;
       if (AP2_CONFIG) {
-        try { ap2Hold = signJobCheckout(AP2_CONFIG, { jobId: offerId, route: routeOf(model, answerModel), amount: quote.amount, expiresAt, offer, datasetId: datasetIdOf(b.datasetId, folder), mode: "estimate-first" }); }
+        try { ap2Hold = signJobCheckout(AP2_CONFIG, { jobId: offerId, route, amount: quote.amount, expiresAt, offer, datasetId: datasetIdOf(b.datasetId, folder), mode: "estimate-first" }); }
         catch (e) { return dataJson(res, 500, { error: `the estimate could not be signed, so nothing can be paid: ${(e as Error).message}` }); }
       }
       const attested = attestedRoute(basis, PAID_JOBS.attestable);
@@ -924,8 +931,8 @@ createServer(async (req, res) => {
       console.log(JSON.stringify({ ts: new Date().toISOString(), route: "offer", event: "offer_estimated", offerId, amount: quote.amount, files: size.files, bytes: size.totalBytes, calls: quote.breakdown.calls.length }));
       return dataJson(res, 200, {
         jobId: offerId, offerId, mode: "estimate-first", totalUsd: quote.totalUsd, amount: quote.amount, network: offer.network, asset: offer.asset, payTo: offer.payTo, expiresAt,
-        route: routeOf(model, answerModel), attested,
-        basis: { files: size.files, totalBytes: size.totalBytes, modelCalls: quote.breakdown.calls.length, maxPromptChars: CROSSASK_MAX_PROMPT, maxTokens: OFFER_CONFIG.maxTokens, sqlRetries: CROSSASK_RETRIES },
+        route, attested,
+        basis: { files: size.files, totalBytes: size.totalBytes, modelCalls: quote.breakdown.calls.length, maxPromptChars: CROSSASK_MAX_PROMPT, answerMaxPromptChars: CROSSASK_ANSWER_MAX_PROMPT, maxTokens: OFFER_CONFIG.maxTokens, sqlRetries: CROSSASK_RETRIES },
         ...(ap2Hold ? { ap2: ap2Answer(ap2Hold) } : {}),
       });
     }
@@ -942,7 +949,7 @@ createServer(async (req, res) => {
       if (JOBS.full()) return dataJson(res, 503, { error: `${PAID_JOBS.max} paid jobs are open (--job-max); pay or let one expire first` });
       let out;
       try {
-        out = await crossAsk({ folder: b.folder, question: b.question, model, answerModel, phrase, sqlRetries: CROSSASK_RETRIES, answerMaxRows: CROSSASK_ROWS, maxPromptChars: CROSSASK_MAX_PROMPT, retryErrorMaxChars: CROSSASK_ERROR_CHARS, sql: typeof b.sql === "string" && b.sql.trim() ? b.sql : undefined, checkSmallNumbers: CHECK_SMALL },
+        out = await crossAsk({ folder: b.folder, question: b.question, model, answerModel, phrase, sqlRetries: CROSSASK_RETRIES, answerMaxRows: CROSSASK_ROWS, maxPromptChars: CROSSASK_MAX_PROMPT, answerMaxPromptChars: CROSSASK_ANSWER_MAX_PROMPT, retryErrorMaxChars: CROSSASK_ERROR_CHARS, sql: typeof b.sql === "string" && b.sql.trim() ? b.sql : undefined, checkSmallNumbers: CHECK_SMALL },
           { analyst: analystClient(ANALYST, CROSSASK_TIMEOUT_MS), chat: gatewayChat({ url: GATEWAY, key: KEY, timeoutMs: CROSSASK_TIMEOUT_MS }), ...(JOB_FEED ? { clock: () => performance.now() } : {}) });
       } catch (e) {
         return dataJson(res, 502, { error: `the job did not run, so nothing can be paid: ${(e as Error).message}` });
@@ -974,9 +981,11 @@ createServer(async (req, res) => {
       catch (e) { return dataJson(res, 502, { error: (e as Error).message }); }
       // The held (and later released) result is what it was before the job feed: the step timings are the feed's only.
       const { timings: _timings, ...result } = out;
+      // ARCH-644: the route names the models this run called, from its own steps (an exact query calls no query model).
+      const route = routeOf(calledModels({ model, answerModel }, out.sentToModel));
       // --pricing after: the quote is the job's own meter, so the quote id is the job id and the actual cost is the price.
       const receiptHold: ReceiptHold | undefined = receiptFiles ? {
-        network: offer.network, quoteId: jobId, route: routeOf(model, answerModel), datasetId: datasetIdOf(b.datasetId, resolvedFolder),
+        network: offer.network, quoteId: jobId, route, datasetId: datasetIdOf(b.datasetId, resolvedFolder),
         ...(templateLabelOf(b.templateLabel) ? { templateLabel: templateLabelOf(b.templateLabel) } : {}), files: receiptFiles, sql: out.sql as string,
         priceUsd: quote.totalUsd, actualUsd: quote.totalUsd,
         quoteBasis: { pricing: "after", phrase, userSql: typeof b.sql === "string" && b.sql.trim() !== "", sqlRetries: CROSSASK_RETRIES, answerMaxRows: CROSSASK_ROWS, maxPromptChars: CROSSASK_MAX_PROMPT, calls: out.served.length },
@@ -985,7 +994,7 @@ createServer(async (req, res) => {
       let ap2Hold: Ap2Hold | undefined;
       if (AP2_CONFIG) {
         try {
-          ap2Hold = signJobCheckout(AP2_CONFIG, { jobId, route: routeOf(model, answerModel), amount: quote.amount, expiresAt, offer,
+          ap2Hold = signJobCheckout(AP2_CONFIG, { jobId, route, amount: quote.amount, expiresAt, offer,
             ...(receiptHold ? { datasetId: receiptHold.datasetId, filesRoot: filesRoot(receiptHold.files) } : {}) });
         } catch (e) {
           return dataJson(res, 500, { error: `the quote could not be signed, so nothing can be paid: ${(e as Error).message}` });
@@ -1001,7 +1010,7 @@ createServer(async (req, res) => {
       // call of the job came back with the gateway's attestation evidence (the calls ca-attest is asked about); a job with
       // no model call, or with one call on a route without evidence, is not attested. Model ids and a boolean only.
       const attested = out.served.length > 0 && out.served.every((s) => s.attest !== undefined);
-      return dataJson(res, 200, { jobId, totalUsd: quote.totalUsd, amount: quote.amount, network: offer.network, asset: offer.asset, payTo: offer.payTo, expiresAt, route: routeOf(model, answerModel), attested, ...(ap2Hold ? { ap2: ap2Answer(ap2Hold) } : {}) });
+      return dataJson(res, 200, { jobId, totalUsd: quote.totalUsd, amount: quote.amount, network: offer.network, asset: offer.asset, payTo: offer.payTo, expiresAt, route, attested, ...(ap2Hold ? { ap2: ap2Answer(ap2Hold) } : {}) });
     }
     // The NEAR payment for one job, relayed to the paywall (never the gateway, and without the gateway key).
     if (PAID_JOBS && api === "paid" && name === "jobs" && req.method === "POST") {

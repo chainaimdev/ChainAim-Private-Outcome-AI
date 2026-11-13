@@ -89,6 +89,10 @@ export type CrossAskInput = { folder: string; question: string; model: string; /
   /** Characters of the query prompt (every message's text) at most: older failed attempts are left out first (fitPrompt). Absent:
    * no limit (the gateway refuses more than 48,000 characters, keys of the JSON body included, so a caller sets this lower). */
   maxPromptChars?: number;
+  /** Characters of the answer prompt (every message's text) at most: result rows are left out from the end, and the prompt says
+   * how many are shown, until it fits; when not even one row fits, no model is asked and the result is kept with an error.
+   * Absent: no limit. An estimate prices the answer call at this size (privateAI-design-34 ARCH-638), so a run sends no more. */
+  answerMaxPromptChars?: number;
   /** A failed query's error text fed back to the model is cut to this many characters (DuckDB binder errors list every candidate
    * column). Absent: not cut. */
   retryErrorMaxChars?: number;
@@ -322,9 +326,24 @@ export async function crossAsk(input: CrossAskInput, deps: CrossAskDeps): Promis
     return out;
   }
   if (input.phrase === "llm") {
-    const table = resultText(out.result, input.answerMaxRows);
-    const ask: Msg[] = [{ role: "system", content: ANSWER_SYSTEM }, { role: "user", content: `Question: ${input.question.trim()}\n\nResult:\n${table}` }]; // no SQL: it led a small model to review the query instead of answering
-    out.sentToModel.push({ step: "answer", chars: ask.reduce((n, m) => n + m.content.length, 0), bytes: utf8Bytes(ask), hasData: true });
+    // no SQL: it led a small model to review the query instead of answering
+    const askOf = (rows: number): { table: string; ask: Msg[] } => {
+      const table = resultText(out.result!, rows);
+      return { table, ask: [{ role: "system", content: ANSWER_SYSTEM }, { role: "user", content: `Question: ${input.question.trim()}\n\nResult:\n${table}` }] };
+    };
+    const chars = (ms: readonly Msg[]) => ms.reduce((n, m) => n + m.content.length, 0);
+    let rows = Math.min(input.answerMaxRows, out.result.rows.length);
+    let fit = askOf(rows);
+    const cap = input.answerMaxPromptChars;
+    if (cap !== undefined) {
+      while (rows > 1 && chars(fit.ask) > cap) fit = askOf(--rows);
+      if (chars(fit.ask) > cap) {
+        out.error = `the result is below, but no worded answer was asked for: the question and one result row are ${chars(fit.ask)} characters, over the ${cap} an answer request may have`;
+        return out;
+      }
+    }
+    const { table, ask } = fit;
+    out.sentToModel.push({ step: "answer", chars: chars(ask), bytes: utf8Bytes(ask), hasData: true });
     // The result is already computed here; a failed answer step keeps it and says why, instead of losing it.
     let reply: ChatReply;
     try { reply = await timed(() => deps.chat(ask, input.answerModel || input.model), (ms) => { t!.answerMs = ms; }); }

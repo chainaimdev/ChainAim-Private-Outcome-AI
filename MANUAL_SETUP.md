@@ -473,3 +473,13 @@ stay off. The file is measured on this PC, never typed in.
 4. Commit `config/cost-model.json` with the next ship if it should be the team default (it holds sizes and prices, no data);
    the report of every sample is in `test-console\runs\calibrate-<time>.json` (git-ignored).
 5. Re-run after a change of machine, model or compute price; the file records `calibratedAt`, `machine` and `source`.
+6. (ARCH-635b, 2026-11-12) The analyst is priced as a fixed time per run plus a time per MB, so the calibration must cover
+   2+ dataset sizes, the largest at least 16x the smallest (`scripts/calibrate.ts --analyst-size-ratio`). The default
+   `-CalibrateDatasets all` covers smb-fin-1 (about 5 KB) and smb-erp-fin (Orion, about 2 MB); leaving smb-erp-fin out
+   makes -Calibrate stop with "measured on one dataset size only", nothing written. The file is then version 2
+   (`units.analystBaseUsd`); a version 1 file still loads, priced per MB only as before.
+7. (ARCH-635c) Model calls are priced the same way: a fixed time per call plus a time per KB of prompt, fitted over the
+   measured prompt sizes (the largest at least 4x the smallest: `--gateway-size-ratio`). Templates with an exact query time
+   the analyst with no model. A free question whose model-written query fails is printed as `SKIP` and left out; any other
+   failure writes nothing. The run prints "largest query prompt N characters": `--crossask-max-prompt-chars` (console)
+   could be set a little above N, which lowers the price of free questions (a larger prompt is then refused, not charged).

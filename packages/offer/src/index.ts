@@ -17,9 +17,14 @@ export type OfferKind = (typeof OFFER_KINDS)[number];
 export const OFFER_MODES = ["estimate-first", "run-hold"] as const;
 export type OfferMode = (typeof OFFER_MODES)[number];
 
-/** config/cost-model.json, written by desk.ps1 -Calibrate (design-32 ARCH-604). Every number is required. */
+/**
+ * config/cost-model.json, written by desk.ps1 -Calibrate (design-32 ARCH-604). Every number is required.
+ * Version 2 (ARCH-635b/c): the analyst costs analystBaseUsd per run plus analystPerMbUsd per MB, and a model call
+ * gatewayBaseUsd per call plus gatewayPerKbPromptUsd per KB of prompt, each fitted over 2+ sizes. Version 1 files (per unit
+ * only) still read, with both bases 0: exactly what they priced before.
+ */
 export type CostModel = {
-  version: 1;
+  version: 1 | 2;
   calibratedAt: string;
   machine: string;
   source: string;
@@ -27,7 +32,7 @@ export type CostModel = {
   tokensPerByte: string;
   /** UTF-8 bytes per prompt character, worst case for the prompts the console builds (maxPromptChars -> bytes). */
   bytesPerChar: string;
-  units: { presidioPerKbUsd: string; analystPerMbUsd: string; gatewayPerKbPromptUsd: string };
+  units: { presidioPerKbUsd: string; analystBaseUsd: string; analystPerMbUsd: string; gatewayBaseUsd: string; gatewayPerKbPromptUsd: string };
   /** Raises the time-derived lines only (presidio, analyst, gateway), never the model tokens. */
   safetyPct: string;
 };
@@ -42,7 +47,7 @@ const DEC = (v: unknown, what: string): string => {
 export function parseCostModel(raw: unknown): CostModel {
   const o = raw as Record<string, unknown>;
   if (typeof o !== "object" || o === null || Array.isArray(o)) throw new Error("the cost model must be a JSON object");
-  if (o.version !== 1) throw new Error("cost model version must be 1");
+  if (o.version !== 1 && o.version !== 2) throw new Error("cost model version must be 1 or 2");
   for (const f of ["calibratedAt", "machine", "source"] as const) if (typeof o[f] !== "string" || o[f] === "") throw new Error(`cost model ${f} must be a non-empty string`);
   if (Number.isNaN(Date.parse(o.calibratedAt as string))) throw new Error("cost model calibratedAt must be an ISO time");
   const u = o.units as Record<string, unknown>;
@@ -50,9 +55,9 @@ export function parseCostModel(raw: unknown): CostModel {
   const tpb = DEC(o.tokensPerByte, "tokensPerByte"), bpc = DEC(o.bytesPerChar, "bytesPerChar");
   if (Number(tpb) <= 0 || Number(bpc) < 1) throw new Error("cost model tokensPerByte must be above 0 and bytesPerChar at least 1");
   return {
-    version: 1, calibratedAt: o.calibratedAt as string, machine: o.machine as string, source: o.source as string,
+    version: o.version, calibratedAt: o.calibratedAt as string, machine: o.machine as string, source: o.source as string,
     tokensPerByte: tpb, bytesPerChar: bpc,
-    units: { presidioPerKbUsd: DEC(u.presidioPerKbUsd, "units.presidioPerKbUsd"), analystPerMbUsd: DEC(u.analystPerMbUsd, "units.analystPerMbUsd"), gatewayPerKbPromptUsd: DEC(u.gatewayPerKbPromptUsd, "units.gatewayPerKbPromptUsd") },
+    units: { presidioPerKbUsd: DEC(u.presidioPerKbUsd, "units.presidioPerKbUsd"), analystBaseUsd: o.version === 1 ? "0" : DEC(u.analystBaseUsd, "units.analystBaseUsd"), analystPerMbUsd: DEC(u.analystPerMbUsd, "units.analystPerMbUsd"), gatewayBaseUsd: o.version === 1 ? "0" : DEC(u.gatewayBaseUsd, "units.gatewayBaseUsd"), gatewayPerKbPromptUsd: DEC(u.gatewayPerKbPromptUsd, "units.gatewayPerKbPromptUsd") },
     safetyPct: DEC(o.safetyPct, "safetyPct"),
   };
 }
@@ -62,7 +67,8 @@ export type OfferBasis =
   | { kind: "scan"; textBytes: number }
   | { kind: "mask"; textBytes: number }
   | { kind: "chat"; model: string; promptBytes: number; maxTokens: number }
-  | { kind: "crossask"; model: string; answerModel?: string; phrase: "llm" | "none"; userSql: boolean; totalBytes: number; files: number; maxPromptChars: number; maxTokens: number; sqlRetries: number; answerMaxRows: number };
+  /** maxPromptChars caps each query request, answerMaxPromptChars the answer request (the run enforces both: crossask). */
+  | { kind: "crossask"; model: string; answerModel?: string; phrase: "llm" | "none"; userSql: boolean; totalBytes: number; files: number; maxPromptChars: number; answerMaxPromptChars: number; maxTokens: number; sqlRetries: number; answerMaxRows: number };
 
 const whole = (n: unknown, what: string, min = 0): number => {
   if (typeof n !== "number" || !Number.isInteger(n) || n < min) throw new Error(`${what} must be a whole number of at least ${min}`);
@@ -76,9 +82,16 @@ export function checkBasis(b: OfferBasis): OfferBasis {
   if (b.kind === "chat") { whole(b.promptBytes, "promptBytes", 1); whole(b.maxTokens, "maxTokens", 1); return b; }
   if (b.answerModel !== undefined && !/^[\w.-]+\/[\w.:-]+$/.test(b.answerModel)) throw new Error("answerModel must look like provider/name");
   if (b.phrase !== "llm" && b.phrase !== "none") throw new Error("phrase must be llm or none");
-  for (const f of ["totalBytes", "files", "maxPromptChars", "maxTokens", "sqlRetries", "answerMaxRows"] as const) whole(b[f], f);
+  for (const f of ["totalBytes", "files", "maxPromptChars", "answerMaxPromptChars", "maxTokens", "sqlRetries", "answerMaxRows"] as const) whole(b[f], f);
   whole(b.files, "files", 1);
+  whole(b.maxPromptChars, "maxPromptChars", 1);
+  whole(b.answerMaxPromptChars, "answerMaxPromptChars", 1);
   return b;
+}
+
+/** A fixed-time extra line (ARCH-635b/c): usd x count x (1 + safety); no line for a zero rate or no count. */
+function baseLine(name: string, usd: string, count: number, safetyPct: string): { name: string; usd: string }[] {
+  return count > 0 && parseDecimal(usd, name).n > 0n ? [{ name, usd: perUnit(usd, count, 1, safetyPct) }] : [];
 }
 
 /** Exact decimal of rate x n / per x (1 + safety/100), rounded UP to 12 decimals. */
@@ -109,19 +122,25 @@ export function worstCase(b: OfferBasis, cm: CostModel): { meter: MeterLine[]; e
       extras: [
         { name: "presidio", usd: perUnit(cm.units.presidioPerKbUsd, b.promptBytes, KB, cm.safetyPct) },
         { name: "gateway", usd: perUnit(cm.units.gatewayPerKbPromptUsd, b.promptBytes, KB, cm.safetyPct) },
+        ...baseLine("gatewayBase", cm.units.gatewayBaseUsd, 1, cm.safetyPct),
       ],
     };
   }
-  // crossask: a user's own SQL needs no query call; otherwise 1 + retries query calls; plus the answer call with phrase llm.
-  const promptBytes = ceilMul(b.maxPromptChars, cm.bytesPerChar);
-  const call = (model: string): MeterLine => ({ model, promptTokens: ceilMul(promptBytes, cm.tokensPerByte), completionTokens: b.maxTokens });
+  // crossask: a user's own SQL needs no query call; otherwise 1 + retries query calls at the query cap; plus, with phrase
+  // llm, the answer call at the answer cap (question + result rows; crossask fits them under it).
+  const queryBytes = ceilMul(b.maxPromptChars, cm.bytesPerChar), answerBytes = ceilMul(b.answerMaxPromptChars, cm.bytesPerChar);
+  const call = (model: string, bytes: number): MeterLine => ({ model, promptTokens: ceilMul(bytes, cm.tokensPerByte), completionTokens: b.maxTokens });
   const queries = b.userSql ? 0 : 1 + b.sqlRetries;
-  const meter = [...Array.from({ length: queries }, () => call(b.model)), ...(b.phrase === "llm" ? [call(b.answerModel ?? b.model)] : [])];
+  const answer = b.phrase === "llm";
+  const meter = [...Array.from({ length: queries }, () => call(b.model, queryBytes)), ...(answer ? [call(b.answerModel ?? b.model, answerBytes)] : [])];
   return {
     meter,
     extras: [
       { name: "analyst", usd: perUnit(cm.units.analystPerMbUsd, b.totalBytes, MB, cm.safetyPct) },
-      { name: "gateway", usd: perUnit(cm.units.gatewayPerKbPromptUsd, promptBytes * meter.length, KB, cm.safetyPct) },
+      { name: "gateway", usd: perUnit(cm.units.gatewayPerKbPromptUsd, queryBytes * queries + (answer ? answerBytes : 0), KB, cm.safetyPct) },
+      // ARCH-635b/c: the fixed time of the analyst run and of each model call, raised by the same safety; none for version 1.
+      ...baseLine("analystBase", cm.units.analystBaseUsd, 1, cm.safetyPct),
+      ...baseLine("gatewayBase", cm.units.gatewayBaseUsd, meter.length, cm.safetyPct),
     ],
   };
 }

@@ -83,3 +83,39 @@ test("ARCH-635 sentToModel carries the UTF-8 bytes of exactly what was sent, bes
     assert.ok(s.bytes > s.chars, "the accents and the emoji take more bytes than UTF-16 units");
   });
 });
+
+// ARCH-638: the answer request is capped too, so an estimate priced at the cap is a bound the run keeps.
+const wide = (rows: number, width: number) => ({ columns: ["k", "v"], rows: Array.from({ length: rows }, (_, i) => ({ k: i, v: "w".repeat(width) })), truncated: false });
+const answerDeps = (result: ReturnType<typeof wide>, sent: Msg[][]): CrossAskDeps => ({
+  analyst: async (route) => route === "relations" ? { schema: "TABLE t (k BIGINT, v VARCHAR)", relations: [], tables: ["t"] } : result,
+  chat: async (messages) => { sent.push(messages.map((m) => ({ ...m }))); return { text: "Answered." }; },
+});
+const exact = { folder: "/x", question: "How many?", model: "m/q", answerModel: "m/a", phrase: "llm" as const, sqlRetries: 0, answerMaxRows: 50, sql: "SELECT k, v FROM t" };
+
+test("ARCH-638 answerMaxPromptChars: result rows are left out from the end until the answer prompt fits, and the prompt says so", async () => {
+  const sent: Msg[][] = [];
+  const r = await crossAsk({ ...exact, answerMaxPromptChars: 3000 }, answerDeps(wide(40, 200), sent));
+  assert.equal(r.error, undefined);
+  assert.equal(sent.length, 1, "exact SQL: only the answer call");
+  assert.ok(size(sent[0]) <= 3000, `answer prompt ${size(sent[0])} chars, over the cap`);
+  const shown = sent[0][1].content.match(/only the first (\d+) rows are shown/);
+  assert.ok(shown && Number(shown[1]) > 0 && Number(shown[1]) < 40, "says how many rows are shown");
+  assert.equal(r.sentToModel.at(-1)!.chars, size(sent[0]), "the step log records what was sent");
+});
+
+test("ARCH-638 answerMaxPromptChars: a result that already fits is sent whole; absent means no cap", async () => {
+  const a: Msg[][] = [], b: Msg[][] = [];
+  await crossAsk({ ...exact, answerMaxPromptChars: 8000 }, answerDeps(wide(3, 20), a));
+  await crossAsk(exact, answerDeps(wide(3, 20), b));
+  assert.deepEqual(a, b);
+  assert.ok(!/only the first/.test(a[0][1].content));
+});
+
+test("ARCH-638 answerMaxPromptChars: not even one row fits, so no model is asked and the result is kept with the reason", async () => {
+  const sent: Msg[][] = [];
+  const r = await crossAsk({ ...exact, answerMaxPromptChars: 600 }, answerDeps(wide(5, 2000), sent));
+  assert.equal(sent.length, 0);
+  assert.ok(r.result && r.result.rows.length === 5, "the computed result is kept");
+  assert.equal(r.answer, null);
+  assert.match(r.error ?? "", /over the 600 an answer request may have/);
+});

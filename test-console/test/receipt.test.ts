@@ -9,7 +9,7 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import {
   attestStatusFrom, buildReceipt, datasetFiles, datasetIdOf, parseSettlement, receiptCalls, receiptConfig, receiptOnRelease, ReceiptStore, releasedResult,
-  routeOf, templateLabelOf, type ReceiptInput,
+  calledModels, NO_MODEL_ROUTE, routeOf, templateLabelOf, type ReceiptInput,
 } from "../console/receipt.ts";
 import { internalHandler, JobStore, type HeldJob } from "../console/jobs.ts";
 import { JobFeed, jobFeedConfig, receiptEvent } from "../console/job-feed.ts";
@@ -141,10 +141,25 @@ test("ARCH-613 receipt fields from the request: dataset id or a folder hash (nev
   assert.equal(templateLabelOf("  Overdue invoices "), "Overdue invoices");
   assert.equal(templateLabelOf("line\nbreak"), undefined);
   assert.equal(templateLabelOf("x".repeat(121)), undefined);
-  assert.equal(routeOf("nearai/a", undefined), "nearai/a");
-  assert.equal(routeOf("nearai/a", "nearai/a"), "nearai/a");
-  assert.equal(routeOf("nearai/a", "local/b"), "nearai/a+local/b");
+  assert.equal(routeOf(["nearai/a"]), "nearai/a");
+  assert.equal(routeOf(["nearai/a", "nearai/a"]), "nearai/a");
+  assert.equal(routeOf(["nearai/a", "local/b"]), "nearai/a+local/b");
+  assert.equal(routeOf([]), NO_MODEL_ROUTE);
   assert.deepEqual(releasedResult({ a: 1, b: undefined, c: [{ d: undefined }] }), { a: 1, c: [{}] });
+});
+
+test("ARCH-644 the route names the models a run called, from its steps, never the request's unused query model", () => {
+  const r = { model: "bedrock/q", answerModel: "nearai/a" };
+  // exact SQL + worded answer: one answer call, so the query model is not on the route
+  assert.equal(routeOf(calledModels(r, [{ step: "answer" }])), "nearai/a");
+  // a model wrote the query (with one retry), then the answer model worded it
+  assert.equal(routeOf(calledModels(r, [{ step: "query" }, { step: "query (retry)" }, { step: "answer" }])), "bedrock/q+nearai/a");
+  // a model wrote the query, no worded answer
+  assert.equal(routeOf(calledModels(r, [{ step: "query" }])), "bedrock/q");
+  // no answer model set: the query model words the answer
+  assert.equal(routeOf(calledModels({ model: "bedrock/q" }, [{ step: "answer" }])), "bedrock/q");
+  // exact SQL, table only: no model at all
+  assert.equal(routeOf(calledModels(r, [])), NO_MODEL_ROUTE);
 });
 
 test("ARCH-613 attest verdicts map to the receipt: verified, unverified -> failed, anything unjudged -> pending", () => {

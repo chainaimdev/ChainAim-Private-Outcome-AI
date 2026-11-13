@@ -1470,3 +1470,46 @@ Built in the AI's workspace on a snapshot of the owner's repo (main = e8626e8, v
   /offers answers it and holds it; runOffer refuses (422, not charged) when an attested estimate's run returns a call without
   attestation evidence. offers+jobs 13/13; console-paid-jobs + offers + jobs 43 pass/1 skip; console-agent + docker +
   test-console 109/109 (Linux, DuckDB from /tmp); strict tsc server.ts OK.
+
+## 2026-11-12 ~23:10Z - live tab 03 estimate-first with the attestation fix (v1.8.0)
+
+- smb-fin-1 / Cash flow vs installment / agent t02 / estimate-first / nearai answer: estimated 0.04, attested route ✓, paid, settled
+  (tx 4wYq9CLAYarqTxt4mb4SXp43ugcyvX9jRUJ6FN6qxHLF), released, NEAR AI proof 1/1, receipt verified. Job ee216e7cde11b3678a0ad657d06ba338.
+- smb-erp-fin / Orion / Credit limit exposure: attested route ✓, quote 0.09 > auto-approve 0.05, refused, nothing signed or paid.
+  worstCase recomputed in the VM with the shipped code and config/cost-model.json: analyst 0.040305421837 (2,054,495 B) vs
+  0.000066701761 (3,400 B); gateway 0.010630143071 both. Root cause: single per-MB analyst rate from tiny files (ARCH-635b).
+
+## 2026-11-12 ~23:40Z - ARCH-644 route from the calls + ARCH-638 answer prompt cap
+
+- receipt.ts: routeOf(models) (unique, "+", NO_MODEL_ROUTE "analyst-only"), calledModels(request, sentToModel). server.ts:
+  /offers + AP2 route = routeOf(offerModels(basis)); runOffer receipt + run-first quote/AP2/receipt = routeOf(calledModels).
+- crossask: CrossAskInput.answerMaxPromptChars; the answer step fits rows under it or refuses without a model call.
+- offer: crossask basis answerMaxPromptChars (checked >= 1); worstCase answer call + gateway line from it.
+- console: --crossask-answer-max-prompt-chars (default 8000, min 500) on free, run-first and estimate-first runs; /offers basis.
+- Tests (Linux, DuckDB from /tmp): crossask 59/59 (+3), offer 11/11 (+1), test-console 72/72 (+1), console-paid-jobs +
+  console-agent 56 pass/1 skip (+1), other scripts/test 133/133, strict tsc server.ts + crossask + offer: 0 errors.
+
+## 2026-11-12 ~23:55Z - ARCH-635b analyst base + per MB (cost model v2)
+
+- packages/offer: CostModel version 1|2, units.analystBaseUsd (v1 -> "0"); worstCase extra "analystBase" (x safety) when > 0.
+- packages/offer/calibrate.ts: analystLine (per-size worst point, least-excess supporting line, >= 2 sizes, size ratio);
+  writes version 2; observed analystBaseMs / analystMsPerMb / analystSizes (was analystMsPerMbMax).
+- scripts/calibrate.ts: --analyst-size-ratio (default 16); prints base + per MB and the sizes.
+- Tests: offer 14/14 (+3), scripts calibrate + desk 36/36 (double's pers folder 64 KB; the pers-only Presidio-fill run now
+  also proves the one-size refusal), console suites 62 pass/1 skip, other scripts/test + test-console 169/169, strict tsc 0.
+
+## 2026-11-13 ~00:15Z - ARCH-635c model call base + per KB, calibration robustness
+
+- offer: units.gatewayBaseUsd (v1 -> "0"); baseLine() for analystBase and gatewayBase (x priced calls, x safety).
+- offer/calibrate: supportingLine (shared), analystLine, gatewayLine (--gateway-size-ratio 4); observed gatewayBaseMs,
+  gatewayMsPerKb, gatewayPromptBytes.
+- scripts/calibrate.ts: exact-SQL analyst runs (phrase none); SKIP for a model-written query that fails (not rate limits);
+  report "skipped"; prints both lines and the largest query prompt.
+- Tests: offer 14/14, scripts calibrate 8/8 (+2: skip written, rate limit not skipped) + desk, console suites 62 pass/1 skip,
+  other scripts/test + test-console + crossask 228/228, strict tsc 0.
+
+## 2026-11-13 ~00:05Z - live: Orion t02 estimate-first paid at 0.02
+
+- Calibration 2026-11-12T23:50Z (v2): analyst 997.7 ms/run + 4145 ms/MB; model call 2941 ms/call; safety 206 %; 12 ERP free runs
+  skipped. Orion "Credit limit exposure" quoted 0.02 (was 0.09), auto-paid by t02, settled, released, receipt verified.
+  Job 881a595613102e8140d7332b86f4a969.

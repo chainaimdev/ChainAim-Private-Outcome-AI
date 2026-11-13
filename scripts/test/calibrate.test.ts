@@ -48,17 +48,22 @@ async function double(mode: Mode): Promise<{ server: Server; url: string; seen: 
     if (req.method === "GET" && url.pathname === "/datasets") return send(200, DATASETS);
     if (req.method === "GET" && url.pathname === "/data/files") {
       const p = url.searchParams.get("path");
-      return send(200, { path: p, files: p?.endsWith("smb/statements") ? [{ name: "st.csv", size: 1024 * 1024 }, { name: "ar.csv", size: 1024 * 1024 }] : [{ name: "p.csv", size: 512 * 1024 }], truncated: false, maxFiles: 20 });
+      return send(200, { path: p, files: p?.endsWith("smb/statements") ? [{ name: "st.csv", size: 1024 * 1024 }, { name: "ar.csv", size: 1024 * 1024 }] : [{ name: "p.csv", size: 64 * 1024 }], truncated: false, maxFiles: 20 });
     }
     if (req.method === "POST" && url.pathname === "/crossask") {
-      if (mode.rateLimited && mode.rateLimited-- > 0) return send(200, { error: "the model that writes the query (m/x) failed: 429 rate_limited", result: null, served: [], sentToModel: [] });
+      if (mode.rateLimited && typeof body.sql !== "string" && mode.rateLimited-- > 0) return send(200, { error: "the model that writes the query (m/x) failed: 429 rate_limited", result: null, served: [], sentToModel: [] });
       runs++;
       if (mode.failRun === runs) return send(200, { error: "the model did not reply with a query", result: null, served: [], sentToModel: [] });
       const llm = body.phrase === "llm";
+      // an exact query (sql given, phrase none) calls no model, as crossask does
+      if (typeof body.sql === "string") return send(200, {
+        question: body.question, result: { columns: ["n"], rows: [{ n: 1 }], truncated: false }, answer: null, served: [], sentToModel: [],
+        ...(body.timings === true && !mode.noTimings ? { timings: { relationsMs: 40 + runs, queryMs: 0, sqlMs: 10, callsMs: [], files: 2 } } : {}),
+      });
       const served = [{ text: "q", usage: mode.noUsage ? undefined : { promptTokens: 300, completionTokens: 20 } }, ...(llm ? [{ text: "a", usage: mode.noUsage ? undefined : { promptTokens: 120, completionTokens: 30 } }] : [])];
       return send(200, {
         question: body.question, result: { columns: ["n"], rows: [{ n: 1 }], truncated: false }, answer: llm ? "One." : null, served,
-        sentToModel: [{ step: "query", chars: 1000, bytes: 1100, hasData: false }, ...(llm ? [{ step: "answer", chars: 400, bytes: 400, hasData: true }] : [])],
+        sentToModel: [{ step: "query", chars: 4000, bytes: 4400, hasData: false }, ...(llm ? [{ step: "answer", chars: 400, bytes: 400, hasData: true }] : [])],
         ...(body.timings === true && !mode.noTimings ? { timings: { relationsMs: 40 + runs, queryMs: 900, sqlMs: 10, ...(llm ? { answerMs: 500 } : {}), callsMs: [800 + 10 * runs, ...(llm ? [500] : [])], files: 2 } } : {}),
       });
     }
@@ -88,15 +93,23 @@ test("ARCH-635: a clean run writes config/cost-model.json that packages/offer re
     const cm = parseCostModel(file);
     assert.equal(cm.machine, "test-pc");
     assert.match(cm.source, /sample datasets smb, pers; model bedrock\/nemotron-nano-3-30b, answer bedrock\/nemotron-nano-3-30b; 2 runs; compute 3\.6 USD\/h/);
-    // analyst worst: (40+run + 10) ms over 0.5 MB (pers runs 3-4: 54 ms) = 108 ms/MB -> 0.000108 USD/MB at 3.6 USD/h
-    assert.equal(cm.units.analystPerMbUsd, "0.000108000000");
-    // gateway worst: the answer call, 500 ms over 400 B = 1280 ms/KB (beats the query call's 840 ms over 1100 B = 782 ms/KB)
-    assert.equal(cm.units.gatewayPerKbPromptUsd, "0.001280000000");
+    // ARCH-635b analyst line over the two sizes' slowest runs: smb 2 MB timed on its exact query, 52 ms (runs 1-2, no
+    // model); pers 64 KB (no exact query) from its free runs, 56 ms (runs 5-6). The larger folder is not slower, so the line
+    // is flat: 56 ms a run, 0 per MB -> 0.000056 USD a run at 3.6 USD/h.
+    assert.equal(cm.version, 2);
+    assert.deepEqual([cm.units.analystBaseUsd, cm.units.analystPerMbUsd], ["0.000056000000", "0.000000000000"]);
+    assert.deepEqual(file.observed.analystSizes, [64 * 1024, 2 * 1024 * 1024]);
+    // ARCH-635c model call line: answer 400 B -> 500 ms, query 4,400 B -> 860 ms (slowest, run 6): 360 ms per 4,000 B
+    // = 92.16 ms/KB, base 500 - 36 = 464 ms a call
+    assert.deepEqual([cm.units.gatewayBaseUsd, cm.units.gatewayPerKbPromptUsd], ["0.000464000000", "0.000092160000"]);
     assert.deepEqual([cm.tokensPerByte, cm.bytesPerChar], ["1", "1.1000"]);
     assert.deepEqual(file.observed.samples, { presidio: 8, analyst: 4, call: 8 }, "2 sizes x scan, mask x 2 runs; 2 datasets x 2 runs, 2 calls each");
     const asks = d.seen.filter((s) => s.path === "/crossask");
-    assert.equal(asks.length, 4);
-    for (const a of asks) { assert.equal(a.body.timings, true); assert.equal("sql" in a.body, false, "the template's sql is not sent: a model must write the query"); assert.equal(a.body.phrase, "llm"); }
+    assert.equal(asks.length, 6, "smb: 2 exact + 2 free runs; pers (no exact query): 2 free runs");
+    for (const a of asks) assert.equal(a.body.timings, true);
+    const exact = asks.filter((a) => "sql" in a.body), free = asks.filter((a) => !("sql" in a.body));
+    assert.deepEqual(exact.map((a) => [a.body.sql, a.body.phrase]), [["SELECT 1", "none"], ["SELECT 1", "none"]], "the analyst on the exact query, no model");
+    for (const a of free) assert.equal(a.body.phrase, "llm", "free questions: a model writes the query");
     assert.deepEqual(d.seen.filter((s) => s.path.startsWith("/data/files")).map((s) => s.path), ["/data/files?path=%2Fapp%2Fsample-data%2Fsmb%2Fstatements", "/data/files?path=%2Fapp%2Fsample-data%2Fpers"]);
     const scans = d.seen.filter((s) => s.path === "/gateway/scan");
     assert.deepEqual(scans.map((s) => Buffer.byteLength(s.body.text)), [1024, 1024, 4096, 4096], "the start of the local sample files, at each size");
@@ -105,11 +118,12 @@ test("ARCH-635: a clean run writes config/cost-model.json that packages/offer re
     const report = readFileSync(join(rep, readdirSync(rep)[0]), "utf8");
     for (const leak of ["Zqxmarker", QUESTION, "Coffee"]) assert.equal(report.includes(leak), false, leak);
     assert.match(r.out, /written .*cost-model\.json/);
+    assert.match(r.out, /largest query prompt 4000 characters/);
   } finally { d.server.close(); }
 });
 
 test("ARCH-635: a console older than ARCH-635 (no timings), a failed run or no token usage writes nothing", async () => {
-  for (const [mode, re] of [[{ noTimings: true }, /older than ARCH-635\. Rebuild it \(\.\\test-console\\desk\.ps1 -All -AllSkipTests\)/], [{ failRun: 2 }, /1 problem\(s\); nothing written[\s\S]*smb\|t1 run 2: the model did not reply with a query/], [{ noUsage: true }, /no model call reported its token usage[\s\S]*nothing written/]] as const) {
+  for (const [mode, re] of [[{ noTimings: true }, /older than ARCH-635\. Rebuild it \(\.\\test-console\\desk\.ps1 -All -AllSkipTests\)/], [{ failRun: 2 }, /1 problem\(s\); nothing written[\s\S]*smb\|t1 exact run 2: the model did not reply with a query/], [{ noUsage: true }, /no model call reported its token usage[\s\S]*nothing written/]] as const) {
     const d = await double(mode);
     const outFile = join(dir, "bad", "cost-model.json");
     try {
@@ -117,6 +131,32 @@ test("ARCH-635: a console older than ARCH-635 (no timings), a failed run or no t
       assert.equal(r.code, 1, r.out); assert.match(r.out, re); assert.equal(existsSync(outFile), false);
     } finally { d.server.close(); }
   }
+});
+
+test("ARCH-635c: a free run whose model-written query fails is skipped, reported and left out; the model is still written", async () => {
+  const d = await double({ failRun: 3 }); // run 3 = smb's first free run (runs 1-2 are its exact runs)
+  const outFile = join(dir, "skip", "cost-model.json"), rep = join(dir, "skip-runs");
+  try {
+    const r = await cli(base(d.url, outFile, rep));
+    assert.equal(r.code, 0, r.out);
+    assert.match(r.out, /SKIP smb\|t1 run 1: the model did not reply with a query/);
+    assert.match(r.out, /1 model run\(s\) skipped: the model's query did not run; left out of the numbers/);
+    const file = JSON.parse(readFileSync(outFile, "utf8"));
+    assert.deepEqual(file.observed.samples, { presidio: 8, analyst: 4, call: 6 }, "one free run's 2 calls fewer; the analyst is from the exact runs");
+    assert.deepEqual(JSON.parse(readFileSync(join(rep, readdirSync(rep)[0]), "utf8")).skipped, ["smb|t1 run 1: the model did not reply with a query"]);
+  } finally { d.server.close(); }
+});
+
+test("ARCH-635c: a rate limit still there after the retries is a problem (nothing written), never a skipped run", async () => {
+  const d = await double({ rateLimited: 100 });
+  const outFile = join(dir, "rl-out", "cost-model.json");
+  try {
+    const r = await cli(base(d.url, outFile, join(dir, "rl-out-runs")));
+    assert.equal(r.code, 1, r.out);
+    assert.match(r.out, /problem\(s\); nothing written[\s\S]*429 rate_limited/);
+    assert.equal(/SKIP /.test(r.out), false);
+    assert.equal(existsSync(outFile), false);
+  } finally { d.server.close(); }
 });
 
 test("ARCH-635: a rate-limited call is waited out and sent again", async () => {
@@ -157,15 +197,18 @@ test("ARCH-635: sampleText takes the start of the text files in order, cut on a 
   assert.equal(sampleText([join(dir, "none")], 20, true), "", "no text file: nothing to repeat");
 });
 
-test("ARCH-635: sample files smaller than a Presidio size are repeated up to it (owner run 2026-11-12: 2,600 bytes of text); a run still writes the model", async () => {
+test("ARCH-635: sample files smaller than a Presidio size are repeated up to it (owner run 2026-11-12: 2,600 bytes of text); ARCH-635b: one dataset size writes no model", async () => {
   const d = await double({});
   const outFile = join(dir, "small", "cost-model.json"), rep = join(dir, "small-runs");
   try {
     // pers: one 8-byte CSV, so every size is its text repeated
     const r = await cli(base(d.url, outFile, rep, ["--presidio-kb", "1,16,19", "--datasets", "pers"]));
-    assert.equal(r.code, 0, r.out);
+    // every Presidio size is measured from the repeated text; then the analyst, measured on one folder size only (pers),
+    // cannot be split into its fixed and per-MB parts (ARCH-635b), so the run stops and writes nothing
+    assert.equal(r.code, 1, r.out);
     assert.match(r.out, /NOTE presidio 19 KB: the sample files hold 8 bytes of text, repeated to 19456 bytes/);
-    assert.ok(existsSync(outFile));
+    assert.match(r.out, /the analyst was measured on one size only \(65536 bytes\).*nothing written/);
+    assert.equal(existsSync(outFile), false);
     const scans = d.seen.filter((s) => s.path === "/gateway/scan").map((s) => Buffer.byteLength(s.body.text));
     assert.deepEqual(scans, [1024, 1024, 16384, 16384, 19456, 19456]);
     assert.deepEqual(JSON.parse(readFileSync(join(rep, readdirSync(rep)[0]), "utf8")).presidioKbRepeatedText, [1, 16, 19]);

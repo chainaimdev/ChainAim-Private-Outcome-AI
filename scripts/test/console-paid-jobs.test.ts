@@ -565,6 +565,25 @@ describe("privateAI-design-34 ARCH-636 ARCH-637 ARCH-638 estimate-first offers o
     assert.match(consoleProc.out(), new RegExp(`"event":"offer_ran","offerId":"${j.jobId}"`));
   });
 
+  test("ARCH-644 ARCH-638: an exact query's route names only the models it calls; the answer call is priced at the answer cap", async () => {
+    // The query model is not priced in the catalog: an exact query never calls it, so it is neither priced nor on the route.
+    const exact = { folder: data, question: QUESTION, model: "unpriced/query-model", answerModel: MODEL, phrase: "llm", sql: "SELECT count(*) AS n FROM orders" };
+    const r = await offerAt(exact);
+    assert.equal(r.status, 200, r.text);
+    const j = JSON.parse(r.text);
+    assert.equal(j.route, MODEL, "only the answer model");
+    assert.deepEqual([j.basis.modelCalls, j.basis.answerMaxPromptChars], [1, 8000]);
+    modelCalls = 0;
+    const run = await runAt(j.jobId);
+    assert.equal(run.status, 200, run.text);
+    assert.equal(modelCalls, 1, "the worded answer only");
+    const none = JSON.parse((await offerAt({ ...exact, phrase: "none", answerModel: undefined })).text);
+    assert.equal(none.route, "analyst-only", "an exact query worded by no model calls no model");
+    assert.equal(none.basis.modelCalls, 0);
+    const free = JSON.parse((await offerAt({ folder: data, question: QUESTION, model: MODEL, phrase: "llm" })).text);
+    assert.equal(free.route, MODEL, "query and answer on one model: named once");
+  });
+
   test("ARCH-638: a folder that grew past the tolerance after the estimate is refused (409) before any model call", async () => {
     const grow = join(data, "grow");
     mkdirSync(grow, { recursive: true });
