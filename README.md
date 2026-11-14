@@ -109,7 +109,7 @@ node scripts/observe-receipt.ts --file docs/judge/sample-receipt-2026-11-14T0729
 
 # 3. The receipt, AP2 quote and mandate, offer pricing, observer, signer, spending-policy, console and masking-gateway tests.
 node --test "packages/receipt/test/*.test.ts" "packages/ap2/test/*.test.ts" "packages/offer/test/*.test.ts" "packages/observer/test/*.test.ts" "packages/signer/test/*.test.ts" "packages/agent-policy/test/*.test.ts" "services/signer/test/*.test.ts" "test-console/test/*.test.ts" "services/gateway/test/*.test.ts"
-#    you will see: # pass 565 and # fail 0 (v2.3.0; a few minutes)
+#    you will see: # pass 565 and # fail 0 (v2.3.1, under 3 minutes)
 ```
 
 `--result none`: the released answer is not published; with the result file, step 1 also checks the result hash. The
@@ -161,7 +161,8 @@ Full commands with expected output: **[cmd.md](cmd.md)**. This repo runs togethe
 
 **1. One-time setup (once per PC):** [cmd.md PART 1](cmd.md) — tools, clone both repos, packages, the local gateway key,
 the secrets files in your secrets folder (outside the repository), the gateway's model mode, and the first start
-(`.\test-console\up.ps1 -ReplaceRunning -Build -PayTo <XRPL pay-to>`). The admin UI repo's one-time setup comes first.
+(`.\test-console\up.ps1 -ReplaceRunning -Build -PayTo <XRPL pay-to>`; the pre-hackathon XRPL rail still needs any XRPL
+testnet address there, while paid jobs pay on NEAR only). The admin UI repo's one-time setup comes first.
 
 **2. Run all containers and both UIs (every day):** two commands, in this order.
 
@@ -212,7 +213,7 @@ The backend runs in Docker (one `docker-compose.yml`); only the 8730 UI runs on 
 | Presidio | `ca-presidio` | none | Entity detection for the gateway |
 | paywall | `ca-paywall` | 127.0.0.1:8080 | x402: quotes, verifies and settles payments (NEAR USDC, XRPL RLUSD), then proxies to the gateway |
 | analyst | `ca-analyst` | 127.0.0.1:8740 | DuckDB relations and read-only SQL on your data folder |
-| chain-query | `ca-chain-query` | 127.0.0.1:8750 | Read-only blockchain queries for the "Blockchain queries" panel |
+| chain-query | `ca-chain-query` | 127.0.0.1:8750 | Read-only blockchain queries for the "Blockchain queries" panel (hidden by default with `desk.ps1`; `-ChainPanel on` shows it) |
 | near-watch | `ca-near-watch` (from chainaim-adminUI-NEAR) | 127.0.0.1:8790 | Receives payment claims and job events; reconciles them with NEAR |
 | agent (optional) | `ca-agent`, only with `up.ps1 -Agent on` | 127.0.0.1:8760 | Tab 03 agent mode: masks the question, asks a Strands agent on Bedrock, runs the paid job, signs the tenant's AP2 checkout mandate and pays it from the tenant's NEAR account |
 | **control plane:** signer | `ca-control-signer`, its own compose project `chainaim-control-plane`, network `chainaim-control` | 127.0.0.1:8780 | ChainAim's signer: prices each job from sizes, signs the AP2 quote, verifies the agent's checkout mandate before the run, signs the receipt and its settlement. Holds ChainAim's two signing keys (from its own keys folder); sees sizes, ids, hashes and amounts only |
@@ -261,7 +262,7 @@ One PC can use other prices with `paid-jobs-settings.env` in its secrets folder 
 | `services/paywall` | x402 paywall (NEAR and XRPL rails, paid jobs); buyer scripts in `scripts/` |
 | `services/analyst` | DuckDB analysis, relations, read-only SQL |
 | `services/chain-query` | Read-only chain queries |
-| `services/web` | Browser wallet bundles (`wallet.js`, `near-wallet.js`) and the PrivacyBuddy page |
+| `services/web` | Browser wallet bundles (`wallet.js`, `near-wallet.js`) and an older private-chat page from the version before the hackathon (XRPL, Crossmark) |
 | `test-console` | The console (`console/server.ts`), `up.ps1` / `down.ps1`, and the older scripts (`stack.ps1`, `switch-models.ps1`, `start-ui.ps1`, `desk.ps1`) |
 | `packages/crossask` | "Ask across files" and paid-job pricing (`cost.ts`) |
 | `config` | Model catalogs and registries, data-folder settings, team prices |

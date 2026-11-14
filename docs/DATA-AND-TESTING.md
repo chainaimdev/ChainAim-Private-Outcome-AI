@@ -1,6 +1,6 @@
 # CreditSeal — where the demo data is, and how to test it (UI and terminal)
 
-Repository root: `C:\SATHYA\CHAINAIM3003\mcp-servers\FINAGENTS\CreditSeal\CreditSeal` (all paths below are relative to it).
+Repository root: `<your-folder>\FINAGENTS\CreditSeal\CreditSeal` (all paths below are relative to it).
 State described: `v1.3.0` (sealed exchange). Design background: `DESIGN/xrplh-19` (split), `DESIGN/xrplh-21` (isolation,
 reapply, anchors), `DESIGN/xrplh-22` (end-to-end encryption and keys).
 

@@ -1,6 +1,6 @@
 # ARCHITECTURE — chainiam-private-ai: add NEAR USDC payments next to RLUSD
 
-Target repo: `C:\SATHYA\CHAINAIM3003\mcp-servers\chainiam-private-ai`
+Target repo: `<your-folder>\chainiam-private-ai`
 Status of this document: design. Sections marked **VERIFIED** were read from the code or official docs. Sections marked **GATE** must be verified by the implementer before code is written (see §4).
 
 ---

@@ -1,7 +1,7 @@
 # xrplh-24 — Dental RCM reconciliation, domain-packs, settlement, decoupling: full session
 
 Session: 2026-10-31 14:08 to 2026-11-01 13:30 (UTC-05:00). Repository: CreditSeal (branch main).
-Paths below use forward slashes; on Windows they are under `C:/SATHYA/CHAINAIM3003/mcp-servers/FINAGENTS/CreditSeal/CreditSeal/`.
+Paths below use forward slashes; on Windows they are under `<your-folder>/FINAGENTS/CreditSeal/CreditSeal/`.
 
 Status legend: **BUILT** = files exist on the PC (verified by size/read-back). **DESIGN** = agreed in discussion, nothing built.
 **VERIFIED** = read from a file or an official/public source. **ASSUMED** = inference, to be confirmed.

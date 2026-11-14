@@ -3,7 +3,7 @@
 Session: 2026-11-02 23:32 to 2026-11-03 02:32 (UTC-05:00). Repository: CreditSeal (branch main). Continues xrplh-25 §13.
 Phase records: DESIGN/xrplh-26 (§1-5 Phase 4c-1, §6 Phase 4c-1b). This file is the session narrative: what was asked, found, decided,
 built and measured, in order. It is a structured record written at the end of the session, not a verbatim transcript.
-Paths are relative to `C:/SATHYA/CHAINAIM3003/mcp-servers/FINAGENTS/CreditSeal/CreditSeal/`.
+Paths are relative to `<your-folder>/FINAGENTS/CreditSeal/CreditSeal/`.
 
 Status legend: **BUILT** = files exist and were tested (where stated). **DESIGN** = agreed, nothing built.
 **VERIFIED** = read from a file, a test or the owner's PC output. **ASSUMED** = inference, to be confirmed.

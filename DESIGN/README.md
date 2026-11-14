@@ -19,7 +19,7 @@ evidence in BUILD_LOG.md; how the ask and the payment are tied in DESIGN/xrplh-6
 It writes a new seed straight into -EnvFile (UTF-8, no BOM) and never prints it.
 
 ```powershell
-cd C:\SATHYA\CHAINAIM3003\mcp-servers\FINAGENTS\PRIVAI2\chainaim-router-private-ai-2      # CHANGE: where you cloned
+cd <your-folder>\FINAGENTS\PRIVAI2\chainaim-router-private-ai-2      # CHANGE: where you cloned
 $P = "XRPL_SEED_B02"                                         # CHANGE: your own prefix (B01 is taken)
 $F = "C:\PRIV-AI-SECRETS\mywallets.env"                     # CHANGE: your seed file, outside the repository
 
@@ -121,7 +121,7 @@ Run one block at a time and check its "Pass" line in the sections below before t
 
 ```powershell
 # --- CHANGE these three -------------------------------------------------------------
-$REPO   = "C:\SATHYA\CHAINAIM3003\mcp-servers\FINAGENTS\PRIVAI2\chainaim-router-private-ai-2"   # CHANGE: where you cloned
+$REPO   = "<your-folder>\FINAGENTS\PRIVAI2\chainaim-router-private-ai-2"   # CHANGE: where you cloned
 $PREFIX = "XRPL_SEED_B02"                                   # CHANGE: your own wallet prefix (B01 is taken)
 $ENVF   = "C:/PRIV-AI-SECRETS/testnet2.env"                 # seed file, outside every repository
 $SELLER = "rn5hSy7QvsrQLpGb3k5dp4h8Yrk9J7gBej"              # seller (pay-to) public address, 2026-10-24; ask the team if it changed

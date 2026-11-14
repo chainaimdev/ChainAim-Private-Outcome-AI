@@ -7,7 +7,7 @@ Status: DESIGN ONLY. No code changed. Punchline: **"ChainAim never works unpaid;
 
 ## 0. Sources (Rule 3: what was read, what was carried over, what is assumed)
 
-Read in this chat (repo copy `C:\SATHYA\CHAINAIM3003\mcp-servers\chainiam-private-ai`, v2.0.0 code):
+Read in this chat (repo copy `<your-folder>\chainiam-private-ai`, v2.0.0 code):
 - services/paywall/src/app.ts (whole): onBeforeVerify (invoice claim), onSettleFailure, onAfterSettle (payment log,
   `jobs.markReleased`, `notifyReleased`), `release()`, `runOffer()` (409/422 passed on as "you were not charged"; 502 on
   timeout/unreachable/bad body), release guard before the payment middleware, AsyncLocalStorage `marks` (phase log only).

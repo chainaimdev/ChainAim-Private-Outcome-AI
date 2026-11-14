@@ -36,12 +36,12 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 ### A2. Clone both repos side by side, and the two private folders
 
 ```powershell
-$ROOT = "C:\SATHYA\CHAINAIM3003\mcp-servers"
+$ROOT = "<your-folder>"   # any folder; both repos are cloned side by side in it
 New-Item -ItemType Directory -Force -Path $ROOT, C:\PRIV-AI-SECRETS, C:\PRIV-AI-DATA | Out-Null
 cd $ROOT
-git clone https://github.com/chainaimdev/chainaim-private-ai.git chainiam-private-ai
+git clone https://github.com/chainaimdev/chainaim-private-ai.git
 git clone https://github.com/chainaimdev/chainaim-adminUI-NEAR.git
-cd $ROOT\chainiam-private-ai
+cd $ROOT\chainaim-private-ai
 ```
 
 `C:\PRIV-AI-SECRETS` holds keys (never in git). `C:\PRIV-AI-DATA` holds your data files (mounted read-only).
@@ -150,11 +150,11 @@ the image build, `OK gateway / analyst / chain-query / console-api / UI answers`
 
 ```powershell
 # 1. Admin UI repo: near-watch container + admin UI (8800)
-cd C:\SATHYA\CHAINAIM3003\mcp-servers\chainaim-adminUI-NEAR
+cd <your-folder>\chainaim-adminUI-NEAR
 .\nearadminup.ps1
 
 # 2. This repo: the six backend containers + the console UI (8730)
-cd C:\SATHYA\CHAINAIM3003\mcp-servers\chainiam-private-ai
+cd <your-folder>\chainaim-private-ai
 .\test-console\up.ps1
 ```
 
@@ -208,11 +208,11 @@ own account (architecture-tab03-agent-mode.md). One-time: MANUAL_SETUP.md, "Tab 
 
 ```powershell
 # 1. Admin UI repo: near-watch with a buyer card per tenant (the list is in config\near-watch-watch.conf; add the t02/t03 lines there once)
-cd C:\SATHYA\CHAINAIM3003\mcp-servers\chainaim-adminUI-NEAR
+cd <your-folder>\chainaim-adminUI-NEAR
 .\nearadminup.ps1
 
 # 2. This repo: the six containers plus ca-agent, and the console UI
-cd C:\SATHYA\CHAINAIM3003\mcp-servers\chainiam-private-ai
+cd <your-folder>\chainaim-private-ai
 .\test-console\up.ps1 -Agent on -Build
 ```
 
@@ -264,11 +264,11 @@ docker logs ca-console-api --since 15m 2>&1 | Select-String "paid-job|paid-chat"
 
 ```powershell
 # 1. This repo: console UI + six containers
-cd C:\SATHYA\CHAINAIM3003\mcp-servers\chainiam-private-ai
+cd <your-folder>\chainaim-private-ai
 .\test-console\down.ps1
 
 # 2. Admin UI repo: admin UI + ca-near-watch
-cd C:\SATHYA\CHAINAIM3003\mcp-servers\chainaim-adminUI-NEAR
+cd <your-folder>\chainaim-adminUI-NEAR
 .\down.ps1
 ```
 
