@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="ocean">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -285,7 +285,7 @@ document.getElementById("sB").onclick=()=>pick("B");
 const THEMES=["auto","light","dark","ocean","warm","midnight","contrast"], tsel=document.getElementById("theme");
 function setTheme(t){ if(!THEMES.includes(t)) t="auto"; if(t==="auto") document.documentElement.removeAttribute("data-theme"); else document.documentElement.setAttribute("data-theme",t); tsel.value=t; try{ localStorage.setItem("oa-arch-v2-theme",t); }catch(e){} }
 tsel.onchange=()=>setTheme(tsel.value);
-let savedTheme="auto"; try{ savedTheme=localStorage.getItem("oa-arch-v2-theme")||"auto"; }catch(e){}
+let savedTheme="ocean"; try{ savedTheme=localStorage.getItem("oa-arch-v2-theme")||"ocean"; }catch(e){}
 setTheme(savedTheme);
 showAll();
 </script>

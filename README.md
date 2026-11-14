@@ -9,7 +9,8 @@ receipt and a settlement on NEAR.
 Built at **NEAR HACKATHON** (1 to 14 Nov 2026). What existed before the window and what was built in it, release by
 release: [NEAR-HACKATHON-DISCLOSURE.md](NEAR-HACKATHON-DISCLOSURE.md). Architecture, step by step:
 [docs/judge/outcome-ai-architecture.html](docs/judge/outcome-ai-architecture.html); on one page:
-[docs/judge/outcome-ai-architecture-simple.html](docs/judge/outcome-ai-architecture-simple.html). Companion repo (live operations):
+[docs/judge/outcome-ai-architecture-simple.html](docs/judge/outcome-ai-architecture-simple.html). **Live, narrated architecture walk-through:**
+[https://outcomeai-architecture.vercel.app/](https://outcomeai-architecture.vercel.app/). Companion repo (live operations):
 [chainaim-adminUI-NEAR](https://github.com/chainaimdev/chainaim-adminUI-NEAR).
 
 ## What makes it different
@@ -137,15 +138,14 @@ sample data is synthetic (no real company). Earlier samples: `docs/judge/older/`
 
 Demo video (2:30): [DEMO/outcome-ai-near-demo-2m30.mp4](DEMO/outcome-ai-near-demo-2m30.mp4) · its script:
 [DEMO/script-outcome-mp4-2.5min-Nov14-1.md](DEMO/script-outcome-mp4-2.5min-Nov14-1.md) · narrated walk-through:
-[docs/judge/demo-script-player-v11.html](docs/judge/demo-script-player-v11.html) · narrated architecture, step by step
-(open in a browser): [docs/judge/OutcomeAI-Arch-Narration-V3.html](docs/judge/OutcomeAI-Arch-Narration-V3.html) ·
+[docs/judge/demo-script-player-v11.html](docs/judge/demo-script-player-v11.html) · narrated architecture, step by step: **[https://outcomeai-architecture.vercel.app/](https://outcomeai-architecture.vercel.app/)**
+(the same page in the repo: [docs/judge/OutcomeAI-Arch-Narration-V3.html](docs/judge/OutcomeAI-Arch-Narration-V3.html)) ·
 the write-up: [below](#the-write-up-outcome-ai-in-about-1800-words).
 
 ## The write-up: Outcome AI in about 1,800 words
 
-The narrated, step-by-step version of this story is
-[docs/judge/OutcomeAI-Arch-Narration-V3.html](docs/judge/OutcomeAI-Arch-Narration-V3.html): open it in a browser (after
-cloning, or download the file) and press Play. It walks through run A (a paid outcome after one counter-offer) in 10
+The narrated, step-by-step version of this story is live at **[https://outcomeai-architecture.vercel.app/](https://outcomeai-architecture.vercel.app/)** (press Play);
+the same page is in the repo as [docs/judge/OutcomeAI-Arch-Narration-V3.html](docs/judge/OutcomeAI-Arch-Narration-V3.html). It walks through run A (a paid outcome after one counter-offer) in 10
 steps and run B (a refund) in 4, with the real ids, hashes and transactions of 14 Nov 2026. The demo video follows the
 script in [DEMO/script-outcome-ins-2m58-V2.md](DEMO/script-outcome-ins-2m58-V2.md).
 
