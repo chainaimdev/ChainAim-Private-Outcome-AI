@@ -1,0 +1,131 @@
+{
+ "comment": "Tommy Hilfiger Europe's purchase requisitions behind each RFQ to Jupiter: the private maximum price per unit (US cents, DAP Los Angeles) and how far tommyBuyerAgent moves toward the seller's ask per round. Sample data (2026-11-14), the same values as Signatory's former buyerSim blocks (T01-T08, S01-S10). Never sent to the seller.",
+ "requisitions": [
+  {
+   "rfq": "RFQ-T01",
+   "sku": "FAB-COT-180-A",
+   "qty": 20000,
+   "maxPriceCents": 440,
+   "concession": 0.5
+  },
+  {
+   "rfq": "RFQ-T02",
+   "sku": "FAB-COT-180-A",
+   "qty": 18000,
+   "maxPriceCents": 412,
+   "concession": 0.5
+  },
+  {
+   "rfq": "RFQ-T03",
+   "sku": "FAB-COT-180-A",
+   "qty": 30000,
+   "maxPriceCents": 415,
+   "concession": 0.5
+  },
+  {
+   "rfq": "RFQ-T04",
+   "sku": "FAB-COT-180-A",
+   "qty": 40000,
+   "maxPriceCents": 430,
+   "concession": 0.5
+  },
+  {
+   "rfq": "RFQ-T05",
+   "sku": "FAB-COT-180-B",
+   "qty": 12000,
+   "maxPriceCents": 430,
+   "concession": 0.5
+  },
+  {
+   "rfq": "RFQ-T06",
+   "sku": "FAB-COT-180-A",
+   "qty": 25000,
+   "maxPriceCents": 410,
+   "concession": 0.5
+  },
+  {
+   "rfq": "RFQ-T07",
+   "sku": "FAB-COT-180-A",
+   "qty": 45000,
+   "maxPriceCents": 420,
+   "concession": 0.5
+  },
+  {
+   "rfq": "RFQ-T08",
+   "sku": "FAB-COT-180-A",
+   "qty": 20000,
+   "maxPriceCents": 372,
+   "concession": 0.5
+  },
+  {
+   "rfq": "RFQ-S01",
+   "sku": "FAB-JERSEY-140-A",
+   "qty": 30000,
+   "maxPriceCents": 320,
+   "concession": 0.5
+  },
+  {
+   "rfq": "RFQ-S02",
+   "sku": "GAR-TSHIRT-CREW-A",
+   "qty": 20000,
+   "maxPriceCents": 302,
+   "concession": 0.5
+  },
+  {
+   "rfq": "RFQ-S03",
+   "sku": "FAB-PC-160-A",
+   "qty": 60000,
+   "maxPriceCents": 330,
+   "concession": 0.5
+  },
+  {
+   "rfq": "RFQ-S04",
+   "sku": "FAB-JERSEY-140-B",
+   "qty": 30000,
+   "maxPriceCents": 310,
+   "concession": 0.5
+  },
+  {
+   "rfq": "RFQ-S05",
+   "sku": "GAR-SAREE-COT-A",
+   "qty": 8000,
+   "maxPriceCents": 905,
+   "concession": 0.5
+  },
+  {
+   "rfq": "RFQ-S06",
+   "sku": "FAB-LIN-150-A",
+   "qty": 5000,
+   "maxPriceCents": 700,
+   "concession": 0.5
+  },
+  {
+   "rfq": "RFQ-S07",
+   "sku": "FAB-COT-180-A",
+   "qty": 45000,
+   "maxPriceCents": 460,
+   "concession": 0.5
+  },
+  {
+   "rfq": "RFQ-S08",
+   "sku": "FAB-RIB-200-A",
+   "qty": 4000,
+   "maxPriceCents": 700,
+   "concession": 0.5
+  },
+  {
+   "rfq": "RFQ-S09",
+   "sku": "FAB-COT-180-A",
+   "qty": 20000,
+   "maxPriceCents": 385,
+   "concession": 0.25
+  },
+  {
+   "rfq": "RFQ-S10",
+   "sku": "FAB-COT-220-A",
+   "qty": 45000,
+   "maxPriceCents": 520,
+   "concession": 0.5
+  }
+ ]
+}

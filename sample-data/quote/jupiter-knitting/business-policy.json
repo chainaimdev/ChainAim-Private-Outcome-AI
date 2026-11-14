@@ -1,0 +1,16 @@
+{
+  "targetMargin": 0.15,
+  "overheadPerOrderUsd": 300,
+  "customsDays": 4,
+  "drayageDays": 1,
+  "cutoffDaysBeforeEtd": 2,
+  "qcDays": 2,
+  "inlandDays": { "MADRAS-WH-1": 1, "TIRUPUR-WH-2": 2 },
+  "reallocPremiumPct": { "TIER2": 4, "TIER1": 8 },
+  "reallocAuthority": { "TIER2": "SALES_OFFICER", "TIER1": "CEO" },
+  "advanceLever": { "minAdvancePct": 30, "marginRelief": 0.01 },
+  "liquidityWindowDays": 30,
+  "safetyThresholdUsd": 3000,
+  "defaultCustomer": "tommy-hilfiger-europe",
+  "roundMargins": { "1": 0.15, "2": 0.135 }
+}

@@ -1,0 +1,7 @@
+{
+  "customers": [
+    { "id": "tommy-hilfiger-europe", "name": "Tommy Hilfiger Europe", "creditLimitUsd": 300000, "openReceivableUsd": 120000 },
+    { "id": "orion-apparel", "name": "Orion Apparel LLC", "creditLimitUsd": 200000, "openReceivableUsd": 95000 },
+    { "id": "mercury-textiles", "name": "Mercury Textiles GmbH", "creditLimitUsd": 150000, "openReceivableUsd": 30000 }
+  ]
+}

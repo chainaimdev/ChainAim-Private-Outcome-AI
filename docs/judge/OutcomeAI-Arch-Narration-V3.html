@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OutcomeAI-Arch-Narration-V3 · ChainAim Outcome AI: architecture and step-by-step run</title>
+<style>
+:root{
+  --bg:#ffffff; --fg:#1d2433; --muted:#5b6475; --line:#c9cfdb; --panel:#f5f7fb;
+  --zone-data:#eef6f1; --zone-ctl:#f3effa; --zone-ai:#eef3fb; --zone-chain:#fbf4ea; --zone-ops:#f4f4f4;
+  --accent:#0b8a6f; --accent-soft:rgba(11,138,111,.14); --warn:#b4532a; --warn-soft:rgba(180,83,42,.14);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme]){
+    --bg:#11151c; --fg:#e6e9ef; --muted:#9aa3b2; --line:#3a4252; --panel:#181d26;
+    --zone-data:#13231d; --zone-ctl:#1e1a29; --zone-ai:#151d2b; --zone-chain:#271f14; --zone-ops:#1b1e23;
+    --accent:#3fd0ad; --accent-soft:rgba(63,208,173,.16); --warn:#f08a5d; --warn-soft:rgba(240,138,93,.16);
+  }
+}
+/* explicit themes (picked in the page; Auto = no attribute, follows the system) */
+:root[data-theme=light]{color-scheme:light}
+:root[data-theme=dark]{--bg:#11151c; --fg:#e6e9ef; --muted:#9aa3b2; --line:#3a4252; --panel:#181d26;
+    --zone-data:#13231d; --zone-ctl:#1e1a29; --zone-ai:#151d2b; --zone-chain:#271f14; --zone-ops:#1b1e23;
+    --accent:#3fd0ad; --accent-soft:rgba(63,208,173,.16); --warn:#f08a5d; --warn-soft:rgba(240,138,93,.16); color-scheme:dark}
+:root[data-theme=ocean]{--bg:#f4f9fd; --fg:#0f2a44; --muted:#4d6680; --line:#bcd3e8; --panel:#e6f0f9;
+  --zone-data:#e3f4ef; --zone-ctl:#ebe7f8; --zone-ai:#dde9f8; --zone-chain:#f7ecdb; --zone-ops:#e9eef3;
+  --accent:#0a6fb8; --accent-soft:rgba(10,111,184,.13); --warn:#c2410c; --warn-soft:rgba(194,65,12,.13); color-scheme:light}
+:root[data-theme=warm]{--bg:#fbf7f0; --fg:#2b2118; --muted:#6e5f50; --line:#dccfbd; --panel:#f3ebde;
+  --zone-data:#edf2e2; --zone-ctl:#f1e8ef; --zone-ai:#e9eef2; --zone-chain:#f7e7cf; --zone-ops:#efe9e0;
+  --accent:#9a5b13; --accent-soft:rgba(154,91,19,.14); --warn:#b42318; --warn-soft:rgba(180,35,24,.12); color-scheme:light}
+:root[data-theme=midnight]{--bg:#0b1020; --fg:#e8ecff; --muted:#9aa4c7; --line:#2c3558; --panel:#131a33;
+  --zone-data:#0f2a24; --zone-ctl:#221a3d; --zone-ai:#13234a; --zone-chain:#33240f; --zone-ops:#161c30;
+  --accent:#8b9cff; --accent-soft:rgba(139,156,255,.18); --warn:#ff9e7a; --warn-soft:rgba(255,158,122,.16); color-scheme:dark}
+:root[data-theme=contrast]{--bg:#ffffff; --fg:#000000; --muted:#1f1f1f; --line:#000000; --panel:#f2f2f2;
+  --zone-data:#ffffff; --zone-ctl:#ffffff; --zone-ai:#ffffff; --zone-chain:#ffffff; --zone-ops:#ffffff;
+  --accent:#0040c0; --accent-soft:rgba(0,64,192,.16); --warn:#b00000; --warn-soft:rgba(176,0,0,.14); color-scheme:light}
+#theme{font:inherit;border:1px solid var(--line);background:var(--panel);color:var(--fg);border-radius:8px;padding:6px 8px}
+.dp rect{fill:none;stroke:var(--accent);stroke-width:1.8;stroke-dasharray:8 6}
+.dp text{fill:var(--accent);font-size:13px;font-weight:700}
+.dp text.s2{font-size:11.5px;font-weight:600;fill:var(--muted)}
+.zone text.s2{font-size:11px;font-weight:600;fill:var(--warn)}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+main{max-width:1240px;margin:0 auto;padding:28px 20px 60px}
+h1{font-size:26px;margin:0 0 4px}
+h2{font-size:19px;margin:34px 0 10px}
+.lede{color:var(--muted);margin:0 0 18px;max-width:900px}
+.bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:10px 0 12px}
+button{font:inherit;border:1px solid var(--line);background:var(--panel);color:var(--fg);border-radius:8px;padding:6px 12px;cursor:pointer}
+button:hover{border-color:var(--accent)}
+button.sel{border-color:var(--accent);background:var(--accent-soft);font-weight:600}
+button.sel.b{border-color:var(--warn);background:var(--warn-soft)}
+#stepn{color:var(--muted);margin-left:6px;font-variant-numeric:tabular-nums}
+.stage{border:1px solid var(--line);border-radius:12px;background:var(--bg);padding:8px}
+svg{display:block;width:100%;height:auto;color:var(--fg)}
+.zone rect{stroke:var(--line);stroke-width:1}
+.zone text{fill:var(--muted);font-size:13px;font-weight:600}
+.z-data rect{fill:var(--zone-data)} .z-ctl rect{fill:var(--zone-ctl)} .z-ai rect{fill:var(--zone-ai)} .z-chain rect{fill:var(--zone-chain)} .z-ops rect{fill:var(--zone-ops)}
+.node rect{fill:var(--bg);stroke:currentColor;stroke-width:1.2;rx:9}
+.node.dash rect{stroke-dasharray:5 4}
+.node text{fill:currentColor;font-size:13px;text-anchor:middle}
+.node text.t{font-weight:700;font-size:13.5px}
+.node text.s{fill:var(--muted);font-size:11.5px}
+.edge path{fill:none;stroke:var(--line);stroke-width:1.6}
+.edge text{fill:var(--muted);font-size:11px}
+.sim .node,.sim .edge{opacity:.28;transition:opacity .25s}
+.sim .node.on,.sim .edge.on{opacity:1}
+.node.on rect{stroke:var(--accent);stroke-width:2.6;fill:var(--accent-soft)}
+.edge.on path{stroke:var(--accent);stroke-width:3;marker-end:url(#arrOn)}
+.edge.on text{fill:var(--accent);font-weight:600}
+.b .node.on rect{stroke:var(--warn);fill:var(--warn-soft)}
+.b .edge.on path{stroke:var(--warn);marker-end:url(#arrWarn)}
+.b .edge.on text{fill:var(--warn)}
+#cap{margin-top:12px;border-left:4px solid var(--accent);background:var(--panel);border-radius:0 10px 10px 0;padding:12px 16px;min-height:96px}
+#cap.b{border-left-color:var(--warn)}
+#cap h3{margin:0 0 4px;font-size:16px}
+#cap p{margin:0 0 6px}
+#cap .ev{font:12.5px/1.45 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:var(--muted);word-break:break-all}
+table{border-collapse:collapse;width:100%;font-size:14px}
+th,td{border-bottom:1px solid var(--line);text-align:left;padding:8px 10px;vertical-align:top}
+th{color:var(--muted);font-weight:600}
+.note{color:var(--muted);font-size:13.5px;margin-top:10px}
+code{font:13px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.chip{display:inline-block;font-size:12px;font-weight:700;letter-spacing:.02em;border-radius:999px;padding:2px 10px;margin-bottom:6px;border:1px solid}
+.chip.outcome{color:#2d5bd7;border-color:#2d5bd7} .chip.budget{color:#7a3fb8;border-color:#7a3fb8} .chip.agent{color:#5a6b2a;border-color:#5a6b2a} .chip.private{color:var(--accent);border-color:var(--accent)} .chip.near{color:#a8670b;border-color:#a8670b}
+.punch{display:flex;flex-wrap:wrap;gap:10px;margin:6px 0 14px}
+.punch span{font-weight:700;font-size:15px;border-radius:10px;padding:6px 12px;background:var(--panel);border:1px solid var(--line)}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px}
+.card{border:1px solid var(--line);border-radius:12px;padding:12px 16px;background:var(--panel)}
+.card h3{margin:0 0 6px;font-size:16px} .card ol,.card ul{margin:0;padding-left:20px} .card li{margin:3px 0}
+a{color:var(--accent)}
+</style>
+</head>
+<body>
+<main>
+<h1>ChainAim Outcome AI</h1>
+<div class="punch"><span>Pay for verified outcomes, not tokens.</span><span>Private by design.</span><span>Proven on NEAR.</span></div>
+<p class="lede">Regulated businesses need intelligence from large volumes of sensitive data, but frontier AI asks them to trust it with their data, their numbers and their budget. Outcome AI replaces that trust with proof. Your files and their rows stay on your PC; only masked text goes to an attested NEAR AI enclave; the agent pays on NEAR <b>before</b> the work, and gets its money back automatically if privacy is not proven. Press Play to hear a real run, step by step (NEAR testnet, 14 Nov 2026): run A in 10 steps (tenant t02, with one counter-offer, job 0ed4fe96…), run B (refund) in 4.</p>
+
+<div class="bar">
+  <button id="sA" class="sel">A · Paid outcome</button>
+  <button id="sB">B · Privacy not proven → refund</button>
+  <span style="flex:1"></span>
+  <button id="narr" class="sel" title="Speak each step">🔊 Narration on</button>
+  <button id="vIN" class="sel">Indian English</button>
+  <button id="vUS">US English</button>
+  <button id="vUK">UK English</button>
+  <select id="voice" title="Voice" style="font:inherit;max-width:240px;border:1px solid var(--line);background:var(--panel);color:var(--fg);border-radius:8px;padding:6px 8px"></select>
+</div>
+<div class="bar">
+  <label style="color:var(--muted)">Theme <select id="theme" title="Theme">
+    <option value="auto">Auto (system)</option><option value="light">Light</option><option value="dark">Dark</option>
+    <option value="ocean">Ocean</option><option value="warm">Warm paper</option><option value="midnight">Midnight</option>
+    <option value="contrast">High contrast</option></select></label>
+  <span style="flex:1"></span>
+  <button id="prev">◀ Back</button>
+  <button id="play">▶ Play</button>
+  <button id="next">Next ▶</button>
+  <button id="all">Show all</button>
+  <span id="stepn"></span>
+</div>
+
+<div class="stage" id="stage">
+<figure style="margin:0">
+<svg viewBox="0 0 1200 700" role="img" aria-label="Outcome AI architecture: the buyer's PC runs the agent, console, analyst, gateway, attestation check and paywall; ChainAim's signer is a separate control plane; masked text goes only to NEAR AI's enclave; payment and refund settle on NEAR testnet.">
+<defs>
+  <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="currentColor"/></marker>
+  <marker id="arrOn" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:var(--accent)"/></marker>
+  <marker id="arrWarn" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:var(--warn)"/></marker>
+</defs>
+
+<!-- zones -->
+<g class="zone z-data"><rect x="20" y="40" width="760" height="560" rx="14"/><text x="38" y="64">TENANT'S PRIVATE RUNTIME · the tenant's machine · data stays here</text></g>
+<g class="zone z-ctl"><rect x="810" y="40" width="370" height="170" rx="14"/><text x="828" y="60">CHAINAIM CONTROL PLANE · own project, own keys</text><text class="s2" x="828" y="77">Hackathon: own container on tenant machine · later: hosted</text></g>
+<g class="zone z-ai"><rect x="810" y="230" width="370" height="160" rx="14"/><text x="828" y="254">NEAR AI · confidential computing (TEE)</text></g>
+<g class="zone z-chain"><rect x="810" y="410" width="370" height="190" rx="14"/><text x="828" y="434">NEAR TESTNET · public chain</text></g>
+<g class="zone z-ops"><rect x="20" y="620" width="1160" height="70" rx="14"/></g>
+
+<!-- ChainAim data plane, inside the tenant's runtime -->
+<g class="dp" id="dp"><rect x="286" y="84" width="470" height="478" rx="12"/><text x="300" y="553">CHAINAIM DATA PLANE</text><text class="s2" x="545" y="553">Docker · ports on 127.0.0.1 only</text></g>
+
+<!-- edges (drawn first, under nodes) -->
+<g class="edge" id="e-ac"><path d="M262,128 L298,128" marker-end="url(#arr)"/><path d="M298,146 L262,146" marker-end="url(#arr)"/><text x="268" y="118">ask</text></g>
+<g class="edge" id="e-cs"><path d="M512,112 L828,112" marker-end="url(#arr)"/><path d="M828,132 L512,132" marker-end="url(#arr)"/><text x="560" y="104">price · quote · mandate check · receipt</text></g>
+<g class="edge" id="e-ap"><path d="M262,160 L280,160 L280,488 L298,488" marker-end="url(#arr)"/><text x="288" y="420">signed payment</text></g>
+<g class="edge" id="e-pn"><path d="M405,526 L405,580 L995,580 L995,562" marker-end="url(#arr)"/><text x="560" y="574">settle USDC first (relayer pays gas)</text></g>
+<g class="edge" id="e-ca"><path d="M405,176 L405,268" marker-end="url(#arr)"/><text x="412" y="226">run exact query</text></g>
+<g class="edge" id="e-fa"><path d="M262,306 L298,306" marker-end="url(#arr)"/><text x="186" y="372">rows stay here</text></g>
+<g class="edge" id="e-cg"><path d="M512,150 L645,150 L645,268" marker-end="url(#arr)"/><text x="652" y="226">question + table</text></g>
+<g class="edge" id="e-gn"><path d="M742,300 L828,300" marker-end="url(#arr)"/><path d="M828,320 L742,320" marker-end="url(#arr)"/><text x="822" y="341" text-anchor="end">masked bytes</text></g>
+<g class="edge" id="e-ga"><path d="M645,346 L645,448" marker-end="url(#arr)"/><text x="652" y="402">call evidence</text></g>
+<g class="edge" id="e-an"><path d="M742,488 L792,488 L792,350 L828,350" marker-end="url(#arr)"/><text x="762" y="478">verify report</text></g>
+<g class="edge" id="e-sn"><path d="M1150,160 L1170,160 L1170,506 L1152,506" marker-end="url(#arr)"/><text x="1162" y="403" text-anchor="end">refund USDC</text></g>
+<g class="edge" id="e-co"><path d="M512,166 L527,166 L527,628" marker-end="url(#arr)"/><text x="534" y="612">ids + hashes only</text></g>
+<g class="edge" id="e-jn"><path d="M900,628 L900,562" marker-end="url(#arr)"/><text x="908" y="612">read the payment</text></g>
+
+<!-- nodes -->
+<g class="node" id="n-agent"><rect x="52" y="100" width="210" height="76"/><text class="t" x="157" y="126">Tenant's AI agent</text><text class="s" x="157" y="145">ca-agent · tenant keys</text><text class="s" x="157" y="162">policy · signs mandate + payment</text></g>
+<g class="node" id="n-console"><rect x="300" y="100" width="212" height="76"/><text class="t" x="406" y="126">Console + API</text><text class="s" x="406" y="145">tab 03 · holds question + result</text><text class="s" x="406" y="162">runs only within signed limits</text></g>
+<g class="node" id="n-files"><rect x="52" y="270" width="210" height="76"/><text class="t" x="157" y="296">Your files</text><text class="s" x="157" y="315">bank statement, invoices, bills</text><text class="s" x="157" y="332">read-only, never uploaded</text></g>
+<g class="node" id="n-analyst"><rect x="300" y="270" width="212" height="76"/><text class="t" x="406" y="296">Analyst</text><text class="s" x="406" y="315">exact SQL on your files</text><text class="s" x="406" y="332">deterministic result table</text></g>
+<g class="node" id="n-gateway"><rect x="550" y="270" width="192" height="76"/><text class="t" x="646" y="296">Gateway + Presidio</text><text class="s" x="646" y="315">masks personal data</text><text class="s" x="646" y="332">hashes the bytes it sends</text></g>
+<g class="node dash" id="n-paywall"><rect x="300" y="450" width="212" height="76"/><text class="t" x="406" y="476">Paywall (x402)</text><text class="s" x="406" y="495">settles the NEAR payment</text><text class="s" x="406" y="512">on the PC today · moves off it next</text></g>
+<g class="node" id="n-attest"><rect x="550" y="450" width="192" height="76"/><text class="t" x="646" y="476">ca-attest</text><text class="s" x="646" y="495">checks NEAR AI's attestation</text><text class="s" x="646" y="512">no verdict, no delivery</text></g>
+<g class="node" id="n-signer"><rect x="830" y="86" width="320" height="110"/><text class="t" x="990" y="110">ChainAim signer</text><text class="s" x="990" y="130">AP2 quote + signed limits · mandate check</text><text class="s" x="990" y="148">signed receipt · automatic refunds</text><text class="s" x="990" y="166">sees ids, sizes, hashes, amounts</text><text class="s" x="990" y="182">never a question, row or answer</text></g>
+<g class="node" id="n-nearai"><rect x="830" y="270" width="320" height="100"/><text class="t" x="990" y="296">NEAR AI model in a TEE</text><text class="s" x="990" y="315">deepseek-v4.1-flash · cloud-api.near.ai</text><text class="s" x="990" y="333">signed attestation report</text><text class="s" x="990" y="351">(Intel TDX + NVIDIA GPU)</text></g>
+<g class="node" id="n-near"><rect x="830" y="452" width="320" height="110"/><text class="t" x="990" y="478">NEAR testnet</text><text class="s" x="990" y="497">USDC ft_transfer to ChainAim (pay)</text><text class="s" x="990" y="514">USDC ft_transfer back (refund)</text><text class="s" x="990" y="531">public: payer, amount, time</text><text class="s" x="990" y="548">no question, no data, no answer</text></g>
+<g class="node" id="n-ops"><rect x="300" y="630" width="420" height="52"/><text class="t" x="510" y="652">Ops view: near-watch + admin UI</text><text class="s" x="510" y="670">job ids, hashes, payments, attestations</text></g>
+<g class="node" id="n-judge"><rect x="760" y="630" width="390" height="52"/><text class="t" x="955" y="652">Anyone, offline: verify-receipt · observe-receipt</text><text class="s" x="955" y="670">no keys, no account: pinned public keys + the chain</text></g>
+</svg>
+</figure>
+</div>
+
+<div id="cap"></div>
+
+<h2>Who sees what</h2>
+<table>
+<tr><th>Party</th><th>Sees</th><th>Never sees</th></tr>
+<tr><td>Tenant's private runtime (ChainAim data plane)</td><td>Your files, the rows, the question and the answer</td><td>ChainAim's signing keys (<code>-Planes</code> checks every container)</td></tr>
+<tr><td>ChainAim's signer (control plane)</td><td>Job ids, file sizes, hashes, prices, the mandate, the payment</td><td>The question, SQL, rows or answer (the signer refuses unknown fields by name)</td></tr>
+<tr><td>NEAR AI (TEE)</td><td>The masked question and result table, inside an attested enclave</td><td>Your files; unmasked personal data</td></tr>
+<tr><td>NEAR chain (anyone)</td><td>Who paid, how much, when; a refund if there was one</td><td>Any content: only the payment is on NEAR</td></tr>
+</table>
+<p class="note">Narration uses your browser&#8217;s built-in voices. The smoothest are the &#8220;Natural&#8221; voices in Microsoft Edge on Windows (Indian English: Neerja, Prabhat; US English: Aria, Guy). Chrome offers Google voices.</p>
+<p class="note">Tenant's private runtime: the tenant's machine runs its own AI agent, its files and the ChainAim data plane (console, analyst, gateway with Presidio, ca-attest and the paywall), all in Docker on 127.0.0.1. ChainAim signer and control plane: for the hackathon a separate container (its own Docker project and keys) on the same tenant machine, so the separation is by design, not by hardware. Next: ChainAim hosts the signer and control plane (cloud, then a TEE), and the paywall with its relayer key moves there too.</p>
+
+<h2>Demo and proof links</h2>
+<div class="cards">
+<div class="card"><h3>Run it, see it</h3><ul>
+<li>Run A, paid outcome after one counter-offer: <a href="https://testnet.nearblocks.io/txns/8E6mhkZPdPht2NS1yRDuDeU76RbF5ZKk1z1wK4RscGui">payment 8E6mhkZP…</a></li>
+<li>Run B, refund: <a href="https://testnet.nearblocks.io/txns/6tFBUcSS8robE86rWzQePWjkZyyvHwro8DmbJ87Wey1A">payment 6tFBUcSS…</a> → <a href="https://testnet.nearblocks.io/txns/EyD53BnvtAD7jEL2tcENsaxUdeoMauavEb8ggDdnb7TF">refund EyD53Bnv…</a></li>
+<li>Every payment and refund so far, live: <a href="https://testnet.nearblocks.io/address/chainaim-payto-seller.testnet">chainaim-payto-seller.testnet</a></li>
+<li>Code: <a href="https://github.com/chainaimdev/chainaim-private-ai">github.com/chainaimdev/chainaim-private-ai</a></li>
+</ul></div>
+<div class="card"><h3>Rules for judges</h3><ol>
+<li>No keys, no account, no install: Node.js 22.22+ and the repository.</li>
+<li>Run <code>verify-receipt</code> on <code>docs/judge/sample-receipt-2026-11-14T0729Z.json</code>: expect four OK lines (receipt, money trail, attestation, egress) and "counter of".</li>
+<li>Run <code>observe-receipt</code>: the same payment, read from NEAR.</li>
+<li>The Docker stack is optional; the video shows it running.</li>
+</ol></div>
+<div class="card"><h3>Built to extend</h3><p style="margin:0">Modular by design: the data plane, ChainAim's control plane and settlement are separate services with signed, allow-listed interfaces. After the hackathon they move into dedicated cloud services, then into TEE workloads (NEAR AI / Shade Agents or Phala Cloud), with full ZK-PRET integration for verifiable trade-finance outcomes.</p></div>
+</div>
+
+<h2>Check it yourself</h2>
+<p><code>node scripts/verify-receipt.ts --file &lt;receipt.json&gt;</code> checks the receipt, the signed quote and limits, the agent's mandate, the money trail, the attestation bundle and the egress line offline, against public keys pinned in the repository. <code>node scripts/observe-receipt.ts --file &lt;receipt.json&gt;</code> reads the same payment from NEAR testnet. Run A's transaction: <a href="https://testnet.nearblocks.io/txns/8E6mhkZPdPht2NS1yRDuDeU76RbF5ZKk1z1wK4RscGui">8E6mhkZP… on nearblocks</a>.</p>
+</main>
+
+<script>
+const A = [
+ {k:"outcome", t:"1 · The agent asks for an outcome", n:["n-agent","n-console"], e:["e-ac"], p:"Tenant t02's AI agent asks ChainAim for an answer from its own books: can this month's cash flow cover a loan installment? It buys an outcome, not tokens.", ev:"dataset smb-fin-1 · template \"Cash flow vs installment\" · question checked on the PC first"},
+ {k:"outcome", t:"2 · A firm, signed price before any work", n:["n-console","n-signer","n-files"], e:["e-cs"], p:"The console measures the files without running anything and sends ChainAim's signer only their sizes and hashes. The signer prices the job and signs a quote with hard limits: which model, how many calls, how many tokens, attestation required.", ev:"first quote 0.02 USDC · id 043fe341… · 4 files, 5,395 bytes · AP2 key 83816e6f…"},
+ {k:"agent", t:"3 · The agent counters; only the job shrinks", n:["n-agent","n-console","n-signer"], e:["e-ac","e-cs"], p:"This company lets its agent auto-approve only one cent, so the agent asks once for a smaller job. ChainAim's signer offers the same work with fewer answer rows and fewer tokens, at that limit, as a new signed quote. The price is never discounted; only the job shrinks.", ev:"counter-offer: 0.02 → 0.01 · answer rows 20, max tokens 1024 · new quote 0ed4fe96… (counter of 043fe341…)"},
+ {k:"near", t:"4 · Re-checked, mandated, funded on NEAR", n:["n-agent","n-paywall","n-near"], e:["e-ap","e-pn"], p:"Before paying, the agent re-checks the file sizes and its spending policy, then signs a mandate that permits exactly this quote and nothing else, and funds the job in USDC on NEAR. If the outcome is not delivered, the money goes straight back (run B). Fair to both sides.", ev:"size re-checked: 4 files, 5,395 bytes (±10 %) · mandate by tenant t02 key c1bc880b… · tx 8E6mhkZPdPht2NS1yRDuDeU76RbF5ZKk1z1wK4RscGui · funded before the run"},
+ {k:"budget", t:"5 · Compute first, next to your data", n:["n-console","n-analyst","n-files"], e:["e-ca","e-fa"], p:"ChainAim's signer verifies the mandate, then the heavy lifting is deterministic: the analyst runs the exact query on the tenant's files, on the tenant's machine, with no model at all. The rows never leave it.", ev:"exact SQL over 4 files · SQL sha256 9b4528e8… · result sha256 d917243b…"},
+ {k:"budget", t:"6 · Model last: one small call, masked", n:["n-gateway","n-nearai"], e:["e-cg","e-gn"], p:"Only to word the answer, the gateway masks personal data, re-scans the masked text for leaks, and sends one small request to the NEAR AI model in a secure enclave, recording a fingerprint of the exact bytes. It costs about a thirtieth of a cent.", ev:"896 bytes → cloud-api.near.ai · leak re-scan: pass · sha256 2b168db1… · NEAR AI cost 0.000322"},
+ {k:"private", t:"7 · Privacy proven, or no delivery", n:["n-attest","n-nearai","n-gateway"], e:["e-ga","e-an"], p:"ca-attest checks NEAR AI's hardware attestation for that exact call. Without a verified result, nothing is delivered and the money goes back.", ev:"DeepSeek-V4.1-Flash · Intel TDX ✓ · NVIDIA GPU ✓ · signature ✓ · same request fingerprint"},
+ {k:"outcome", t:"8 · Result plus a signed receipt", n:["n-console","n-signer","n-agent"], e:["e-cs","e-ac"], p:"The answer is released, with a receipt signed by ChainAim that ties together both quotes, the mandate, the payment, the costs and the privacy proofs.", ev:"paid 0.01 · cost 0.002322 (NEAR AI 0.000322 + call fees 0.001 + analyst 0.002 + gas 0.002) · margin 0.007678"},
+ {k:"agent", t:"9 · The agent checks; ChainAim sees only hashes", n:["n-agent","n-ops"], e:["e-co"], p:"The agent verifies the receipt with ChainAim's published key. ChainAim's own ops view sees ids, hashes and payments, never the question or the data.", ev:"receipt 177b9c31… verified · key d27d1e9f…"},
+ {k:"near", t:"10 · Anyone can verify it", n:["n-judge","n-near"], e:["e-jn"], p:"A judge checks the receipt offline with two commands and reads the payment on NEAR. The payment is public; the content is not.", ev:"OK receipt valid · OK money trail · OK attestation · OK egress · counter of 043fe341…"}
+];
+const B = [
+ {k:"near", t:"1 · Quoted, agreed, paid first", n:["n-agent","n-console","n-signer","n-paywall","n-near"], e:["e-ac","e-cs","e-ap","e-pn"], p:"Same start as run A: a signed quote, the agent's mandate, and the payment settled on NEAR before any work.", ev:"paid 6tFBUcSS8robE86rWzQePWjkZyyvHwro8DmbJ87Wey1A"},
+ {k:"budget", t:"2 · The job runs and calls NEAR AI", n:["n-console","n-analyst","n-files","n-gateway","n-nearai"], e:["e-ca","e-fa","e-cg","e-gn"], p:"The query runs on the PC, and masked text goes to the NEAR AI model.", ev:"pay only for attested inference: on"},
+ {k:"private", t:"3 · Privacy not proven, so refused", n:["n-attest","n-console"], e:["e-ga"], p:"In this run the attestation check was switched off on purpose, so no proof arrived. No proof means no delivery.", ev:"refused: attestation_not_proven"},
+ {k:"outcome", t:"4 · Money back, automatically", n:["n-signer","n-near","n-agent"], e:["e-sn"], p:"ChainAim's signer checks the payment on chain and sends the USDC back. Nobody worked unpaid, and nobody paid for an outcome they did not get.", ev:"refund EyD53BnvtAD7jEL2tcENsaxUdeoMauavEb8ggDdnb7TF · about 17 s after the refusal"}
+];
+const TAG = {outcome:"Pay for verified outcomes, not tokens", budget:"Compute first, model last", agent:"Agents that buy safely", private:"Private by design", near:"Proven on NEAR"};
+let scen="A", steps=A, i=0, timer=null;
+const stage=document.getElementById("stage"), cap=document.getElementById("cap"), sn=document.getElementById("stepn"), pb=document.getElementById("play");
+function clear(){document.querySelectorAll(".node.on,.edge.on").forEach(x=>x.classList.remove("on"));}
+function show(k){
+  stage.classList.add("sim"); stage.classList.toggle("b",scen==="B"); clear();
+  const s=steps[k]; s.n.forEach(id=>document.getElementById(id)?.classList.add("on")); s.e.forEach(id=>document.getElementById(id)?.classList.add("on"));
+  cap.className = scen==="B" ? "b" : "";
+  cap.innerHTML = `<span class="chip ${s.k}">${TAG[s.k]}</span><h3>${s.t}</h3><p>${s.p}</p><div class="ev">${s.ev}</div>`;
+  sn.textContent = `Run ${scen} · step ${k+1} of ${steps.length}`;
+}
+function showAll(){pause(); stage.classList.remove("sim","b"); clear(); cap.className=""; cap.innerHTML=`<h3>The whole system</h3><p>Pick a run and press Play (it narrates each step), or step with Next. Run A is a paid outcome; run B is a refund when private inference is not proven.</p>`; sn.textContent="";}
+// ---- narration: the browser's own text-to-speech (voices depend on the browser and OS) ----
+const synth = ("speechSynthesis" in window) ? window.speechSynthesis : null;
+let narrOn = !!synth, accent = "en-IN", voices = [], chosen = null, playing = false, wait = null;
+const vsel = document.getElementById("voice");
+const NATURAL = /natural|neural|online|google|premium|enhanced/i;
+function rank(v){ let r=0; const l=(v.lang||"").replace("_","-").toLowerCase(); if(l.startsWith(accent.toLowerCase())) r+=100; else if(l.startsWith("en")) r+=10; if(NATURAL.test(v.name)) r+=20; return r; }
+function loadVoices(){
+  if(!synth){ vsel.innerHTML='<option>no speech in this browser</option>'; vsel.disabled=true; const nb=document.getElementById("narr"); nb.textContent="🔇 No speech here"; nb.classList.remove("sel"); narrOn=false; return; }
+  voices = synth.getVoices().filter(v=>/^en/i.test(v.lang||""));
+  voices.sort((a,b)=>rank(b)-rank(a));
+  vsel.innerHTML = voices.length ? voices.map((v,k)=>`<option value="${k}">${v.name} (${v.lang})</option>`).join("") : '<option>loading voices…</option>';
+  chosen = voices[0] || null; if(voices.length) vsel.value="0";
+}
+loadVoices(); if(synth) synth.onvoiceschanged = loadVoices;
+vsel.onchange = ()=>{ chosen = voices[+vsel.value] || null; };
+function setAccent(a, btn){ accent=a; ["vIN","vUS","vUK"].forEach(id=>document.getElementById(id).classList.toggle("sel", id===btn)); loadVoices(); }
+document.getElementById("vIN").onclick=()=>setAccent("en-IN","vIN");
+document.getElementById("vUS").onclick=()=>setAccent("en-US","vUS");
+document.getElementById("vUK").onclick=()=>setAccent("en-GB","vUK");
+document.getElementById("narr").onclick=(ev)=>{ if(!synth) return; narrOn=!narrOn; ev.currentTarget.textContent = narrOn?"🔊 Narration on":"🔇 Narration off"; ev.currentTarget.classList.toggle("sel",narrOn); if(!narrOn) synth.cancel(); };
+function speak(text, done){
+  clearTimeout(wait);
+  if(!narrOn || !synth){ if(done) wait=setTimeout(done, 4200); return; }
+  synth.cancel();
+  const u = new SpeechSynthesisUtterance(text);
+  if(chosen){ u.voice = chosen; u.lang = chosen.lang; } else u.lang = accent;
+  u.rate = 0.96; u.pitch = 1;
+  let fired=false; const fin=()=>{ if(fired) return; fired=true; clearInterval(keep); if(done) wait=setTimeout(done, 700); };
+  u.onend = fin; u.onerror = fin;
+  const keep = setInterval(()=>{ if(!synth.speaking){ clearInterval(keep); return; } synth.pause(); synth.resume(); }, 10000);
+  try { synth.speak(u); } catch(e){ fin(); }
+}
+function narrate(k, then){ const s=steps[k]; speak(`Step ${k+1}. ${s.t.replace(/^\d+ · /,"")}. ${s.p} ${TAG[s.k]}.`, then); }
+function advance(){ if(!playing) return; if(i>=steps.length-1){ pause(); return; } i++; show(i); narrate(i, advance); }
+function play(){ if(playing) return; playing=true; timer=1; pb.textContent="⏸ Pause"; narrate(i, advance); }
+function pause(){ playing=false; timer=null; clearTimeout(wait); if(synth) synth.cancel(); pb.textContent="▶ Play"; }
+
+pb.onclick=()=>{ if(timer){pause();} else { if(!stage.classList.contains("sim")||i>=steps.length-1){i=0;show(0);} play(); } };
+document.getElementById("next").onclick=()=>{pause(); i=Math.min(i+1,steps.length-1); show(i); narrate(i);};
+document.getElementById("prev").onclick=()=>{pause(); i=Math.max(i-1,0); show(i); narrate(i);};
+document.getElementById("all").onclick=showAll;
+function pick(s){ pause(); scen=s; steps = s==="A"?A:B; i=0;
+  document.getElementById("sA").className = s==="A"?"sel":""; document.getElementById("sB").className = s==="B"?"sel b":""; show(0); }
+document.getElementById("sA").onclick=()=>pick("A");
+document.getElementById("sB").onclick=()=>pick("B");
+// ---- theme picker (remembered in this browser when storage is allowed) ----
+const THEMES=["auto","light","dark","ocean","warm","midnight","contrast"], tsel=document.getElementById("theme");
+function setTheme(t){ if(!THEMES.includes(t)) t="auto"; if(t==="auto") document.documentElement.removeAttribute("data-theme"); else document.documentElement.setAttribute("data-theme",t); tsel.value=t; try{ localStorage.setItem("oa-arch-v2-theme",t); }catch(e){} }
+tsel.onchange=()=>setTheme(tsel.value);
+let savedTheme="auto"; try{ savedTheme=localStorage.getItem("oa-arch-v2-theme")||"auto"; }catch(e){}
+setTheme(savedTheme);
+showAll();
+</script>
+</body>
+</html>

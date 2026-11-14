@@ -1,0 +1,13 @@
+{
+  "originPort": "INMAA",
+  "destinationPort": "USLAX",
+  "sailings": [
+    { "carrier": "MSC", "mode": "SEA_STD", "etd": "2026-11-20", "eta": "2026-12-17", "ratePer40HcUsd": 4200 },
+    { "carrier": "MSC", "mode": "SEA_STD", "etd": "2026-12-04", "eta": "2026-12-31", "ratePer40HcUsd": 4200 },
+    { "carrier": "MSC", "mode": "SEA_STD", "etd": "2026-12-18", "eta": "2027-01-14", "ratePer40HcUsd": 4200 },
+    { "carrier": "MSC", "mode": "SEA_STD", "etd": "2027-01-01", "eta": "2027-01-28", "ratePer40HcUsd": 4200 },
+    { "carrier": "Maersk", "mode": "SEA_EXP", "etd": "2026-11-24", "eta": "2026-12-16", "ratePer40HcUsd": 5400 },
+    { "carrier": "Maersk", "mode": "SEA_EXP", "etd": "2026-12-08", "eta": "2026-12-30", "ratePer40HcUsd": 5400 },
+    { "carrier": "Maersk", "mode": "SEA_EXP", "etd": "2026-12-22", "eta": "2027-01-13", "ratePer40HcUsd": 5400 }
+  ]
+}

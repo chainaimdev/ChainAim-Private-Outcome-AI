@@ -1,0 +1,5 @@
+{
+ "comment": "Tommy's cash for supplier payments (sample data): available = cashUsd - committedUsd (open purchase orders).",
+ "cashUsd": 900000,
+ "committedUsd": 350000
+}

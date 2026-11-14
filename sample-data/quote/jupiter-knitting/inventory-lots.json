@@ -1,0 +1,19 @@
+{
+  "lots": [
+    {"lot": "L-180A-01", "sku": "FAB-COT-180-A", "warehouse": "MADRAS-WH-1", "kind": "FREE", "onHand": 25000, "reserved": 0, "qcHold": 2000, "readyDate": "2026-11-16"},
+    {"lot": "L-180A-02", "sku": "FAB-COT-180-A", "warehouse": "MADRAS-WH-1", "kind": "WIP", "onHand": 12000, "reserved": 0, "qcHold": 0, "readyDate": "2026-12-03"},
+    {"lot": "L-180A-03", "sku": "FAB-COT-180-A", "warehouse": "MADRAS-WH-1", "kind": "ALLOCATED", "onHand": 10000, "reserved": 10000, "qcHold": 0, "readyDate": "2026-11-20", "tier": "TIER2", "allocatedTo": "orion-apparel", "replacementOk": true},
+    {"lot": "L-180A-04", "sku": "FAB-COT-180-A", "warehouse": "TIRUPUR-WH-2", "kind": "ALLOCATED", "onHand": 12000, "reserved": 12000, "qcHold": 0, "readyDate": "2026-11-20", "tier": "TIER1", "allocatedTo": "mercury-textiles", "replacementOk": true},
+    {"lot": "L-140A-01", "sku": "FAB-JERSEY-140-A", "warehouse": "TIRUPUR-WH-2", "kind": "FREE", "onHand": 50000, "reserved": 5000, "qcHold": 3000, "readyDate": "2026-11-16"},
+    {"lot": "L-140B-01", "sku": "FAB-JERSEY-140-B", "warehouse": "TIRUPUR-WH-2", "kind": "FREE", "onHand": 15000, "reserved": 0, "qcHold": 1000, "readyDate": "2026-11-16"},
+    {"lot": "L-220A-01", "sku": "FAB-COT-220-A", "warehouse": "MADRAS-WH-1", "kind": "FREE", "onHand": 8000, "reserved": 0, "qcHold": 0, "readyDate": "2026-11-16"},
+    {"lot": "L-220A-02", "sku": "FAB-COT-220-A", "warehouse": "MADRAS-WH-1", "kind": "WIP", "onHand": 10000, "reserved": 0, "qcHold": 0, "readyDate": "2026-12-10"},
+    {"lot": "L-PC160-01", "sku": "FAB-PC-160-A", "warehouse": "MADRAS-WH-1", "kind": "FREE", "onHand": 30000, "reserved": 10000, "qcHold": 0, "readyDate": "2026-11-16"},
+    {"lot": "L-LIN150-01", "sku": "FAB-LIN-150-A", "warehouse": "TIRUPUR-WH-2", "kind": "ALLOCATED", "onHand": 6000, "reserved": 6000, "qcHold": 0, "readyDate": "2026-11-20", "tier": "TIER2", "allocatedTo": "orion-apparel", "replacementOk": true},
+    {"lot": "L-RIB200-01", "sku": "FAB-RIB-200-A", "warehouse": "TIRUPUR-WH-2", "kind": "FREE", "onHand": 9000, "reserved": 0, "qcHold": 0, "readyDate": "2026-11-16"},
+    {"lot": "L-TSH-01", "sku": "GAR-TSHIRT-CREW-A", "warehouse": "TIRUPUR-WH-2", "kind": "FREE", "onHand": 18000, "reserved": 0, "qcHold": 500, "readyDate": "2026-11-16"},
+    {"lot": "L-TSH-02", "sku": "GAR-TSHIRT-CREW-A", "warehouse": "TIRUPUR-WH-2", "kind": "WIP", "onHand": 24000, "reserved": 0, "qcHold": 0, "readyDate": "2026-12-01"},
+    {"lot": "L-SAR-01", "sku": "GAR-SAREE-COT-A", "warehouse": "MADRAS-WH-1", "kind": "FREE", "onHand": 6000, "reserved": 0, "qcHold": 0, "readyDate": "2026-11-16"},
+    {"lot": "L-SAR-02", "sku": "GAR-SAREE-COT-A", "warehouse": "MADRAS-WH-1", "kind": "ALLOCATED", "onHand": 4000, "reserved": 4000, "qcHold": 0, "readyDate": "2026-11-20", "tier": "TIER1", "allocatedTo": "mercury-textiles", "replacementOk": true}
+  ]
+}

@@ -1,0 +1,6 @@
+{
+ "comment": "Tommy's approval limits, matching the NEAR payment mandates in Signatory (tommyBuyerAgent up to $100,000, Tommy_Chief_Procurement_Officer up to $250,000) and a cash safety threshold. Sample data.",
+ "agentMaxUsd": 100000,
+ "cpoMaxUsd": 250000,
+ "safetyThresholdUsd": 50000
+}

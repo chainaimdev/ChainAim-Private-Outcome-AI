@@ -1,0 +1,14 @@
+{
+  "products": [
+    {"sku": "FAB-COT-180-A", "family": "FAB-COT-180", "grade": "A", "description": "Cotton fabric 180 GSM, grade A", "unitCostCents": 330, "unitsPer40HC": 25000, "productionLeadDays": 30, "capacityPerCycle": 30000, "productionWarehouse": "MADRAS-WH-1"},
+    {"sku": "FAB-COT-180-B", "family": "FAB-COT-180", "grade": "B", "description": "Cotton fabric 180 GSM, grade B", "unitCostCents": 300, "unitsPer40HC": 25000, "productionLeadDays": 30, "capacityPerCycle": 30000, "productionWarehouse": "MADRAS-WH-1"},
+    {"sku": "FAB-JERSEY-140-A", "family": "FAB-JERSEY-140", "grade": "A", "description": "Cotton jersey knit 140 GSM, grade A", "unitCostCents": 240, "unitsPer40HC": 32000, "productionLeadDays": 25, "capacityPerCycle": 40000, "productionWarehouse": "TIRUPUR-WH-2"},
+    {"sku": "FAB-JERSEY-140-B", "family": "FAB-JERSEY-140", "grade": "B", "description": "Cotton jersey knit 140 GSM, grade B", "unitCostCents": 215, "unitsPer40HC": 32000, "productionLeadDays": 25, "capacityPerCycle": 40000, "productionWarehouse": "TIRUPUR-WH-2"},
+    {"sku": "FAB-COT-220-A", "family": "FAB-COT-220", "grade": "A", "description": "Cotton interlock 220 GSM, grade A", "unitCostCents": 400, "unitsPer40HC": 20000, "productionLeadDays": 35, "capacityPerCycle": 20000, "productionWarehouse": "MADRAS-WH-1"},
+    {"sku": "FAB-PC-160-A", "family": "FAB-PC-160", "grade": "A", "description": "Poly-cotton 65/35 blend 160 GSM, grade A", "unitCostCents": 260, "unitsPer40HC": 28000, "productionLeadDays": 21, "capacityPerCycle": 50000, "productionWarehouse": "MADRAS-WH-1"},
+    {"sku": "FAB-LIN-150-A", "family": "FAB-LIN-150", "grade": "A", "description": "Linen-cotton 55/45 blend 150 GSM, grade A", "unitCostCents": 520, "unitsPer40HC": 24000, "productionLeadDays": 40, "capacityPerCycle": 15000, "productionWarehouse": "TIRUPUR-WH-2"},
+    {"sku": "FAB-RIB-200-A", "family": "FAB-RIB-200", "grade": "A", "description": "Cotton 1x1 rib 200 GSM (collars and cuffs), grade A", "unitCostCents": 370, "unitsPer40HC": 22000, "productionLeadDays": 28, "capacityPerCycle": 25000, "productionWarehouse": "TIRUPUR-WH-2"},
+    {"sku": "GAR-TSHIRT-CREW-A", "family": "GAR-TSHIRT-CREW", "grade": "A", "description": "Crew-neck T-shirt, 100% cotton jersey 140 GSM, assorted sizes S-XL, grade A", "uom": "PIECE", "unitCostCents": 210, "unitsPer40HC": 36000, "productionLeadDays": 20, "capacityPerCycle": 60000, "productionWarehouse": "TIRUPUR-WH-2"},
+    {"sku": "GAR-SAREE-COT-A", "family": "GAR-SAREE-COT", "grade": "A", "description": "Cotton saree, printed, 5.5 m with 0.8 m blouse piece, grade A", "uom": "PIECE", "unitCostCents": 650, "unitsPer40HC": 20000, "productionLeadDays": 30, "capacityPerCycle": 12000, "productionWarehouse": "MADRAS-WH-1"}
+  ]
+}

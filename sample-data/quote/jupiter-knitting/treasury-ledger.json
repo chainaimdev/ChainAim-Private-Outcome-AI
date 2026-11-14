@@ -1,0 +1,14 @@
+{
+  "cashUsd": 11000,
+  "creditLineHeadroomUsd": 160000,
+  "receivables": [
+    { "customer": "orion-apparel", "amountUsd": 38000, "dueDate": "2026-11-28" },
+    { "customer": "mercury-textiles", "amountUsd": 24000, "dueDate": "2026-12-10" },
+    { "customer": "tommy-hilfiger-europe", "amountUsd": 120000, "dueDate": "2027-01-20" }
+  ],
+  "payables": [
+    { "vendor": "yarn-supplier", "amountUsd": 70000, "dueDate": "2026-11-30" },
+    { "vendor": "dyeing-house", "amountUsd": 25000, "dueDate": "2026-12-12" },
+    { "vendor": "machinery-lease", "amountUsd": 40000, "dueDate": "2027-01-15" }
+  ]
+}
