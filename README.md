@@ -10,8 +10,14 @@ Built at **NEAR HACKATHON** (1 to 14 Nov 2026). What existed before the window a
 release: [NEAR-HACKATHON-DISCLOSURE.md](NEAR-HACKATHON-DISCLOSURE.md). Architecture, step by step:
 [docs/judge/outcome-ai-architecture.html](docs/judge/outcome-ai-architecture.html); on one page:
 [docs/judge/outcome-ai-architecture-simple.html](docs/judge/outcome-ai-architecture-simple.html). **Live, narrated architecture walk-through:**
-[https://outcomeai-architecture.vercel.app/](https://outcomeai-architecture.vercel.app/). Companion repo (live operations):
+
 [chainaim-adminUI-NEAR](https://github.com/chainaimdev/chainaim-adminUI-NEAR).
+
+
+Demo video 
+https://www.youtube.com/watch?v=v7HsuUspztQ
+
+[https://outcomeai-architecture.vercel.app/](https://outcomeai-architecture.vercel.app/). Companion repo (live operations):
 
 ## What makes it different
 
