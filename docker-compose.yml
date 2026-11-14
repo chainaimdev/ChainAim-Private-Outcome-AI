@@ -258,3 +258,27 @@ services:
       - ./config:/config:ro
     ports: ["127.0.0.1:8770:8770"]
     networks: { chainaim-test: { aliases: [attest] } }
+
+  # Quote agents (privateAI-design-44 ARCH-737): Jupiter's private data plane for Signatory's quote flow (inventory,
+  # logistics and treasury sub-agents over sample-data/quote, and the seller synthesis). Profile "quote": started only by
+  # desk.ps1 -Quote start (docker compose --profile quote up -d --no-deps quote-agents); no other service changes.
+  # Tenant tokens QUOTE_TOKEN_JUPITER / QUOTE_TOKEN_TOMMY are in the env file mounted read-only (read by Node's
+  # --env-file-if-exists, never in this file); the gateway key is the existing gateway-key secret. QUOTE_AI picks the
+  # synthesis: off (rules, default), nearai (NEAR AI TEE model through the gateway, attested by ca-attest) or bedrock.
+  quote-agents:
+    profiles: [quote]
+    build: { context: ., dockerfile: services/quote-agents/Dockerfile, labels: *source }
+    image: chainaim-quote-agents:local
+    container_name: ca-quote-agents
+    labels: *source
+    command: ["--host", "0.0.0.0", "--allow-non-loopback", "--port", "8785", "--ai", "${QUOTE_AI:-off}", "--gateway-url", "http://gateway.railway.internal:8700", "--gateway-key-file", "/run/secrets/gateway-key", "--attest-url", "http://attest:8770", "--feed-url", "${QUOTE_FEED_URL:-http://near-watch:8790}"]
+    # --feed-url: each answered/refused call is also sent (ids only) to the admin UI's near-watch POST /ingest/agent,
+    # with NEAR_WATCH_INGEST_KEY from quote-agents.env; without that key the feed stays off (src/feed.ts).
+    secrets: [gateway-key]
+    volumes:
+      - type: bind
+        source: ${QUOTE_ENV_FILE:-C:/PRIV-AI-SECRETS/quote-agents.env}
+        target: /run/secrets/quote-agents.env
+        read_only: true
+    ports: ["127.0.0.1:8785:8785"]
+    networks: { chainaim-test: { aliases: [quote-agents] } }

@@ -80,6 +80,13 @@ one READY table across both. Neither launcher is changed or renamed; each team k
                 privateAI-design-41: the desk stack's ca-gateway runs with --expose-egress on (up.ps1 -ExposeEgress on):
                 each model call's sent bytes are hashed, and tab 03 and the receipt show what left the PC (host, zone,
                 masked counts, hash). false = up.ps1 -ExposeEgress off. The public router keeps its default (off).
+  -Quote start|stop|check  [-QuoteAi off|nearai|bedrock] [-QuoteEnvFile PATH]
+                privateAI-design-44 ARCH-737: Jupiter's quote agents for Signatory (ca-quote-agents on 127.0.0.1:8785,
+                compose profile "quote"). start builds and starts ONLY that container (--no-deps) with the tenant tokens
+                from <secretsDir>\quote-agents.env (QUOTE_TOKEN_JUPITER, QUOTE_TOKEN_TOMMY; names checked, values never
+                read here) and prints /healthz; stop removes it; check prints /healthz. -QuoteAi off (default) = rules;
+                nearai = the NEAR AI TEE model through ca-gateway, attested by ca-attest (start the desk first); bedrock.
+                Runs on its own.
   -StopService NAME / -StartService NAME
                 stop or start ONE running container of the stack (NAME as for -Logs, e.g. attest), nothing else; for the
                 deliberate "privacy not proven" refusal (privateAI-design-39 section 5). Runs on its own.
@@ -225,6 +232,9 @@ param(
   [string]$ChainPanel = "",
   [string]$StopService = "",
   [string]$StartService = "",
+  [string]$Quote = "",
+  [string]$QuoteAi = "off",
+  [string]$QuoteEnvFile = "",
   [switch]$NoBrowser,
   [string[]]$Logs = @(),
   [int]$LogLines = 40,
@@ -601,7 +611,7 @@ function Invoke-Suites {
   Say "TEST" "terminal suites (each starts its own servers; near-watch path from config\local\repos.json)"
   # packages/receipt and packages/agent-policy: privateAI-design-32 ARCH-613..616 and ARCH-620..624; packages/ap2: design-33 ARCH-626; packages/offer: design-34 ARCH-634 (pure, no servers).
   # packages/signer + services/signer: privateAI-design-36 ARCH-660..668 (the control-plane signer and the checkout mandate).
-  & node --test "packages/crossask/test/*.test.ts" "packages/receipt/test/*.test.ts" "packages/agent-policy/test/*.test.ts" "packages/ap2/test/*.test.ts" "packages/offer/test/*.test.ts" "packages/observer/test/*.test.ts" "packages/near-refund/test/*.test.ts" "packages/signer/test/*.test.ts" "services/signer/test/*.test.ts" "scripts/test/*.test.ts" "services/gateway/test/*.test.ts" "test-console/test/*.test.ts" | Out-Host
+  & node --test "packages/crossask/test/*.test.ts" "packages/receipt/test/*.test.ts" "packages/agent-policy/test/*.test.ts" "packages/ap2/test/*.test.ts" "packages/offer/test/*.test.ts" "packages/observer/test/*.test.ts" "packages/near-refund/test/*.test.ts" "packages/signer/test/*.test.ts" "services/signer/test/*.test.ts" "services/quote-agents/test/*.test.ts" "scripts/test/*.test.ts" "services/gateway/test/*.test.ts" "test-console/test/*.test.ts" | Out-Host
   $a = $LASTEXITCODE
   & npm --prefix services\analyst test | Out-Host
   $b = $LASTEXITCODE
@@ -766,6 +776,52 @@ $signerMode = if ($P.signer -and $P.signer.mode) { [string]$P.signer.mode } else
 if (@("auto", "separate", "in-console") -notcontains $signerMode) { Stop-Here "$Settings signer.mode must be auto, separate or in-console" }
 $signerUrl = if ($P.signer -and $P.signer.url) { [string]$P.signer.url } else { "http://host.docker.internal:8780" }
 if ($sellerSecrets.TrimEnd("\") -ieq $secrets.TrimEnd("\")) { Stop-Here "$Settings sellerSecretsDir must be another folder than secretsDir: the point is two places" }
+
+# ---------------------------------------------------------------- -Quote start|stop|check: the quote agents only, then stop
+# privateAI-design-44 ARCH-737: Jupiter's private data plane for Signatory's quote flow (ca-quote-agents, compose profile
+# "quote", 127.0.0.1:8785). Only that container is built, started or removed (--no-deps); no other container changes.
+# Its tenant tokens are in <secretsDir>\quote-agents.env (or -QuoteEnvFile), checked here by NAME only, never read.
+if ($Quote) {
+  if (@("start", "stop", "check") -notcontains $Quote) { Stop-Here "-Quote must be start, stop or check" }
+  if ($otherModes -or $keyModes -or $Refunds -or $AgentAsk -or $VerifyReceipt -or $StopService -or $StartService) { Stop-Here "-Quote runs on its own: leave out the other mode switches" }
+  if (@("off", "nearai", "bedrock") -notcontains $QuoteAi) { Stop-Here "-QuoteAi must be off, nearai or bedrock" }
+  $quoteUrl = "http://127.0.0.1:8785"
+  $quoteCompose = @("compose", "-f", "docker-compose.yml", "--profile", "quote")
+  if ($Quote -eq "stop") {
+    Say "RUN" "docker compose --profile quote rm -s -f quote-agents (only this container)"
+    $null = Quiet { & docker @quoteCompose rm -s -f quote-agents 2>&1 }
+    if ($LASTEXITCODE) { Stop-Here "removing ca-quote-agents failed (exit $LASTEXITCODE)" }
+    Say "OK" "ca-quote-agents stopped and removed"
+    exit 0
+  }
+  if ($Quote -eq "start") {
+    $quoteEnv = if ($QuoteEnvFile) { $QuoteEnvFile } else { Join-Path $secrets "quote-agents.env" }
+    if (-not (Test-Path -LiteralPath $quoteEnv -PathType Leaf)) { Stop-Here "$quoteEnv does not exist: create it with QUOTE_TOKEN_JUPITER=... and QUOTE_TOKEN_TOMMY=... (MANUAL_SETUP.md 2026-11-14 Quote agents)" }
+    foreach ($n in @("QUOTE_TOKEN_JUPITER", "QUOTE_TOKEN_TOMMY")) {
+      if (-not @(Select-String -LiteralPath $quoteEnv -Pattern "^\s*$n\s*=\s*\S" -ErrorAction SilentlyContinue).Count) { Say "WARN" "$n has no value in ${quoteEnv}: every call to that tenant answers 401" }
+    }
+    if ($QuoteAi -ne "off") {
+      if ("$(Quiet { & docker inspect --format '{{.State.Running}}' ca-gateway 2>$null })".Trim() -ne "true") { Stop-Here "-QuoteAi $QuoteAi needs ca-gateway running: start the desk first (.\test-console\desk.ps1 -All)" }
+      if ($QuoteAi -eq "nearai" -and "$(Quiet { & docker inspect --format '{{.State.Running}}' ca-attest 2>$null })".Trim() -ne "true") { Say "WARN" "ca-attest is not running: each AI answer's attest verdict will be an error (-Attest on the desk start)" }
+    }
+    $env:QUOTE_ENV_FILE = (Resolve-Path -LiteralPath $quoteEnv).Path -replace '\\', '/'
+    $env:QUOTE_AI = $QuoteAi
+    Say "RUN" "docker compose --profile quote up -d --build --no-deps quote-agents (ai $QuoteAi; only this container)"
+    Quiet { & docker @quoteCompose up -d --build --no-deps quote-agents 2>&1 | ForEach-Object { "$_" } } | Out-Host
+    if ($LASTEXITCODE) { Stop-Here "starting ca-quote-agents failed (exit $LASTEXITCODE): see the lines above" }
+    $deadline = (Get-Date).AddSeconds(30)
+    while ((HttpStatus "$quoteUrl/healthz") -ne 200 -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 500 }
+  }
+  $h = HttpJson "$quoteUrl/healthz"
+  if (-not $h -or -not $h.ok) { Say "FAIL" "ca-quote-agents does not answer $quoteUrl/healthz"; Quiet { & docker logs --tail 20 ca-quote-agents 2>&1 } | Out-Host; exit 1 }
+  Say "OK" "quote agents on $quoteUrl  as-of $($h.asOf)  ai $($h.ai)$(if ($h.model) { " ($($h.model))" })  tenants $($h.tenants -join ', ')"
+  if ($h.ai -ne "off") {
+    Say $(if ($h.gateway.ok) { "OK" } else { "FAIL" }) "gateway from inside the container: $(if ($h.gateway.ok) { 'answers' } else { $h.gateway.error })"
+    Say $(if ($h.attest.ok) { "OK" } else { "INFO" }) "ca-attest from inside the container: $(if ($h.attest.ok) { 'answers' } else { $h.attest.error })"
+  }
+  Quiet { & docker logs --tail 5 ca-quote-agents 2>&1 } | Out-Host
+  exit 0
+}
 $paid = -not ($P.paidJobs -and $P.paidJobs.enabled -eq $false)
 $admin = -not ($P.adminUi -and $P.adminUi.enabled -eq $false)
 $agentMode = if ($Agent) { "on" } elseif ($P.agent -and $P.agent.enabled -is [bool]) { $(if ($P.agent.enabled) { "on" } else { "off" }) } elseif ($P.agent -and $P.agent.enabled) { [string]$P.agent.enabled } else { "auto" }

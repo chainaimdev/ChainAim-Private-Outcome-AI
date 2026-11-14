@@ -656,3 +656,26 @@ test("A6b: -ChainPanel (default desk.json console.chainPanel, else off) goes to 
   assert.match(up, /if \(\$ChainPanel -eq "off"\) \{ \$consoleCmd \+= "--chain-panel=off";/);
   assert.equal((up.match(/--chain-panel=off/g) ?? []).length, 1);
 });
+
+test("ARCH-737 -Quote start|stop|check: only ca-quote-agents (profile quote, --no-deps), tokens checked by name, runs on its own; its suite runs with -Test/-All/-Ship", () => {
+  const block = code.slice(code.indexOf("if ($Quote) {"), code.indexOf("exit 0\n}", code.indexOf("if ($Quote) {")));
+  assert.ok(block.length > 100, "the -Quote block exists");
+  assert.match(block, /"start", "stop", "check"/);
+  assert.match(block, /-Quote runs on its own/);
+  assert.match(block, /up -d --build --no-deps quote-agents/);
+  assert.match(block, /rm -s -f quote-agents/);
+  assert.match(block, /"--profile", "quote"/);
+  assert.match(block, /quote-agents\.env/);
+  assert.ok(!/Get-Content/.test(block), "the token file is never read whole; names only via Select-String");
+  assert.ok(block.includes('Select-String -LiteralPath $quoteEnv -Pattern "^\\s*$n\\s*=\\s*\\S"'), "token names checked line by line");
+  assert.match(block, /"off", "nearai", "bedrock"/);
+  assert.ok(!/docker @quoteCompose up[^\n]*(gateway|paywall|presidio|attest)\b/.test(block), "never starts another service");
+  const suites = code.slice(code.indexOf("function Invoke-Suites"), code.indexOf("if ($Test) {"));
+  assert.match(suites, /"services\/quote-agents\/test\/\*\.test\.ts"/);
+  const compose = readFileSync(new URL("../../docker-compose.yml", import.meta.url), "utf8");
+  const svc = compose.slice(compose.indexOf("  quote-agents:"));
+  assert.match(svc, /profiles: \[quote\]/);
+  assert.match(svc, /ports: \["127\.0\.0\.1:8785:8785"\]/);
+  assert.match(svc, /read_only: true/);
+  assert.ok(!/QUOTE_TOKEN_JUPITER=|QUOTE_TOKEN_TOMMY=/.test(svc), "no token value in compose");
+});

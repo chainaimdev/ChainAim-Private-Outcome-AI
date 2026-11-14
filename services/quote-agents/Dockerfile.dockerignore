@@ -1,0 +1,8 @@
+# Build context: the repository root, for services/quote-agents/Dockerfile only (BuildKit reads <Dockerfile>.dockerignore
+# instead of the root .dockerignore). Everything is left out except what the Dockerfile copies: no key, env file or test.
+*
+!services/quote-agents/package.json
+!services/quote-agents/src
+!config/quote-tenants.json
+!config/quote-prompts
+!sample-data/quote

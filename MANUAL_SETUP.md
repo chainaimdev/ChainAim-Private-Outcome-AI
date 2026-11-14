@@ -713,3 +713,26 @@ Owner checks, one step at a time (the chat gives each step with its expected res
 4. `.\test-console\desk.ps1 -VerifyReceipt <the receipt file step 3 saved>`
 5. Tab 03, AI agent t02, the same template and model; then the admin UI (http://127.0.0.1:8800) Jobs tab.
 Space paid testnet jobs 1-2 minutes apart (public RPC rate limit).
+
+## 2026-11-14 Quote agents (privateAI-design-44, ARCH-730..737)
+
+New, off unless started: `ca-quote-agents` (compose profile `quote`, 127.0.0.1:8785). Nothing else in the stack changes.
+
+| What | Where | Value |
+|---|---|---|
+| `QUOTE_TOKEN_JUPITER` | `C:\PRIV-AI-SECRETS\quote-agents.env` (one `NAME=value` per line) | 32+ random characters; Signatory sends it as `Authorization: Bearer ...` for Jupiter's agents |
+| `QUOTE_TOKEN_TOMMY` | same file | 32+ random characters, different from Jupiter's; Tommy's tenant has no endpoints yet (OA-8), so this only proves isolation |
+| `QUOTE_ENV_FILE` (optional) | environment, or `-QuoteEnvFile` | another path for that file |
+| `QUOTE_AI` (optional) | set by `desk.ps1 -QuoteAi` | `off` (default) / `nearai` / `bedrock` |
+| `CHAINAIM_GATEWAY_KEY` | existing | the container reads it from the existing `gateway-key` compose secret (test-console\local-gateway-key.txt); nothing to add |
+
+Signatory needs the same two token values in its own secret store (its `SIGNATORY-quote-flow-design-01.md`). Never paste a
+token in chat.
+
+Owner checks, one step at a time:
+1. `.\test-console\desk.ps1 -Test` (includes `services/quote-agents/test`)
+2. Create `C:\PRIV-AI-SECRETS\quote-agents.env` with the two lines, then `.\test-console\desk.ps1 -Quote start`
+   (expected: `OK quote agents on http://127.0.0.1:8785 as-of 2026-11-16 ai off`).
+3. OA-7, live NEAR AI (the desk running with attestation): `.\test-console\desk.ps1 -Quote start -QuoteAi nearai`
+   (expected: gateway and ca-attest "answers"). The first `seller/synthesize` call from Signatory then returns
+   `source: "ai"` with an `attest.verdict`; check design-44 O7 (location masking) on that answer.

@@ -1,0 +1,13 @@
+{
+  "jupiter-knitting": {
+    "lei": "3358004DXAMRWRUIYJ05", "dataDir": "jupiter-knitting", "tokenEnv": "QUOTE_TOKEN_JUPITER", "rigTenant": "t01",
+    "agents": {
+      "JupiterInventoryAgent": ["agents/inventory"], "JupiterLogisticsAgent": ["agents/logistics"],
+      "JupiterTreasuryAgent": ["agents/treasury"], "jupiterSellerAgent": ["seller/synthesize"], "jupiterCeoAgent": ["seller/synthesize"]
+    }
+  },
+  "tommy-hilfiger-europe": {
+    "lei": "54930012QJWZMYHNJW95", "dataDir": "tommy-hilfiger-europe", "tokenEnv": "QUOTE_TOKEN_TOMMY",
+    "agents": { "TommyTreasuryAgent": ["agents/treasury"], "tommyBuyerAgent": ["agents/procurement", "buyer/synthesize"] }
+  }
+}

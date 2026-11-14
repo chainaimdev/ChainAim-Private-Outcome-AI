@@ -267,6 +267,33 @@ One PC can use other prices with `paid-jobs-settings.env` in its secrets folder 
 | `packages/crossask` | "Ask across files" and paid-job pricing (`cost.ts`) |
 | `config` | Model catalogs and registries, data-folder settings, team prices |
 | `docker-compose.yml` | The backend stack |
+| `services/quote-agents` | Jupiter's quote agents for Signatory (design-44); data in `sample-data/quote` |
+
+## Quote agents (Signatory demo)
+
+`services/quote-agents` (privateAI-design-44) is Jupiter Knitting's private data plane for Signatory's quote negotiation.
+Signatory's vLEI-identified agents call it; Jupiter's stock, sailings, costs, receivables and payables stay here, and the
+treasury agent never returns the unit cost.
+
+```powershell
+.\test-console\desk.ps1 -Quote start                  # ca-quote-agents on 127.0.0.1:8785, rules only
+.\test-console\desk.ps1 -Quote start -QuoteAi nearai  # seller synthesis by the NEAR AI TEE model via ca-gateway, attested by ca-attest
+.\test-console\desk.ps1 -Quote check                  # /healthz
+.\test-console\desk.ps1 -Quote stop
+```
+
+Only that one container is started or stopped. The tenant tokens go in `C:\PRIV-AI-SECRETS\quote-agents.env`
+(`QUOTE_TOKEN_JUPITER`, `QUOTE_TOKEN_TOMMY`; see MANUAL_SETUP.md). Without Docker:
+`node services/quote-agents/src/main.ts --ai off` (flags are listed at the top of `src/main.ts`).
+
+| Endpoint (POST, `Authorization: Bearer <tenant token>`, `X-Agent-Alias`, `X-Agent-LEI`) | Caller alias |
+|---|---|
+| `/v1/tenants/jupiter-knitting/agents/inventory` `{requestId, sku, qty, shipBy}` | `JupiterInventoryAgent` |
+| `/v1/tenants/jupiter-knitting/agents/logistics` `{requestId, sku, lots, deadline, allowAir}` | `JupiterLogisticsAgent` |
+| `/v1/tenants/jupiter-knitting/agents/treasury` `{requestId, sku, qty, freightCents, reallocUnits, termsDays, advancePct, margins}` | `JupiterTreasuryAgent` |
+| `/v1/tenants/jupiter-knitting/seller/synthesize` `{requestId, mode, inquiry, round, history, answers, authority}` | `jupiterSellerAgent`, `jupiterCeoAgent` |
+
+`GET /healthz` needs no token. Errors are `{error:{code, message}}`. Tests: `node --test "services/quote-agents/test/*.test.ts"`.
 
 ## Tests
 
