@@ -271,7 +271,9 @@ describe("ARCH-671 ARCH-672 upfront release (PAID_JOBS_FLOW=upfront)", () => {
       assert.match(body.error.message, new RegExp(`your payment ${paidTx} was refunded in REFUND`));
       assert.equal(body.error.message.includes("you were not charged"), false);
       assert.equal(paymentResponse(r).transaction, paidTx, "PAYMENT-RESPONSE echoes the upfront settlement");
-      assert.equal(consoleSeen.some((s) => s.path.endsWith("/released")), false, "nothing released");
+      // this job only: the previous case's successful re-payment notifies the console in the background (void notifyReleased)
+      // and can land after beforeEach cleared consoleSeen on a busy machine.
+      assert.equal(consoleSeen.some((s) => s.path === `/internal/jobs/${id}/released`), false, "nothing released for this job");
       const refundLine = JSON.parse(logs.find((l) => l.includes('"job_refund"'))!);
       assert.deepEqual([refundLine.jobId, refundLine.invoiceId, refundLine.status, refundLine.reason], [id, invoiceId, "refunded", reason]);
       // the job is payable again with a new invoice

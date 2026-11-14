@@ -176,6 +176,17 @@ describe("step C -AgentAsk: the real CLI against the console API", () => {
     assert.match(v.out, /^OK +receipt valid: signed by the pinned key [0-9a-f]{32}, settlement signed too, result matches$/m);
   });
 
+  test("estimate-first (the default): the agent names the job in \"estimated\", not \"job_ran\"; the receipt is still saved, exit 0", async () => {
+    consoleState.stream = (id) => paidStream(id).replace(`event: job_ran\ndata: ${JSON.stringify({ jobId: id, expiresAt: 1 })}`, `event: estimated\ndata: ${JSON.stringify({ jobId: id, expiresAt: 1 })}`);
+    consoleState.receipt = (id) => receiptFor(id, RESULT, signer, TX);
+    consoleState.posted = [];
+    const r = await ask("--tenant", "t01", "--dataset", "smb-fin-1", "--template", "1");
+    assert.ok(!/event: job_ran/.test(consoleState.stream(jobId || "0".repeat(32))), "the stream sends no job_ran");
+    assert.equal(r.code, 0, r.out + r.err);
+    assert.ok(existsSync(join(dir, "out", `chainaim-receipt-${jobId}.json`)), "receipt saved");
+    assert.match(r.out, /^OK +paid, result released, receipt verified by the agent with the pinned key$/m);
+  });
+
   test("ARCH-620: the CLI's --query-model reaches the console's /agent/crossask as model, and the RUN line names it", async () => {
     consoleState.stream = paidStream;
     consoleState.receipt = (id) => receiptFor(id, RESULT, signer, TX);

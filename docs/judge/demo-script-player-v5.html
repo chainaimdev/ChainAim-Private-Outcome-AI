@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Outcome AI from ChainAim: demo script v5, narrated</title>
+<style>
+:root{--bg:#fff;--fg:#1d2433;--muted:#5b6475;--line:#d3d8e2;--panel:#f5f7fb;--accent:#0b8a6f;--accent-soft:rgba(11,138,111,.12);--left:#2d5bd7;--right:#a8670b}
+@media (prefers-color-scheme: dark){:root{--bg:#11151c;--fg:#e6e9ef;--muted:#9aa3b2;--line:#3a4252;--panel:#181d26;--accent:#3fd0ad;--accent-soft:rgba(63,208,173,.14);--left:#7ea2ff;--right:#e5a54a}}
+*{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+main{max-width:1100px;margin:0 auto;padding:26px 20px 60px}
+h1{font-size:24px;margin:0 0 2px} .tag{color:var(--muted);margin:0 0 16px}
+.bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:8px 0}
+button,select{font:inherit;border:1px solid var(--line);background:var(--panel);color:var(--fg);border-radius:8px;padding:6px 12px;cursor:pointer}
+button:hover{border-color:var(--accent)} button.sel{border-color:var(--accent);background:var(--accent-soft);font-weight:600}
+#clock{font-variant-numeric:tabular-nums;color:var(--muted);margin-left:6px}
+.prog{height:6px;background:var(--panel);border-radius:4px;overflow:hidden;margin:10px 0 18px;border:1px solid var(--line)} .prog div{height:100%;width:0;background:var(--accent);transition:width .4s}
+.now{border:1px solid var(--line);border-radius:14px;padding:18px 20px;background:var(--panel)}
+.now .tc{color:var(--muted);font-weight:600;font-size:13px} .now h2{margin:2px 0 12px;font-size:21px}
+.vo{font-size:19px;line-height:1.55;margin:0 0 14px}
+.cues{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px}
+.cue{border-radius:10px;padding:10px 12px;background:var(--bg);border:1px solid var(--line);font-size:14px}
+.cue b{display:block;font-size:12px;letter-spacing:.04em} .cue.l b{color:var(--left)} .cue.r b{color:var(--right)}
+.cap{display:inline-block;background:var(--fg);color:var(--bg);font-weight:700;border-radius:8px;padding:6px 12px;font-size:15px}
+ol.list{list-style:none;padding:0;margin:22px 0 0}
+ol.list li{display:grid;grid-template-columns:110px 1fr;gap:10px;padding:8px 10px;border-radius:8px;cursor:pointer;border:1px solid transparent}
+ol.list li:hover{border-color:var(--line)} ol.list li.on{background:var(--accent-soft);border-color:var(--accent)}
+ol.list .t{color:var(--muted);font-variant-numeric:tabular-nums} ol.list .h{font-weight:600}
+.note{color:var(--muted);font-size:13.5px;margin-top:16px}
+@media (max-width:700px){.cues{grid-template-columns:1fr} ol.list li{grid-template-columns:90px 1fr}}
+</style></head><body><main>
+<h1>Outcome AI from ChainAim</h1>
+<p class="tag">Demo script v5 (about 2:20), narrated. Pay for verified outcomes, not tokens. Private by design, proven on NEAR.</p>
+<div class="bar">
+  <button id="narr" class="sel">🔊 Narration on</button>
+  <button id="vIN" class="sel">Indian English</button><button id="vUS">US English</button><button id="vUK">UK English</button>
+  <select id="voice" style="max-width:260px"></select>
+</div>
+<div class="bar">
+  <button id="prev">◀ Back</button><button id="play">▶ Play all</button><button id="next">Next ▶</button>
+  <label style="margin-left:8px;color:var(--muted)">Speed <input id="rate" type="range" min="0.8" max="1.2" step="0.02" value="0.96" style="vertical-align:middle"></label>
+  <span id="clock"></span>
+</div>
+<div class="prog"><div id="pg"></div></div>
+<section class="now" id="now"></section>
+<ol class="list" id="list"></ol>
+<p class="note">Voices come from your browser. The smoothest are the "Natural" voices in Microsoft Edge on Windows (Indian English: Neerja, Prabhat; US English: Aria, Guy). For the video, record with system audio on. On-screen lines are the app's own wording; check the admin console labels on screen before recording.</p>
+</main>
+<script>
+const SCENES = [{"tc": "0:00 – 0:22", "title": "The problem", "left": "Title card: Outcome AI from ChainAim · Pay for verified outcomes, not tokens.", "right": "(same title card)", "vo": "Regulated businesses sit on large volumes of sensitive data and need AI to act on it. Frontier AI asks them to trust it with their practices, their security and their budget, and to pay per token, whatever the result. Outcome AI from ChainAim brings accountable models to local data, cost-effectively, with proof for every answer.", "cap": "Local data · accountable models · proof for every answer"}, {"tc": "0:22 – 0:37", "title": "Two apps", "left": "Tab 03, dataset and agent t01 chosen.", "right": "NEAR Admin Console: Jobs tab, each job matched to its NEAR payment; block height ticking.", "vo": "On the left, an AI agent buys answers about its company's private data: operations, health, finance, what-ifs. On the right, each answer is matched to its NEAR payment, with a receipt anyone can rely on, without seeing the data.", "cap": "The buyer's desk · the auditor's console"}, {"tc": "0:37 – 0:53", "title": "A firm price before any work", "left": "Press Ask. Highlight: Quoted 0.02 USDC · Quote signed by ChainAim ✓ · Signed limits checked ✓ (zoom).", "right": "Jobs: the new job appears as quoted.", "vo": "ChainAim prices the job from the file sizes and signs its terms and limits as an AP2 quote, signed with ES256, with domain templates and context caps suited to the data and the question. What the buyer signed is exactly what runs.", "cap": "What the buyer signed is exactly what runs"}, {"tc": "0:53 – 1:08", "title": "Funded on NEAR, fair to both sides", "left": "Highlight: Spending policy ✓ · Checkout mandate signed ✓ · Settled on NEAR ↗ · Mandate verified by ChainAim's signer ✓", "right": "Ledger: the USDC transfer arrives from the chain.", "vo": "The agent checks the price against its company's rules, signs an AP2 checkout mandate for this one payment, and funds the job over x402: a NEP-141 USDC transfer on NEAR, relayed as a NEP-366 meta-transaction. Fair to both sides.", "cap": "AP2 quote + AP2 mandate · x402 · NEP-141 USDC · NEP-366 relayer"}, {"tc": "1:08 – 1:24", "title": "Compute first, model last", "left": "Highlight: Result released · AI proof ✓ 1 of 1 NEAR AI call verified · the answer.", "right": "Jobs row: released, attested ✓. Expand: TDX, GPU and signature checks.", "vo": "Compute first, model last. An exact query runs over the chosen dataset on the tenant's machine. Then one small call, inside a NEAR AI enclave attested with Intel TDX and NVIDIA GPU evidence, words or reasons on the result, for a micropayment.", "cap": "Deterministic compute on your PC · 1 TDX + GPU attested NEAR AI call · under $0.0005"}, {"tc": "1:24 – 1:48", "title": "Proof you can check", "left": "Highlight: Every number checked · What left your PC: 1 model call · Signed receipt ✓", "right": "Jobs: signed quote ✓, receipt ✓ · Reconcile: matched · Seller wallet: books agree.", "vo": "Every figure is checked. Before anything leaves the machine, PII and PHI are tokenized with Microsoft Presidio and ChainAim's own detectors, and PCI card numbers are removed. A second scan re-checks the masked text, and if anything remains, nothing is sent. The receipt ChainAim signs records that check, and real values return only on the tenant's machine. Private by design, and proven.", "cap": "PII/PHI tokenized · PCI removed · re-scanned before sending, fail-closed"}, {"tc": "1:48 – 1:57", "title": "Money back if privacy is not proven", "left": "Separate clip. Highlight: Settled on NEAR ↗ · Refused: privacy not proven → refunded ✓ · open the refund transaction.", "right": "Ledger: the refund leaves the seller wallet.", "vo": "If privacy cannot be proven, the job is refused and the money goes back to the buyer on NEAR, with a signed refund record.", "cap": "If privacy is not proven, you get your money back"}, {"tc": "1:57 – 2:14", "title": "Running totals, in the open", "left": "Tab 03 jobs list for the session.", "right": "Ledger and seller wallet · nearblocks page for chainaim-payto-seller.testnet · roadmap card: aggregates on chain, ZK-PRET on Mina.", "vo": "Every payment and every refund is on NEAR, while the questions and the data stay private. On the roadmap: aggregate views on chain, and ChainAim's ZK-PRET engine, with composed zero-knowledge proofs for business data and processes on o1Labs' Mina Protocol, for inter-chain integration.", "cap": "Live: every payment and refund on NEAR · Roadmap: on-chain aggregates, ZK-PRET on Mina"}, {"tc": "2:14 – 2:21", "title": "Close", "left": "Closing card: Outcome AI from ChainAim · tagline · Verify it yourself, no keys needed · repo URL.", "right": "(same closing card)", "vo": "Private data. Exact numbers. A budget you control. Outcome AI from ChainAim: pay for verified outcomes, not tokens.", "cap": "Pay for verified outcomes, not tokens."}];
+let i=0, timer=null;
+const now=document.getElementById("now"), list=document.getElementById("list"), pb=document.getElementById("play"), pg=document.getElementById("pg"), clock=document.getElementById("clock");
+const esc=(t)=>t.replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+list.innerHTML = SCENES.map((s,k)=>`<li data-k="${k}"><span class="t">${s.tc}</span><span><span class="h">${esc(s.title)}</span><br><span style="color:var(--muted)">${esc(s.cap)}</span></span></li>`).join("");
+list.querySelectorAll("li").forEach(li=>li.onclick=()=>{ pause(); i=+li.dataset.k; render(); narrate(i); });
+function render(){
+  const s=SCENES[i];
+  now.innerHTML = `<div class="tc">${s.tc} · scene ${i+1} of ${SCENES.length}</div><h2>${esc(s.title)}</h2><p class="vo">“${esc(s.vo)}”</p>
+  <div class="cues"><div class="cue l"><b>LEFT · PRIVATE AI DESK (8730)</b>${esc(s.left)}</div><div class="cue r"><b>RIGHT · NEAR ADMIN CONSOLE (8800)</b>${esc(s.right)}</div></div>
+  <span class="cap">${esc(s.cap)}</span>`;
+  list.querySelectorAll("li").forEach((li,k)=>li.classList.toggle("on",k===i));
+  pg.style.width = `${((i+1)/SCENES.length)*100}%`;
+  clock.textContent = `scene ${i+1} / ${SCENES.length} · ${s.tc}`;
+}
+let steps = SCENES.map(s=>({t:s.title, p:s.vo}));
+let RATE=0.96;
+// ---- narration: the browser's own text-to-speech (voices depend on the browser and OS) ----
+const synth = ("speechSynthesis" in window) ? window.speechSynthesis : null;
+let narrOn = !!synth, accent = "en-IN", voices = [], chosen = null, playing = false, wait = null;
+const vsel = document.getElementById("voice");
+const NATURAL = /natural|neural|online|google|premium|enhanced/i;
+function rank(v){ let r=0; const l=(v.lang||"").replace("_","-").toLowerCase(); if(l.startsWith(accent.toLowerCase())) r+=100; else if(l.startsWith("en")) r+=10; if(NATURAL.test(v.name)) r+=20; return r; }
+function loadVoices(){
+  if(!synth){ vsel.innerHTML='<option>no speech in this browser</option>'; vsel.disabled=true; const nb=document.getElementById("narr"); nb.textContent="🔇 No speech here"; nb.classList.remove("sel"); narrOn=false; return; }
+  voices = synth.getVoices().filter(v=>/^en/i.test(v.lang||""));
+  voices.sort((a,b)=>rank(b)-rank(a));
+  vsel.innerHTML = voices.length ? voices.map((v,k)=>`<option value="${k}">${v.name} (${v.lang})</option>`).join("") : '<option>loading voices…</option>';
+  chosen = voices[0] || null; if(voices.length) vsel.value="0";
+}
+loadVoices(); if(synth) synth.onvoiceschanged = loadVoices;
+vsel.onchange = ()=>{ chosen = voices[+vsel.value] || null; };
+function setAccent(a, btn){ accent=a; ["vIN","vUS","vUK"].forEach(id=>document.getElementById(id).classList.toggle("sel", id===btn)); loadVoices(); }
+document.getElementById("vIN").onclick=()=>setAccent("en-IN","vIN");
+document.getElementById("vUS").onclick=()=>setAccent("en-US","vUS");
+document.getElementById("vUK").onclick=()=>setAccent("en-GB","vUK");
+document.getElementById("narr").onclick=(ev)=>{ if(!synth) return; narrOn=!narrOn; ev.currentTarget.textContent = narrOn?"🔊 Narration on":"🔇 Narration off"; ev.currentTarget.classList.toggle("sel",narrOn); if(!narrOn) synth.cancel(); };
+function speak(text, done){
+  clearTimeout(wait);
+  if(!narrOn || !synth){ if(done) wait=setTimeout(done, 4200); return; }
+  synth.cancel();
+  const u = new SpeechSynthesisUtterance(text);
+  if(chosen){ u.voice = chosen; u.lang = chosen.lang; } else u.lang = accent;
+  u.rate = RATE; u.pitch = 1;
+  let fired=false; const fin=()=>{ if(fired) return; fired=true; clearInterval(keep); if(done) wait=setTimeout(done, 700); };
+  u.onend = fin; u.onerror = fin;
+  const keep = setInterval(()=>{ if(!synth.speaking){ clearInterval(keep); return; } synth.pause(); synth.resume(); }, 10000);
+  try { synth.speak(u); } catch(e){ fin(); }
+}
+function narrate(k, then){ speak(SCENES[k].vo, then); }
+function advance(){ if(!playing) return; if(i>=SCENES.length-1){ pause(); return; } i++; render(); narrate(i, advance); }
+function play(){ if(playing) return; playing=true; timer=1; pb.textContent="⏸ Pause"; narrate(i, advance); }
+function pause(){ playing=false; timer=null; clearTimeout(wait); if(synth) synth.cancel(); pb.textContent="▶ Play all"; }
+
+document.getElementById("rate").oninput=(e)=>{ RATE=+e.target.value; };
+document.getElementById("next").onclick=()=>{ pause(); i=Math.min(i+1,SCENES.length-1); render(); narrate(i); };
+document.getElementById("prev").onclick=()=>{ pause(); i=Math.max(i-1,0); render(); narrate(i); };
+pb.onclick=()=>{ if(playing){ pause(); } else { if(i>=SCENES.length-1) i=0; render(); play(); } };
+render();
+</script></body></html>

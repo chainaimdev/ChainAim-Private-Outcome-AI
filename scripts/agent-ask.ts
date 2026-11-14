@@ -124,7 +124,8 @@ async function main(): Promise<number> {
     for (let at = buffer.indexOf("\n\n"); at >= 0; at = buffer.indexOf("\n\n")) {
       const f = parseFrame(buffer.slice(0, at)); buffer = buffer.slice(at + 2);
       if (!f) continue;
-      if (f.type === "job_ran" && typeof f.data.jobId === "string" && /^[0-9a-f]{32}$/.test(f.data.jobId)) jobId = f.data.jobId;
+      // estimate-first (the default) names the job in "estimated", run-hold in "job_ran" (agent-jobs-core.ts emit).
+      if ((f.type === "job_ran" || f.type === "estimated") && typeof f.data.jobId === "string" && /^[0-9a-f]{32}$/.test(f.data.jobId)) jobId = f.data.jobId;
       if (f.type === "settled") settled = { transaction: String(f.data.transaction), network: String(f.data.network) };
       if (f.type === "released") released = f.data.result;
       if (f.type === "receipt_verified") receipt = "verified";
