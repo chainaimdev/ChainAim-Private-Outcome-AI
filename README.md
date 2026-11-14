@@ -1,4 +1,4 @@
-# ChainAim Private AI: Outcome AI
+# Outcome AI from ChainAim
 
 **Pay for verified outcomes, not tokens. Private by design, proven on NEAR.**
 
