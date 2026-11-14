@@ -1,6 +1,9 @@
-# tommy-hilfiger-europe (buyer tenant, sample data)
+# tommy-hilfiger-europe (buyer tenant, synthetic sample data)
 
-Tommy Hilfiger Europe's private data for `tommyBuyerAgent` and `TommyTreasuryAgent` (src/buyer.ts).
+**Synthetic test data, invented for this demo.** It is not Tommy Hilfiger's data: no real prices, budgets, policies or
+accounts, and no affiliation with or endorsement by Tommy Hilfiger is implied. The name only sets the scene of the demo.
+
+The buyer tenant's private data for `tommyBuyerAgent` and `TommyTreasuryAgent` (src/buyer.ts).
 
 | File | What |
 |---|---|

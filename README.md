@@ -8,7 +8,8 @@ receipt and a settlement on NEAR.
 
 Built at **NEAR HACKATHON** (1 to 14 Nov 2026). What existed before the window and what was built in it, release by
 release: [NEAR-HACKATHON-DISCLOSURE.md](NEAR-HACKATHON-DISCLOSURE.md). Architecture, step by step:
-[docs/judge/outcome-ai-architecture.html](docs/judge/outcome-ai-architecture.html). Companion repo (live operations):
+[docs/judge/outcome-ai-architecture.html](docs/judge/outcome-ai-architecture.html); on one page:
+[docs/judge/outcome-ai-architecture-simple.html](docs/judge/outcome-ai-architecture-simple.html). Companion repo (live operations):
 [chainaim-adminUI-NEAR](https://github.com/chainaimdev/chainaim-adminUI-NEAR).
 
 ## What makes it different
@@ -129,9 +130,167 @@ sample data is synthetic (no real company). Earlier samples: `docs/judge/older/`
 | Nothing about the content goes on chain | Only the USDC transfer is on NEAR | Step 2 `PRIVATE not on the chain: …` |
 | Reconciled live | The admin UI matches every claim with the chain transfer | [chainaim-adminUI-NEAR](https://github.com/chainaimdev/chainaim-adminUI-NEAR) "Do X → see Y" |
 
+**Architecture at a glance** (the numbers are the steps above; details in
+[docs/judge/outcome-ai-architecture-simple.html](docs/judge/outcome-ai-architecture-simple.html)):
+
+![Outcome AI architecture: the tenant's private runtime (AI agent and ChainAim data plane), ChainAim's signer, NEAR AI, NEAR testnet and the admin console, with the seven numbered steps](docs/judge/outcome-ai-architecture-simple.png)
+
 Demo video (2:30): [DEMO/outcome-ai-near-demo-2m30.mp4](DEMO/outcome-ai-near-demo-2m30.mp4) · its script:
 [DEMO/script-outcome-mp4-2.5min-Nov14-1.md](DEMO/script-outcome-mp4-2.5min-Nov14-1.md) · narrated walk-through:
-[docs/judge/demo-script-player-v11.html](docs/judge/demo-script-player-v11.html).
+[docs/judge/demo-script-player-v11.html](docs/judge/demo-script-player-v11.html) · narrated architecture, step by step
+(open in a browser): [docs/judge/OutcomeAI-Arch-Narration-V3.html](docs/judge/OutcomeAI-Arch-Narration-V3.html) ·
+the write-up: [below](#the-write-up-outcome-ai-in-about-1800-words).
+
+## The write-up: Outcome AI in about 1,800 words
+
+The narrated, step-by-step version of this story is
+[docs/judge/OutcomeAI-Arch-Narration-V3.html](docs/judge/OutcomeAI-Arch-Narration-V3.html): open it in a browser (after
+cloning, or download the file) and press Play. It walks through run A (a paid outcome after one counter-offer) in 10
+steps and run B (a refund) in 4, with the real ids, hashes and transactions of 14 Nov 2026. The demo video follows the
+script in [DEMO/script-outcome-ins-2m58-V2.md](DEMO/script-outcome-ins-2m58-V2.md).
+
+### The problem
+
+Regulated businesses sit on large volumes of sensitive data and need AI to act on it: a small company's books, an ERP
+system's receivables and payables, a dental office's ledger and bank statements. Frontier AI asks them for three kinds
+of trust at once. It asks them to hand over their data, to believe numbers a model may have invented, and to pay for
+tokens with no clear limit, where the meter rewards spending more tokens rather than getting the right answer.
+
+For a clinic owner or a small-business finance lead, each of those is a reason to say no. The data is protected by law
+and by contracts. A wrong figure in a cash-flow answer is worse than no answer. And an open-ended token bill is not
+something a business can approve in advance.
+
+### The idea: pay for verified outcomes, not tokens
+
+Outcome AI from ChainAim replaces that trust with proof. A business, or the business's own AI agent, buys an
+**outcome**: an exact answer to a question about its own data. The price is fixed and signed before any work. The data
+stays on the business's machine. The one model call that is needed runs inside an attested NEAR AI enclave and sees only
+masked text. The money moves on NEAR before the work, and comes back automatically if privacy cannot be proven. Every
+paid job ends with a signed receipt that anyone can check with two commands and no keys.
+
+Our tagline says it in one line: **pay for verified outcomes, not tokens. Private by design, proven on NEAR.**
+
+### How it is built: a private runtime, a control plane, and NEAR
+
+The system has four parts, and the boundaries between them are the point.
+
+**The tenant's private runtime** is the business's own machine. It runs the tenant's AI agent (with the tenant's own
+keys and spending policy), the tenant's files, and ChainAim's **data plane**: the console, the analyst that runs exact
+SQL on the files, the gateway with Microsoft Presidio that masks personal data, ca-attest that checks NEAR AI's
+attestation, and, for now, the x402 paywall. All of it runs in Docker, with ports bound to 127.0.0.1 only. The files,
+the rows, the question and the answer stay here. None of these containers holds a ChainAim signing key, and
+`desk.ps1 -Planes` checks that, container by container.
+
+**ChainAim's control plane** is the signer. It prices each job, signs the AP2 quote and its limits, verifies the
+tenant's checkout mandate, signs the receipt and sends refunds. It sees job ids, file sizes, hashes, prices, the mandate
+and the payment, and it refuses any other field by name: it never sees a question, a query, a row or an answer. For the
+hackathon it runs as a separate container with its own Docker project, network and keys folder on the same machine, so
+the separation is by design, not by hardware. Next, ChainAim hosts it.
+
+**NEAR AI** runs the model (DeepSeek V4.1 Flash) inside a trusted execution environment, with a signed attestation
+report backed by Intel TDX and NVIDIA GPU evidence.
+
+**NEAR testnet** carries the money: USDC (NEP-141) moved over x402, relayed as a NEP-366 meta-transaction so the agent
+needs no gas of its own. The chain shows who paid, how much and when, and a refund if there was one. It never shows the
+question, the data or the answer. A companion admin console
+([chainaim-adminUI-NEAR](https://github.com/chainaimdev/chainaim-adminUI-NEAR)) reads NEAR itself and reconciles every
+payment the paywall reports with the transaction on chain.
+
+### A real run, step by step (run A, 14 Nov 2026)
+
+**1. The agent asks for an outcome.** Tenant t02's AI agent asks a question about its own books: can this month's cash
+flow cover a loan installment? It picks the dataset `smb-fin-1` and the template "Cash flow vs installment". The question
+is checked on the PC first.
+
+**2. A firm, signed price before any work.** The console measures the files without running anything and sends
+ChainAim's signer only their sizes and hashes: 4 files, 5,395 bytes. The signer prices the job from those sizes (model
+cost, a fee per model call, an analyst fee, NEAR gas and a margin, with a 0.01 minimum) and signs an AP2 quote with hard
+limits: which model, how many calls, how many tokens, attestation required. The first quote is 0.02 USDC.
+
+**3. The agent counters; only the job shrinks.** This company lets its agent auto-approve only one cent. So instead of
+giving up, the agent asks once for a smaller job. ChainAim's signer walks a ladder of smaller versions of the same work,
+prices each with the same fees and margin, and offers the first one that fits: answer rows 20 and at most 1,024 tokens,
+at 0.01 USDC, as a new signed quote that records which offer it counters. The price is never discounted; only the job
+shrinks. If nothing fits, nothing is signed or paid.
+
+**4. Re-checked, mandated, funded on NEAR.** Right before paying, the agent re-checks the folder's size against the
+estimate (a folder that grew is refused) and checks the quote against its spending policy: per job, per day, auto-approve
+limit, attested route only. Then it signs an AP2 checkout mandate with the tenant's own key that permits exactly this
+quote and this one payment, and pays 0.01 USDC on NEAR, before any work is done.
+
+**5. Compute first, next to the data.** ChainAim's signer verifies the mandate. Then the heavy lifting is deterministic:
+the analyst runs the exact SQL on the tenant's files, on the tenant's machine, with no model at all. The rows never
+leave it. The receipt records only the SQL's and the result's hashes.
+
+**6. Model last: one small call, masked.** Only to word the answer, the gateway masks personal data, re-scans the masked
+text for anything that still looks personal (and refuses to send if it finds any, or if the scanner is down), and sends
+one small request to the NEAR AI model. It records a fingerprint of the exact bytes it sent: here 896 bytes to
+cloud-api.near.ai. That call cost 0.000322 USDC, about a thirtieth of a cent.
+
+**7. Privacy proven, or no delivery.** ca-attest checks NEAR AI's hardware attestation for that exact call: Intel TDX,
+NVIDIA GPU, the signature, and that the request the enclave signed has the same fingerprint as the bytes that left the
+PC. Without a verified result, nothing is delivered.
+
+**8. Result plus a signed receipt.** The answer is released, and every figure in its wording is checked against the
+computed result. ChainAim signs an Ed25519 receipt that ties together the files' hashes, the query and result hashes,
+both quotes, the mandate, the NEAR payment, the attestation bundle and the egress record: what left the PC, where it
+went, what was masked, and the hash of the bytes. The money trail is in it too: paid 0.01, cost 0.002322 (NEAR AI
+0.000322, call fees 0.001, analyst 0.002, gas 0.002), margin 0.007678.
+
+**9. The agent checks; ChainAim sees only hashes.** The agent verifies the receipt with ChainAim's published key.
+ChainAim's own operations view sees ids, hashes and payments, never the question or the data.
+
+**10. Anyone can verify it.** A judge checks the receipt offline with one command and reads the payment from NEAR with
+another. The payment is public; the content is not.
+
+### When privacy is not proven: run B
+
+Run B starts the same way: a signed quote, the agent's mandate, and the payment settled on NEAR before any work. The
+query runs on the PC and masked text goes to NEAR AI. In this run the attestation check was switched off on purpose, so
+no proof arrived, and with "pay only for attested inference" on, no proof means no delivery: the job is refused with
+`attestation_not_proven`. ChainAim's signer checks the payment on chain and sends the USDC back to the buyer, with a
+refund record signed by ChainAim that the agent verifies. The refund settled on NEAR about 17 seconds after the refusal.
+Nobody worked unpaid, and nobody paid for an outcome they did not get.
+
+### Who sees what
+
+| Party | Sees | Never sees |
+|---|---|---|
+| Tenant's private runtime (data plane) | the files, rows, question and answer | ChainAim's signing keys |
+| ChainAim's signer (control plane) | job ids, file sizes, hashes, prices, the mandate, the payment | the question, SQL, rows or answer |
+| NEAR AI (TEE) | the masked question and result table, inside an attested enclave | the files; unmasked personal data |
+| NEAR (anyone) | who paid, how much, when; a refund if there was one | any content |
+
+### Use cases on the templates
+
+ChainAim's domain expertise ships as templates, all demonstrated here on synthetic data. **ERP and small-business
+finance:** from ERPNext books, cash flow against loan installments, the biggest payments out, top customers, late
+payers, supplier bills due, receivables by age and credit-limit exposure. **The doctor's office:** for a dental practice
+(Curve Dental exports and bank statements), every revenue leak between the practice system and the bank, money missing
+versus extra, insurance EFTs per payer, card settlements that do not match, and posting errors, with model-written
+explanations whose figures are checked against the computed facts. Chiropractic packs (ChiroTouch, Jane) work the same
+way. Today the AI agent buys the finance and ERP templates over NEAR; the practice packs run exactly on the PC and are
+next to be wired into the paid flow.
+
+### What is real today, and what comes next
+
+Everything above ran live on NEAR testnet; the transactions are linked in the narration page and in the receipt. Some
+parts are honest first versions: the control plane is separated by design on one machine, not yet by hardware; the
+paywall and its relayer key still run on the tenant's PC; payments on chain are public, as with any on-chain payment.
+The design is modular, with the data plane, the control plane and settlement as separate services behind signed,
+allow-listed interfaces, so each can move on its own. Next: ChainAim hosts the signer and the paywall, then runs them in
+a TEE (NEAR Shade Agents or Phala Cloud) so the signing code itself is provable; the tenant's spending mandate moves into a
+NEAR contract; prepaid credits make individual payments unlinkable; a model proxy lets ChainAim hold the NEAR AI key while
+forwarding only the calls a paid job allows; ChainAim Apprentice teaches a local model from NEAR AI's attested model on
+synthetic data; and ZK-PRET extends verifiable outcomes to trade-finance processes and risk models.
+
+### Check it yourself
+
+You need Node.js 22.22 or later and this repository: no install, no Docker, no account, no key. The commands are in
+[Judges: verify it yourself, no keys](#judges-verify-it-yourself-no-keys): `verify-receipt` checks the signed receipt
+against the public keys pinned in `config/` (expect four `OK` lines and "counter of 043fe341…"), `observe-receipt` reads
+the same payment from NEAR testnet, and the test line runs 565 tests. Private data, exact numbers, a budget you control:
+pay for verified outcomes, not tokens.
 
 ## Built with: AI assistance and libraries
 
@@ -274,6 +433,9 @@ One PC can use other prices with `paid-jobs-settings.env` in its secrets folder 
 `services/quote-agents` (privateAI-design-44) is Jupiter Knitting's private data plane for Signatory's quote negotiation.
 Signatory's vLEI-identified agents call it; Jupiter's stock, sailings, costs, receivables and payables stay here, and the
 treasury agent never returns the unit cost.
+
+The tenant data in `sample-data/quote` is **synthetic**, invented for this demo. Company names are used only to set the
+scene: the data is not theirs, and no affiliation or endorsement is implied.
 
 ```powershell
 .\test-console\desk.ps1 -Quote start                  # ca-quote-agents on 127.0.0.1:8785, rules only
