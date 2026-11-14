@@ -10,7 +10,8 @@
     "enabled": true,
     "flow": "authorization",
     "payOnlyAttested": "evidence",
-    "payOnlyAttestedDeadlineMs": 30000
+    "payOnlyAttestedDeadlineMs": 30000,
+    "reEstimate": "off"
   },
   "gateway": {
     "exposeEgress": true

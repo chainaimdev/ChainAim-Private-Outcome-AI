@@ -611,3 +611,21 @@ test("privateAI-design-41: the desk stack's ca-gateway runs with --expose-egress
   assert.deepEqual(runBlk([...base, "--expose-egress=on"], "off"), base, "off means gone");
   assert.deepEqual(runBlk(base, "on"), [...base, "--expose-egress=on"]);
 });
+
+test("privateAI-design-42 ARCH-713: -ReEstimate (default desk.json paidJobs.reEstimate, else off) goes to up.ps1; up.ps1 adds the agent's --re-estimate=on only when on and the agent runs", () => {
+  assert.match(ps, /\[string\]\$ReEstimate = "",/);
+  assert.match(ps, /\$reEstimate = if \(\$ReEstimate\) \{ \$ReEstimate \} elseif \(\$P\.paidJobs -and \$P\.paidJobs\.reEstimate\) \{ \[string\]\$P\.paidJobs\.reEstimate \} else \{ "off" \}/);
+  assert.match(ps, /if \(@\("on", "off"\) -notcontains \$reEstimate\) \{ Stop-Here/);
+  assert.match(ps, /\$privArgs\.ReEstimate = \$reEstimate/);
+  assert.equal(ex.paidJobs.reEstimate, "off", "desk.example.json shows the setting, off");
+  const up = readFileSync(new URL("../../test-console/up.ps1", import.meta.url), "utf8");
+  assert.match(up, /\[ValidateSet\("on", "off"\)\]\[string\]\$ReEstimate = "off",/, "up.ps1 alone stays off");
+  assert.match(up, /if \(\$agentCmd\) \{ \$agentCmd \+= "--re-estimate=on";/);
+  assert.equal((up.match(/--re-estimate=on/g) ?? []).length, 1, "added in one place only");
+});
+
+test("privateAI-design-42 ARCH-710: up.ps1 sends the tenant mandate on job_receipt (--job-feed-mandate=on) only with checkout mandates on and job_receipt already on", () => {
+  const up = readFileSync(new URL("../../test-console/up.ps1", import.meta.url), "utf8");
+  assert.match(up, /if \(\$mandatesOn -and \(\$consoleCmd -contains "--job-feed-receipts=on"\)\) \{ \$consoleCmd \+= "--job-feed-mandate=on";/);
+  assert.ok(up.indexOf('$consoleCmd += "--job-feed-mandate=on"') > up.indexOf('$consoleCmd += "--job-feed-receipts=on"'), "after the receipts flag is set");
+});

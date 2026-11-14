@@ -323,3 +323,10 @@ test("privateAI-design-36 ARCH-666 ARCH-668: the terminal names both sides of th
   assert.equal(stepLine("t02", "mandate_verified", { ok: true, sha256: "0123456789abcdef".repeat(4) }), "[ChainAim] Mandate verified by ChainAim's signer OK (before the job ran; recorded in the receipt) · 0123456789ab…");
   assert.equal(stepLine("t02", "mandate_verified", { ok: false, sha256: "0".repeat(64), reason: "the receipt records no mandate" }), "[ChainAim] Mandate NOT confirmed by the receipt: the receipt records no mandate");
 });
+
+test("privateAI-design-42 ARCH-712: the terminal shows the agent's pre-payment size re-check (--re-estimate on)", () => {
+  assert.equal(
+    stepLine("t01", "rechecked", { jobId: "a".repeat(32), files: 1, totalBytes: 100, estimatedFiles: 1, estimatedBytes: 100, tolerancePct: 10 }),
+    "[Agent t01] Size re-checked before paying OK · 1 file(s), 100 bytes (estimated 1 file(s), 100 bytes +10 %)",
+  );
+});

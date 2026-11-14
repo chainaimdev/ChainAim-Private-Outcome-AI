@@ -59,6 +59,10 @@
  *                          desk.ps1 -MandateKey), nonce = the payment's invoice id; it goes with the paid release and
  *                          ChainAim's signer verifies it before the run (default off; needs --ap2-verify on). A tenant with
  *                          no key cannot pay such a job (refused, nothing signed)
+ * --re-estimate on|off     privateAI-design-42 ARCH-712: right before paying an estimate-first job, ask the console to
+ *                          re-size its folder by the paid run's own rule (GET /offers/<id>/recheck); grown past the
+ *                          estimate's tolerance, gained files, or not checkable = refused before anything is signed or paid
+ *                          (default off: no re-check, as before)
  * --mandate-audience ID    the business id the mandate is addressed to (default chainaim; the signer's --mandate-audience)
  * --mandate-lifetime-sec N how long a mandate is valid (default 300; the signer accepts at most its --mandate-max-lifetime-sec)
  * --run-timeout-sec N      a run is cancelled if not signed by then (default 300)
@@ -118,6 +122,7 @@ const { values } = parseArgs({
     "ap2-public-key": { type: "string", default: join(REPO, "config", "ap2-public-key.jwk.json") },
     "ap2-skew-sec": { type: "string", default: "30" },
     "ap2-mandate": { type: "string", default: "off" },
+    "re-estimate": { type: "string", default: "off" },
     "mandate-audience": { type: "string", default: "chainaim" },
     "mandate-lifetime-sec": { type: "string", default: "300" },
     "receipt-poll-ms": { type: "string", default: "1000" },
@@ -210,6 +215,8 @@ if (ap2On) {
 
 // ARCH-666: the tenants' checkout mandate keys, read once from this environment (the mounted env file).
 const mandateOn = onOff("ap2-mandate", values["ap2-mandate"]);
+// privateAI-design-42 ARCH-712: the pre-payment size re-check of estimate-first jobs.
+const reEstimate = onOff("re-estimate", values["re-estimate"]);
 if (mandateOn && !ap2Check) fail("--ap2-mandate on needs --ap2-verify on: the mandate permits a quote the agent has verified");
 const mandateAud = values["mandate-audience"];
 if (!/^[\x21-\x7E]{1,200}$/.test(mandateAud)) fail("--mandate-audience must be 1 to 200 printable characters");
@@ -301,7 +308,7 @@ createServer(async (req, res) => {
       res.on("close", () => { if (!finished) stop.abort(); });
       const timer = setTimeout(() => stop.abort(), runTimeoutMs);
       try {
-        await runAgentJob(run, { tenants: byId, console: consoleUrl, paywall: paywallUrl, scan, promptMask, makeModel, maxTurns, ...(maxAmount ? { maxAmount } : {}), ...(policy ? { policy } : {}), ...(receiptCheck ? { receiptCheck } : {}), refundPollMs, refundPollMax, ...(ap2Check ? { ap2Check } : {}), ...(mandates ? { mandates } : {}), queue, tenantLabel, log, defaultOfferMode },
+        await runAgentJob(run, { tenants: byId, console: consoleUrl, paywall: paywallUrl, scan, promptMask, makeModel, maxTurns, ...(maxAmount ? { maxAmount } : {}), ...(policy ? { policy } : {}), ...(receiptCheck ? { receiptCheck } : {}), refundPollMs, refundPollMax, ...(ap2Check ? { ap2Check } : {}), ...(mandates ? { mandates } : {}), ...(reEstimate ? { reEstimate } : {}), queue, tenantLabel, log, defaultOfferMode },
           (e) => { if (!res.writableEnded && !res.destroyed) res.write(sseFrame(e)); }, stop.signal);
       } catch (e) {
         if (!res.writableEnded && !res.destroyed) res.write(sseFrame({ type: "error", reason: `the agent service failed: ${e instanceof Error ? e.message : String(e)}` }));
@@ -332,6 +339,9 @@ createServer(async (req, res) => {
   console.log(mandates
     ? `[agent] checkout mandates on: audience ${mandates.aud}, ${mandates.lifetimeSec} s; tenants with a mandate key: ${[...mandates.keys].map(([t, k]) => `${t} (${k.kid})`).join(", ") || "none"}${tenantIds.filter((t) => !mandates!.keys.has(t)).length ? `; without (cannot pay such a job): ${tenantIds.filter((t) => !mandates!.keys.has(t)).map((t) => `${t} ${mandateKeyVariable(t)}`).join(", ")}` : ""}`
     : "[agent] checkout mandates off (--ap2-mandate off)");
+  console.log(reEstimate
+    ? "[agent] re-estimate on: each estimate-first job's folder is re-sized right before paying; grown or not checkable = refused, nothing signed or paid"
+    : "[agent] re-estimate off (--re-estimate off)");
   console.log(receiptCheck
     ? `[agent] receipt check on: each paid job's receipt is verified with the pinned key ${receiptCheck.keyId} from ${receiptCheck.keyPath} (asked ${receiptPollMax} times, ${receiptPollMs} ms apart)`
     : "[agent] receipt check off (--receipt-verify off)");

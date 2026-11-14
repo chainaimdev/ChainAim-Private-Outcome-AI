@@ -428,6 +428,8 @@
           const checks = Array.isArray(d.checks) ? d.checks.filter((c) => CHECK[c.check]).map((c) => `${CHECK[c.check](c)} ${c.ok ? "✓" : "✗"}`) : [];
           step(by(AGENT), `Spending policy: ${d.decision === "pay" ? "pay ✓" : d.decision === "refuse" ? "refused ✗" : `${d.decision} ✗`} · ${checks.join(" · ")}`);
         }
+        // privateAI-design-42 ARCH-712: the agent re-sized the folder right before paying (--re-estimate on).
+        else if (type === "rechecked") step(by(AGENT), `Size re-checked before paying ✓ · ${Number(d.files)} file(s), ${Number(d.totalBytes)} bytes (estimated ${Number(d.estimatedFiles)} file(s), ${Number(d.estimatedBytes)} bytes +${Number(d.tolerancePct)} %)`);
         // privateAI-design-36 ARCH-666/668: the buyer side of the AP2 deal, and ChainAim's signer's check of it (from its receipt).
         else if (type === "mandate_signed") step(by(AGENT), `Checkout mandate signed ✓ · tenant key ${String(d.kid).slice(0, 8)}… · permits exactly this signed quote, for this payment only`);
         else if (type === "mandate_verified") step(by("ChainAim"), d.ok ? `Mandate verified by ChainAim's signer ✓ (before the job ran; recorded in the receipt) · ${String(d.sha256).slice(0, 12)}…` : `Mandate not confirmed by the receipt ✗: ${d.reason}`);

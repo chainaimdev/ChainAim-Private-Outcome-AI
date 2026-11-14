@@ -58,6 +58,10 @@ one READY table across both. Neither launcher is changed or renamed; each team k
                 how tab 03 jobs are paid (default desk.json paidJobs.flow, else authorization = as before). upfront: the
                 payment settles before any work and a refused job is refunded on chain by ca-control-signer (needs the
                 separate signer and SELLER_NEAR_PRIVATE_KEY in <sellerSecretsDir>\signer.env; MANUAL_SETUP.md 2026-11-13).
+  -All ... -ReEstimate on|off
+                privateAI-design-42: the AI agent re-sizes each estimate-first job's folder right before paying (default
+                desk.json paidJobs.reEstimate, else off = as before). on: a folder that grew past the estimate (or gained
+                files) since the quote is refused before the mandate and the payment are signed: nothing paid, no refund.
   -All ... -PayOnlyAttested off|evidence|verified  [-PayOnlyAttestedDeadlineMs 30000]
                 privateAI-design-39: what a paid job must show about NEAR AI attestation before it is delivered (default
                 desk.json paidJobs.payOnlyAttested, else evidence = as before). verified: the console waits for ca-attest's
@@ -208,6 +212,7 @@ param(
   [string]$PaidFlow = "",
   [string]$PayOnlyAttested = "",
   [int]$PayOnlyAttestedDeadlineMs = 0,
+  [string]$ReEstimate = "",
   [string]$StopService = "",
   [string]$StartService = "",
   [switch]$NoBrowser,
@@ -1092,6 +1097,10 @@ $exposeEgress = if ($P.gateway -and $null -ne $P.gateway.exposeEgress) { $P.gate
 if ($exposeEgress -isnot [bool]) { Stop-Here "$Settings gateway.exposeEgress must be true or false" }
 $privArgs.ExposeEgress = $(if ($exposeEgress) { "on" } else { "off" })
 $privArgs.PayOnlyAttestedDeadlineMs = $payOnlyMs
+# privateAI-design-42 ARCH-713: -ReEstimate, else desk.json paidJobs.reEstimate, else off (as before).
+$reEstimate = if ($ReEstimate) { $ReEstimate } elseif ($P.paidJobs -and $P.paidJobs.reEstimate) { [string]$P.paidJobs.reEstimate } else { "off" }
+if (@("on", "off") -notcontains $reEstimate) { Stop-Here "-ReEstimate (or $Settings paidJobs.reEstimate) must be on or off" }
+$privArgs.ReEstimate = $reEstimate
 if ($payOnly -ne "evidence") { Say "INFO" "pay only for attested private inference: $payOnly$(if ($payOnly -eq 'verified') { ", ca-attest's verdict awaited up to $payOnlyMs ms before delivery" })" }
 Say "RUN" "test-console\up.ps1 -ReplaceRunning -PaidFlow $paidFlow -PaidJobs $($privArgs.PaidJobs)$(if ($Build) { ' -Build' })$(if ($WithStub) { ' -Test' })$(if ($agentMode -ne 'auto') { ' -Agent ' + $agentMode })$(if ($attestMode -ne 'auto') { ' -Attest ' + $attestMode }) -AttestGpuCheck $attestGpu$(if ($receiptsMode -ne 'auto') { ' -Receipts ' + $receiptsMode }) -DefaultPayer $defPayer$(if ($defAnswer) { ' -DefaultAnswerModel ' + $defAnswer }) -CrossaskMaxPromptChars $maxPrompt -Signer $signerMode -SignerUrl $signerUrl"
 & $privUp @privArgs

@@ -64,6 +64,10 @@ this PC (server.ts --mode ui, which forwards every call to the console API in Do
                                                 desk.ps1 passes on for the desk stack, desk.json gateway.exposeEgress): every
                                                 model call's sent bytes are hashed and the receipt lists what left the PC
                                                 (host, zone, masked counts, hash). The paywall strips the header for public callers.
+  -ReEstimate on|off                            privateAI-design-42 ARCH-712/713: the AI agent re-sizes each estimate-first
+                                                job's folder right before paying (agent --re-estimate on, console GET
+                                                /offers/<id>/recheck); a folder grown past the estimate is refused before
+                                                anything is signed or paid. Default off (as before); needs the AI agent.
   -PayOnlyAttested off|evidence|verified  [-PayOnlyAttestedDeadlineMs 30000]
                                                 privateAI-design-39 ARCH-685 (console --pay-only-attested): evidence
                                                 (default, as before) | off | verified = the console waits for ca-attest's
@@ -172,6 +176,7 @@ param(
   [ValidateSet("authorization", "upfront")][string]$PaidFlow = "authorization",
   [ValidateSet("off", "evidence", "verified")][string]$PayOnlyAttested = "evidence",
   [ValidateSet("on", "off")][string]$ExposeEgress = "off",
+  [ValidateSet("on", "off")][string]$ReEstimate = "off",
   [int]$PayOnlyAttestedDeadlineMs = 30000
 )
 $ErrorActionPreference = "Stop"
@@ -495,6 +500,14 @@ try {
   if ($Ap2 -eq "on" -and -not $mandatesOn) { Say "INFO" "checkout mandates off: no $MandateKeys (run .\test-console\desk.ps1 -MandateKey -MandateTenant t02 once)" }
   if ($mandatesOn -and $Signer -ne "separate") { $consoleCmd += "--mandate-keys=/app/$($MandateKeys.Replace('\', '/'))" }
   if ($mandatesOn -and $agentCmd) { $agentCmd += @("--ap2-mandate=on", "--mandate-audience=chainaim") }
+  # privateAI-design-42 ARCH-710: near-watch accepts job_receipt.mandate since adminUI ARCH-704: the admin Jobs tab shows
+  # the tenant's signed checkout mandate beside ChainAim's signed quote. The mandate rides on job_receipt.
+  if ($mandatesOn -and ($consoleCmd -contains "--job-feed-receipts=on")) { $consoleCmd += "--job-feed-mandate=on"; Say "OK" "job feed: the admin Jobs tab shows each job's tenant mandate (key id, tenant, hash)" }
+  # privateAI-design-42 ARCH-712/713: the agent's pre-payment size re-check of estimate-first jobs (default off).
+  if ($ReEstimate -eq "on") {
+    if ($agentCmd) { $agentCmd += "--re-estimate=on"; Say "OK" "re-estimate on: the AI agent re-sizes each estimate-first job's folder right before paying; grown = refused, nothing signed or paid" }
+    else { Say "INFO" "-ReEstimate on: the AI agent is not started, so there is nothing to re-check (tab 03 pays as before)" }
+  }
   # ARCH-664: ca-control-signer, its own compose project, network and port; started (and checked) before the data plane.
   $signerCmd = $null
   if ($Signer -eq "separate") {

@@ -21,6 +21,11 @@
  *   4. it pays <paywall>/v1/jobs/<jobId>/release with payAndFetchNear (scripts/near.ts) and the tenant's payer:
  *      a NEP-366 delegate signed with the tenant's key and submitted by ChainAim's relayer, so the tenant account
  *      needs USDC only
+ *   3b'. with --re-estimate on (privateAI-design-42 ARCH-712) and an estimate-first offer, after the policy and right before
+ *      the mandate and the payment are signed, the agent asks the console to re-size the folder by the paid run's own rule
+ *      (GET <console>/offers/<id>/recheck, ARCH-711): step `rechecked`. A folder that grew past the estimate's tolerance
+ *      or gained files, or a re-check that cannot be made, ends the run refused (code estimate_stale when it grew):
+ *      nothing is signed or paid, so no upfront payment has to come back. Off (default): no step, as before.
  *   3c. with checkout mandates (privateAI-design-36 ARCH-666; --ap2-mandate on) and a signed estimate-first quote, right
  *      before the payment is signed the agent signs a closed AP2 Checkout Mandate for that quote with the tenant's mandate
  *      key, nonce = the paywall's invoice id (agent-mandate.ts): step `mandate_signed`; it goes with the paid release
@@ -173,6 +178,8 @@ export type AgentEvent =
   | QuoteSignedEvent
   /** ARCH-620: the tenant's policy applied to the quote; every check with its limit and value, the decision and why. */
   | { type: "policy"; tenant: string; decision: "pay" | "approve" | "counter" | "refuse"; reason: string; checks: PolicyCheck[]; spentTodayUsd: string }
+  /** privateAI-design-42 ARCH-712: the folder re-sized right before the payment, still within the estimate (--re-estimate on). */
+  | { type: "rechecked"; jobId: string; files: number; totalBytes: number; estimatedFiles: number; estimatedBytes: number; tolerancePct: number }
   /** ARCH-666: the tenant's checkout mandate for this quote and this payment, signed right before the payment. */
   | MandateSignedEvent
   | { type: "signed"; account: string }
@@ -189,7 +196,7 @@ export type AgentEvent =
   | MandateVerifiedEvent
   | { type: "done" }
   /** code: the UCP AP2 error code when the signed-quote check refused (ARCH-630). */
-  | { type: "refused"; reason: string; code?: Ap2ErrorCode | "limits_mismatch" }
+  | { type: "refused"; reason: string; code?: Ap2ErrorCode | "limits_mismatch" | "estimate_stale" }
   | { type: "error"; reason: string; transaction?: string };
 
 /** What the agent's model receives from the tool: never the result's rows, table or worded answer (ARCH-305). */
@@ -269,6 +276,8 @@ export type RunDeps = {
   ap2Check?: Ap2Check;
   /** ARCH-666: the tenants' checkout mandate keys (--ap2-mandate on); unset = no mandate is signed. */
   mandates?: MandateSigner;
+  /** privateAI-design-42 ARCH-712: re-size an estimate-first job's folder right before paying (--re-estimate on); unset = no re-check. */
+  reEstimate?: boolean;
   queue: AccountQueue;
   /** The mode for a run that names none (agent-jobs.ts --offer-mode, default estimate-first); unset = run-hold. */
   defaultOfferMode?: OfferMode;
@@ -448,6 +457,12 @@ async function runAndPay(
       if ("refused" in verdict) return refuse(verdict.refused);
       maxAmount = verdict.maxAmount(maxAmount);
     }
+    // privateAI-design-42 ARCH-712: right before the mandate and the payment, the folder re-sized by the run's own rule.
+    if (deps.reEstimate && estimateFirst) {
+      const rc = await recheckOffer(deps.console, job.jobId, signal);
+      if ("refused" in rc) return { reply: { status: "refused" as const, reason: rc.refused }, terminal: { type: "refused" as const, reason: rc.refused, ...(rc.code ? { code: rc.code } : {}) } };
+      emit(rc.event);
+    }
     // ARCH-666: a mandate only for an estimate-first quote ChainAim signed (that is the run step its signer checks it in).
     const ap2 = job.ap2 as { checkout?: unknown; merchant_authorization?: unknown } | undefined;
     const withMandate = deps.mandates !== undefined && estimateFirst && typeof ap2?.merchant_authorization === "string" && typeof ap2.checkout === "object" && ap2.checkout !== null;
@@ -555,6 +570,29 @@ async function runAndPay(
     }
   }
   return { reply: out.reply, ...(out.terminal ? { terminal: out.terminal } : {}) };
+}
+
+/**
+ * privateAI-design-42 ARCH-712: GET <console>/offers/<id>/recheck (ARCH-711), before anything is signed. 200 = the folder
+ * is still within the estimate (its sizes as the `rechecked` step); 409 estimate_stale = it grew or gained files; anything
+ * else (expired offer, console down, an answer that cannot be read) is refused too: with the re-check on, a job whose size
+ * cannot be confirmed is not paid. Never the folder or the question, only the job id goes out.
+ */
+export async function recheckOffer(consoleUrl: string, jobId: string, signal: AbortSignal):
+  Promise<{ event: Extract<AgentEvent, { type: "rechecked" }> } | { refused: string; code?: "estimate_stale" }> {
+  let r: Response;
+  try { r = await fetch(`${consoleUrl}/offers/${jobId}/recheck`, { signal }); }
+  catch (e) { return { refused: signal.aborted ? "the request was cancelled before anything was paid" : `the job's size could not be re-checked (the console at ${consoleUrl} could not be reached: ${(e as Error).name}); nothing was signed or paid` }; }
+  const j = (await r.json().catch(() => null)) as Record<string, unknown> | null;
+  const why = typeof j?.error === "string" ? j.error : `HTTP ${r.status} from the console`;
+  if (r.status === 409) return { refused: `the folder changed since the estimate (${why}); nothing was signed or paid: ask again for a new estimate`, code: "estimate_stale" };
+  if (!r.ok) return { refused: `the job's size could not be re-checked before paying (${why}); nothing was signed or paid` };
+  const est = j?.estimated as Record<string, unknown> | undefined;
+  const n = (v: unknown): v is number => typeof v === "number" && Number.isInteger(v) && v >= 0;
+  if (j?.jobId !== jobId || j.ok !== true || !n(j.files) || !n(j.totalBytes) || !n(est?.files) || !n(est?.totalBytes) || !n(est?.sizeTolerancePct)) {
+    return { refused: "the console's re-check answer could not be read; nothing was signed or paid" };
+  }
+  return { event: { type: "rechecked", jobId, files: j.files, totalBytes: j.totalBytes, estimatedFiles: est.files, estimatedBytes: est.totalBytes, tolerancePct: est.sizeTolerancePct } };
 }
 
 /**

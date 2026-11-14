@@ -15,6 +15,11 @@
  *   job_quoted.ap2  {kid, merchantAuthSha256} of the quote's AP2 merchant authorization (privateAI-design-33 section 7;
  *                 chainaim-adminUI-NEAR near-watch ARCH-702): key id and signature hash only. Only with --job-feed-ap2 on
  *                 (default off): an older near-watch refuses the unknown field and with it the whole job_quoted.
+ *   job_receipt.mandate  {kid, tenant, sha256} of the buyer agent's AP2 checkout mandate the receipt records
+ *                 (privateAI-design-42 ARCH-710; chainaim-adminUI-NEAR near-watch ARCH-704): the tenant's key id, the
+ *                 tenant id and the mandate's hash only, never the mandate itself, its nonce or the payer's account. Only
+ *                 with --job-feed-mandate on (default off; needs --job-feed-receipts on): an older near-watch refuses the
+ *                 unknown field and with it the whole job_receipt.
  * Never awaited by a request: a feed that is slow, down or refusing never blocks or fails a job. A failed post is
  * logged once as job_feed_failed with the job id and a reason (an HTTP status, "timeout", "unreachable", "too many in
  * flight") only.
@@ -29,12 +34,13 @@ import type { SignedReceipt } from "../../packages/receipt/src/index.ts";
 
 export type JobFeedFlags = {
   "job-feed-url"?: string; "job-feed-key-env"?: string; "job-feed-timeout-ms"?: string; "job-feed-max-inflight"?: string; "job-expiry-check-sec"?: string;
-  "job-feed-attest-keep"?: string; "job-feed-receipts"?: string; "job-feed-ap2"?: string;
+  "job-feed-attest-keep"?: string; "job-feed-receipts"?: string; "job-feed-ap2"?: string; "job-feed-mandate"?: string;
 };
 /** attestKeep: quoted jobs whose call list is kept for their job_attested (oldest dropped first; a re-check needs it too); default 500. */
 /** receipts: send job_receipt (--job-feed-receipts on); absent/false: not sent. */
 /** ap2: send job_quoted.ap2 (--job-feed-ap2 on); absent/false: not sent. */
-export type JobFeedConfig = { url: string; key: string; keyEnv: string; timeoutMs: number; maxInflight: number; expiryCheckSec: number; attestKeep?: number; receipts?: boolean; ap2?: boolean };
+/** mandate: send job_receipt.mandate (--job-feed-mandate on, ARCH-710); absent/false: not sent. */
+export type JobFeedConfig = { url: string; key: string; keyEnv: string; timeoutMs: number; maxInflight: number; expiryCheckSec: number; attestKeep?: number; receipts?: boolean; ap2?: boolean; mandate?: boolean };
 export const DEFAULT_ATTEST_KEEP = 500;
 
 /** undefined without --job-feed-url; otherwise the checked configuration, or an Error naming what to set. The key is never in a message. */
@@ -44,11 +50,16 @@ export function jobFeedConfig(flags: JobFeedFlags, env: Record<string, string | 
   if (receiptsMode !== "on" && receiptsMode !== "off") throw new Error(`--job-feed-receipts must be on or off, got ${receiptsMode}`);
   const ap2Mode = flags["job-feed-ap2"] ?? "off";
   if (ap2Mode !== "on" && ap2Mode !== "off") throw new Error(`--job-feed-ap2 must be on or off, got ${ap2Mode}`);
+  const mandateMode = flags["job-feed-mandate"] ?? "off";
+  if (mandateMode !== "on" && mandateMode !== "off") throw new Error(`--job-feed-mandate must be on or off, got ${mandateMode}`);
   if (url === undefined || url === "") {
     if (receiptsMode === "on") throw new Error("--job-feed-receipts on needs --job-feed-url");
     if (ap2Mode === "on") throw new Error("--job-feed-ap2 on needs --job-feed-url");
+    if (mandateMode === "on") throw new Error("--job-feed-mandate on needs --job-feed-url");
     return undefined;
   }
+  // ARCH-710: the mandate rides on job_receipt, so it is sent only when receipts are.
+  if (mandateMode === "on" && receiptsMode !== "on") throw new Error("--job-feed-mandate on needs --job-feed-receipts on: the mandate is sent on job_receipt");
   if (!paidJobsOn) throw new Error("--job-feed-url needs --paid-jobs on: the feed reports paid jobs only");
   let u: URL;
   try { u = new URL(url); } catch { throw new Error(`--job-feed-url must be a URL (e.g. http://127.0.0.1:8790/ingest/job), got ${url}`); }
@@ -71,6 +82,7 @@ export function jobFeedConfig(flags: JobFeedFlags, env: Record<string, string | 
     attestKeep: int("job-feed-attest-keep", String(DEFAULT_ATTEST_KEEP), 1, 100_000),
     receipts: receiptsMode === "on",
     ap2: ap2Mode === "on",
+    mandate: mandateMode === "on",
   };
 }
 
@@ -100,14 +112,22 @@ export type JobEvent =
   | { v: 1; event: "job_quoted"; ts: string; jobId: string; network: string; amount: string; totalUsd: string; expiresAt: string; steps: JobStep[]; breakdown: JobQuote["breakdown"]; ap2?: QuotedAp2 }
   | { v: 1; event: "job_released" | "job_expired"; ts: string; jobId: string; network: string }
   | { v: 1; event: "job_attested"; ts: string; jobId: string; network: string; summary: WatchSummary; calls: WatchAttestedCall[] }
-  | { v: 1; event: "job_receipt"; ts: string; jobId: string; network: string; receiptId: string; keyId: string; resultSha256: string; filesRoot: string; settled: boolean; transaction: string | null };
+  | { v: 1; event: "job_receipt"; ts: string; jobId: string; network: string; receiptId: string; keyId: string; resultSha256: string; filesRoot: string; settled: boolean; transaction: string | null; mandate?: FeedMandate };
 
-/** job_receipt (ARCH-615): ids and hashes of a stored receipt only. */
-export function receiptEvent(r: SignedReceipt, network: string, now = Date.now()): JobEvent {
+/** ARCH-710: the checkout mandate a receipt records, as the feed sends it: the tenant's key id, the tenant and the hash. */
+export type FeedMandate = { kid: string; tenant: string; sha256: string };
+
+/**
+ * job_receipt (ARCH-615): ids and hashes of a stored receipt only. withMandate (ARCH-710, --job-feed-mandate on): also the
+ * receipt's checkout mandate as {kid, tenant, sha256}; a receipt without one sends none. Never accountId or nonce.
+ */
+export function receiptEvent(r: SignedReceipt, network: string, now = Date.now(), withMandate = false): JobEvent {
+  const m = withMandate ? r.body.mandate : undefined;
   return {
     v: 1, event: "job_receipt", ts: new Date(now).toISOString(), jobId: r.body.jobId, network: r.settlement?.network ?? network,
     receiptId: r.body.receiptId, keyId: r.sig.keyId, resultSha256: r.body.resultSha256, filesRoot: r.body.filesRoot,
     settled: r.settlement !== undefined, transaction: r.settlement?.transaction ?? null,
+    ...(m ? { mandate: { kid: m.kid, tenant: m.tenant, sha256: m.sha256 } } : {}),
   };
 }
 
@@ -243,10 +263,10 @@ export class JobFeed {
     catch (e) { return this.failed(a.jobId, (e as Error).message); }
     if (event) this.post(event);
   }
-  /** A stored receipt (ARCH-615); sent only with --job-feed-receipts on. */
+  /** A stored receipt (ARCH-615); sent only with --job-feed-receipts on; with its mandate only with --job-feed-mandate on (ARCH-710). */
   receipt(r: SignedReceipt, network: string): void {
     if (!this.cfg.receipts) return;
-    this.post(receiptEvent(r, network, this.now()));
+    this.post(receiptEvent(r, network, this.now(), this.cfg.mandate === true));
   }
   released(jobId: string): void { this.closed(jobId, "job_released"); }
   expired(jobId: string): void { this.closed(jobId, "job_expired"); }

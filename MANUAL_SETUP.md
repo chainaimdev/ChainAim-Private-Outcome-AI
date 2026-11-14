@@ -672,3 +672,22 @@ Live check, one step at a time:
 3. Press "Download receipt", then `.\test-console\desk.ps1 -VerifyReceipt <the downloaded file>` — expect an `egress` line and
    `OK egress: N call(s) left the PC → <host> (private-cloud), masked ..., sent-bytes hash = the attested request hash on
    N/N NEAR AI calls`.
+
+## 2026-11-14 The deal on the admin Jobs tab, and the re-check before paying (privateAI-design-42, ARCH-710..713; adminUI ARCH-704/705)
+
+No new secret and no new environment variable. Two additions, both off unless switched on:
+
+| Flag / setting | Where | What |
+|---|---|---|
+| `--job-feed-mandate on\|off` | console (up.ps1 adds it when checkout mandates are on and job_receipt is sent) | the tenant's mandate {key id, tenant, hash} goes to near-watch on job_receipt; the admin Jobs tab shows it |
+| `-ReEstimate on\|off` | `desk.ps1` / `up.ps1` (agent `--re-estimate`) | the AI agent re-sizes the job's folder right before paying; grown = refused, nothing paid |
+| desk.json `paidJobs.reEstimate` | `config/local/desk.json` (optional) | `"on"` or `"off"` (default off) |
+
+Both repositories change together: near-watch must accept `job_receipt.mandate` (adminUI ARCH-704) before the console
+sends it. `desk.ps1 -All` rebuilds ca-near-watch, the console images and the admin UI (its source is newer than its build).
+
+Owner checks, one step at a time (the chat gives each step with its expected result):
+1. `.\test-console\desk.ps1 -Test`
+2. `.\test-console\desk.ps1 -All -AllSkipTests -PaidFlow upfront -PayOnlyAttested verified -ReEstimate on`
+3. `.\test-console\desk.ps1 -AgentAsk -Tenant t01 -Dataset smb-fin-1 -Template 1 -AgentAnswerModel nearai/deepseek-v4.1-flash`
+4. Tab 03, AI agent t01, the same kind of job; then the admin UI (http://127.0.0.1:8800) Jobs tab.

@@ -114,6 +114,8 @@
  *   --receipt-max-files N       a dataset with more files is not sold (no receipt can cover it; default 500)
  *   --job-feed-receipts on|off  also send job_receipt to near-watch (default off: near-watch must accept the event first)
  *   --job-feed-ap2 on|off       also send the signed quote's key id and hash on job_quoted (default off; near-watch ARCH-702)
+ *   --job-feed-mandate on|off   also send the receipt's checkout mandate {kid, tenant, sha256} on job_receipt (privateAI-
+ *                               design-42 ARCH-710; default off; needs --job-feed-receipts on; near-watch ARCH-704)
  *   Observer view (privateAI-design-35 ARCH-650; needs --receipts on): GET /jobs/<id>/observer reads the job's settlement
  *   transaction from public NEAR RPC, as anyone could, and answers what the chain shows (payer, relayer, pay-to, amount,
  *   time) and the fixed list of what it does not (packages/observer). No key; nothing about the job's content is sent.
@@ -193,7 +195,7 @@ import { parseMandateRegistry, verifyMerchantAuthorization } from "../../package
 import { limitsEqualBasis, parseLimits, pricedCalls, servedWithinLimits, withinLimits, type CheckoutLimits } from "../../packages/offer/src/index.ts";
 import { economicsOf, filesRoot } from "../../packages/receipt/src/index.ts";
 import { observe, observerConfig, ObserverError } from "../../packages/observer/src/index.ts";
-import { attestedRoute, crossaskBasis, folderSize, offerModels, OfferStore, offerConfig, withinBasis, type OfferRequest } from "./offers.ts";
+import { attestedRoute, crossaskBasis, folderSize, offerModels, OfferStore, offerConfig, withinBasis, type HeldOffer, type OfferRequest } from "./offers.ts";
 
 const { values: flags } = parseArgs({
   args: process.argv.slice(2),
@@ -275,6 +277,7 @@ const { values: flags } = parseArgs({
     "observer-timeout-ms": { type: "string", default: "15000" },
     "observer-token-decimals": { type: "string", default: "6" },
     "job-feed-ap2": { type: "string" },
+    "job-feed-mandate": { type: "string" },
     ap2: { type: "string" },
     "ap2-key-env": { type: "string" },
     "ap2-alg": { type: "string" },
@@ -392,6 +395,40 @@ function holdOf(q: SignedQuote): Ap2Hold {
 const signFailStatus = (e: unknown): number => (e instanceof SignerUnavailable ? 502 : e instanceof SignerRefused ? 422 : 500);
 /** The paywall's release notice (jobs.ts internalHandler): the job feed's job_released, then the receipt, which is never awaited. */
 /**
+ * privateAI-design-38 ARCH-682: what runs is what was signed. With a signed quote and --offer-limits-check on, the run's
+ * limits are read from the SIGNED checkout (verified with the signer's public key, equal to the held basis), before any
+ * model call; a held quote changed in memory, or one without limits, is 422 and nothing runs or settles. (Moved out of
+ * runOffer unchanged by privateAI-design-42 ARCH-711, so the pre-payment re-check applies the very same limits.)
+ */
+function heldLimits(o: HeldOffer): { limits?: CheckoutLimits } | { refused: { status: number; body: unknown } } {
+  if (!(o.ap2 && AP2_CONFIG && OFFER_CONFIG?.limitsCheck)) return {};
+  const ext = o.ap2.checkout[JOB_EXTENSION] as Record<string, unknown> | undefined;
+  if (ext?.limits === undefined) return { refused: { status: 422, body: { error: "the signed quote carries no limits (a signer before v2.1.0?), so the job cannot be held to what was signed; nothing ran", code: "limits_missing" } } };
+  const sig = verifyMerchantAuthorization(o.ap2.merchantAuthorization, o.ap2.checkout, [AP2_CONFIG.signer.publicJwk]);
+  if (!sig.ok) return { refused: { status: 422, body: { error: `the held signed quote does not verify with ChainAim's signer key (${sig.code}); nothing ran`, code: "limits_unsigned" } } };
+  let limits: CheckoutLimits;
+  try { limits = parseLimits(ext.limits); }
+  catch (e) { return { refused: { status: 422, body: { error: `the signed limits cannot be read (${(e as Error).message}); nothing ran`, code: "limits_unsigned" } } }; }
+  const differs = limitsEqualBasis(limits, o.basis);
+  if (differs) return { refused: { status: 422, body: { error: `the held basis is not the signed limits (${differs}); nothing ran`, code: "limits_mismatch" } } };
+  return { limits };
+}
+/**
+ * ARCH-638: the held offer's folder re-sized now, against the signed limits when there are some, else the held basis and
+ * --offer-size-tolerance-pct: `grown` names how it grew past the tolerance or gained files (the estimate no longer
+ * covers it: the caller answers 409), null when within; `refused` (422) when the data config or the folder cannot be read.
+ * Used by the paid run and, before any payment, by GET /offers/<id>/recheck (privateAI-design-42 ARCH-711).
+ */
+async function offerSize(o: HeldOffer, limits: CheckoutLimits | undefined): Promise<{ size: { files: number; totalBytes: number }; grown: string | null; config: DataConfig } | { refused: { status: number; body: unknown } }> {
+  const { config, error } = readDataConfig();
+  if (!config) return { refused: { status: 422, body: { error: `the job cannot run: ${error}` } } };
+  let now;
+  try { now = await folderSize(o.request.folder, (n) => usableName(n, config), config.maxFiles); }
+  catch (e) { return { refused: { status: 422, body: { error: `the folder cannot be read: ${(e as Error).message}` } } }; }
+  const grown = limits ? withinLimits(limits, now) : withinBasis(o.basis, now, OFFER_CONFIG!.tolerancePct);
+  return { size: now, grown, config };
+}
+/**
  * ARCH-637/638: the paid release of an estimate-first offer, called by the paywall after it verified the payment and
  * before it settles. Runs the held request within the offer's basis: the folder re-sized (409 when it grew past
  * --offer-size-tolerance-pct or gained files), the basis's retries, answer rows and prompt size, max_tokens on every
@@ -422,27 +459,13 @@ async function runOffer(jobId: string, notice?: RunNotice): Promise<{ status: nu
       return { status: 422, body: { error: "a checkout mandate is required (mandate_required): the buyer's agent signs one per payment", code: "mandate_required" } };
     }
   }
-  // privateAI-design-38 ARCH-682: what runs is what was signed. With a signed quote and --offer-limits-check on, the run's
-  // limits are read from the SIGNED checkout (verified with the signer's public key, equal to the held basis), before any
-  // model call; a held quote changed in memory, or one without limits, is 422 and nothing runs or settles.
-  let limits: CheckoutLimits | undefined;
-  if (o.ap2 && AP2_CONFIG && OFFER_CONFIG.limitsCheck) {
-    const ext = o.ap2.checkout[JOB_EXTENSION] as Record<string, unknown> | undefined;
-    if (ext?.limits === undefined) return { status: 422, body: { error: "the signed quote carries no limits (a signer before v2.1.0?), so the job cannot be held to what was signed; nothing ran", code: "limits_missing" } };
-    const sig = verifyMerchantAuthorization(o.ap2.merchantAuthorization, o.ap2.checkout, [AP2_CONFIG.signer.publicJwk]);
-    if (!sig.ok) return { status: 422, body: { error: `the held signed quote does not verify with ChainAim's signer key (${sig.code}); nothing ran`, code: "limits_unsigned" } };
-    try { limits = parseLimits(ext.limits); }
-    catch (e) { return { status: 422, body: { error: `the signed limits cannot be read (${(e as Error).message}); nothing ran`, code: "limits_unsigned" } }; }
-    const differs = limitsEqualBasis(limits, o.basis);
-    if (differs) return { status: 422, body: { error: `the held basis is not the signed limits (${differs}); nothing ran`, code: "limits_mismatch" } };
-  }
-  const { config, error } = readDataConfig();
-  if (!config) return { status: 422, body: { error: `the job cannot run: ${error}` } };
-  let now;
-  try { now = await folderSize(o.request.folder, (n) => usableName(n, config), config.maxFiles); }
-  catch (e) { return { status: 422, body: { error: `the folder cannot be read: ${(e as Error).message}` } }; }
-  const grown = limits ? withinLimits(limits, now) : withinBasis(o.basis, now, OFFER_CONFIG.tolerancePct);
-  if (grown) return { status: 409, body: { error: grown } };
+  const held = heldLimits(o);
+  if ("refused" in held) return held.refused;
+  const limits = held.limits;
+  const sized = await offerSize(o, limits);
+  if ("refused" in sized) return sized.refused;
+  if (sized.grown) return { status: 409, body: { error: sized.grown } };
+  const config = sized.config;
   // Every limit of the run from the signed limits when there are some (equal to the held basis, checked above).
   const r = o.request, bs = limits ?? o.basis;
   let out;
@@ -1082,6 +1105,25 @@ createServer(async (req, res) => {
     // Run, meter, quote, hold, register: the page gets the cost and the job id, never the result.
     // ARCH-636: an estimate-first offer. Sizes only: the folder's data files are stat()ed, never opened; no model,
     // analyst or gateway call. The question is held with the offer until the paid release runs it (runOffer).
+    // privateAI-design-42 ARCH-711: the pre-payment re-check of an estimate-first offer (the agent's --re-estimate on):
+    // its folder re-sized now by the paid run's own rule (offerSize, heldLimits). Reads sizes only; runs, signs and
+    // settles nothing. 200 = still within the estimate; 409 estimate_stale = grown or gained files (estimate it again);
+    // 404 = no such offer (expired, already run, or never made); 422 = the held quote cannot be checked.
+    if (PAID_JOBS && OFFERS && OFFER_CONFIG && api === "offers" && name && url.pathname.split("/")[3] === "recheck" && url.pathname.split("/").length === 4 && req.method === "GET") {
+      if (!hostOk(req)) return dataJson(res, 403, { error: `open the console as http://127.0.0.1:${PORT}` });
+      if (!/^[0-9a-f]{32}$/.test(name)) return dataJson(res, 400, { error: "the offer id must be 32 lowercase hex characters" });
+      const o = OFFERS.get(name);
+      if (!o) return dataJson(res, 404, { error: "no such offer (it expired, already ran, or was never made)" });
+      const held = heldLimits(o);
+      if ("refused" in held) return dataJson(res, held.refused.status, held.refused.body);
+      const sized = await offerSize(o, held.limits);
+      // Ids and sizes only: never the folder, question or model.
+      if ("refused" in sized) return dataJson(res, sized.refused.status, sized.refused.body);
+      console.log(JSON.stringify({ ts: new Date().toISOString(), route: "offer", event: "offer_rechecked", offerId: name, ok: sized.grown === null, files: sized.size.files, bytes: sized.size.totalBytes }));
+      if (sized.grown) return dataJson(res, 409, { error: sized.grown, code: "estimate_stale", files: sized.size.files, totalBytes: sized.size.totalBytes });
+      const bound = held.limits ?? { files: o.basis.files, totalBytes: o.basis.totalBytes, sizeTolerancePct: OFFER_CONFIG.tolerancePct };
+      return dataJson(res, 200, { jobId: name, ok: true, files: sized.size.files, totalBytes: sized.size.totalBytes, estimated: { files: bound.files, totalBytes: bound.totalBytes, sizeTolerancePct: bound.sizeTolerancePct }, signedLimits: held.limits !== undefined });
+    }
     if (PAID_JOBS && JOBS && OFFERS && OFFER_CONFIG?.costModel && api === "offers" && !name && req.method === "POST") {
       if (!hostOk(req)) return dataJson(res, 403, { error: `open the console as http://127.0.0.1:${PORT}` });
       let b: Record<string, unknown>;

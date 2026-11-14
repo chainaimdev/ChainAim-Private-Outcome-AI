@@ -624,6 +624,39 @@ describe("privateAI-design-34 ARCH-636 ARCH-637 ARCH-638 estimate-first offers o
     } finally { rmSync(grow, { recursive: true, force: true }); }
   });
 
+  test("privateAI-design-42 ARCH-711: GET /offers/<id>/recheck re-sizes the folder by the run's own rule before any payment: 200 within, 409 estimate_stale grown, 404 unknown; it runs, holds and pays nothing", async () => {
+    const recheck = (id: string) => call(consolePort, "GET", `/offers/${id}/recheck`);
+    const grow = join(data, "regrow");
+    mkdirSync(grow, { recursive: true });
+    writeFileSync(join(grow, "orders.csv"), "order_id,amount\n1,10\n");
+    try {
+      const j = JSON.parse((await offerAt({ folder: grow, question: "How many orders?", model: MODEL, phrase: "none" })).text);
+      modelCalls = 0;
+      const ok = await recheck(j.jobId);
+      assert.equal(ok.status, 200, ok.text);
+      const body = JSON.parse(ok.text);
+      assert.deepEqual([body.jobId, body.ok, body.files, body.estimated.files, body.estimated.sizeTolerancePct, body.signedLimits], [j.jobId, true, 1, 1, 10, false]);
+      assert.equal(body.totalBytes, body.estimated.totalBytes);
+      // Ids and sizes only: no folder, file name or question in the answer.
+      for (const leak of [grow, "orders.csv", "How many orders"]) assert.equal(ok.text.includes(leak), false, leak);
+      writeFileSync(join(grow, "more.csv"), "order_id,amount\n2,20\n");
+      const stale = await recheck(j.jobId);
+      assert.equal(stale.status, 409, stale.text);
+      const sb = JSON.parse(stale.text);
+      assert.equal(sb.code, "estimate_stale");
+      assert.match(sb.error, /has 2 data files now, 1 when it was estimated: estimate it again/);
+      assert.equal(sb.files, 2);
+      assert.equal(modelCalls, 0, "a re-check calls no model");
+      assert.equal((await internal("GET", `/internal/jobs/${j.jobId}`, JOBS_KEY)).status, 404, "nothing is held");
+      // The offer itself is untouched: the paid run would refuse it with the very same rule (409, as before).
+      assert.equal((await runAt(j.jobId)).status, 409);
+      assert.match(consoleProc.out(), new RegExp(`"event":"offer_rechecked","offerId":"${j.jobId}","ok":false,"files":2`));
+      assert.equal((await recheck("0".repeat(32))).status, 404);
+      assert.equal((await recheck("not-an-id")).status, 400);
+      assert.equal((await call(consolePort, "POST", `/offers/${j.jobId}/recheck`)).status === 200, false, "GET only");
+    } finally { rmSync(grow, { recursive: true, force: true }); }
+  });
+
   test("ARCH-636: estimate-first without a cost model stops start-up naming desk.ps1 -Calibrate; --offer-modes run-hold starts without one and has no /offers", async () => {
     const port = await freePort(), iport = await freePort();
     await assert.rejects(start(consoleArgs(port, iport, { "cost-model": join(dir, "no-cost-model.json") }), consoleReady(port), { PAID_JOBS_KEY: JOBS_KEY }, "the console"), /run \.\\test-console\\desk\.ps1 -Calibrate/);
