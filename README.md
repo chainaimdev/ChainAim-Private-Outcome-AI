@@ -136,8 +136,9 @@ sample data is synthetic (no real company). Earlier samples: `docs/judge/older/`
 
 ![Outcome AI architecture: the tenant's private runtime (AI agent and ChainAim data plane), ChainAim's signer, NEAR AI, NEAR testnet and the admin console, with the seven numbered steps](docs/judge/outcome-ai-architecture-simple.png)
 
-Demo video (2:30): [DEMO/outcome-ai-near-demo-2m30.mp4](DEMO/outcome-ai-near-demo-2m30.mp4) · its script:
-[DEMO/script-outcome-mp4-2.5min-Nov14-1.md](DEMO/script-outcome-mp4-2.5min-Nov14-1.md) · narrated walk-through:
+Demo video 
+https://www.youtube.com/watch?v=v7HsuUspztQ
+
 [docs/judge/demo-script-player-v11.html](docs/judge/demo-script-player-v11.html) · narrated architecture, step by step: **[https://outcomeai-architecture.vercel.app/](https://outcomeai-architecture.vercel.app/)**
 (the same page in the repo: [docs/judge/OutcomeAI-Arch-Narration-V3.html](docs/judge/OutcomeAI-Arch-Narration-V3.html)) ·
 the write-up: [below](#the-write-up-outcome-ai-in-about-1800-words).
