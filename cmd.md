@@ -39,7 +39,7 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 $ROOT = "<your-folder>"   # any folder; both repos are cloned side by side in it
 New-Item -ItemType Directory -Force -Path $ROOT, C:\PRIV-AI-SECRETS, C:\PRIV-AI-DATA | Out-Null
 cd $ROOT
-git clone https://github.com/chainaimdev/chainaim-private-ai.git
+git clone https://github.com/chainaimdev/ChainAim-Private-Outcome-AI.git chainaim-private-ai
 git clone https://github.com/chainaimdev/chainaim-adminUI-NEAR.git
 cd $ROOT\chainaim-private-ai
 ```

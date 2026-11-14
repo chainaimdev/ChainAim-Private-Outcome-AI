@@ -205,7 +205,7 @@ o1Labs' Mina Protocol, for inter-chain integration."**
 
 ### 2:52 – 2:58 · Close
 - **Left and right:** closing card: *Outcome AI from ChainAim* · tagline · *Verify it yourself, no keys needed* ·
-  github.com/chainaimdev/chainaim-private-ai · github.com/chainaimdev/chainaim-adminUI-NEAR.
+  github.com/chainaimdev/ChainAim-Private-Outcome-AI · github.com/chainaimdev/chainaim-adminUI-NEAR.
 
 **"Private data. Exact numbers. A budget you control. Outcome AI from ChainAim: pay for verified outcomes, not tokens."**
 

@@ -196,6 +196,20 @@ question, the data or the answer. A companion admin console
 ([chainaim-adminUI-NEAR](https://github.com/chainaimdev/chainaim-adminUI-NEAR)) reads NEAR itself and reconciles every
 payment the paywall reports with the transaction on chain.
 
+**Where NEAR fits, concretely:**
+
+- **NEAR AI is the only place text leaves the PC, and payment depends on its proof.** The one model call runs in a NEAR
+  AI enclave; ca-attest verifies its Intel TDX + NVIDIA GPU attestation and that the enclave signed the exact bytes that
+  left the PC. With "pay only for attested inference" on, no verified proof means no delivery and a refund.
+- **NEAR is the payment rail for agents.** Each tenant's agent pays from its own NEAR account in USDC (NEP-141) over
+  x402, relayed as a NEP-366 meta-transaction so it needs no NEAR for gas. Payment settles before the work, and a refused
+  job is refunded on NEAR with an `ft_transfer` back to the payer, plus a refund record signed by ChainAim.
+- **NEAR is the independent public record.** The signed receipt names the NEAR transaction; anyone can read it with
+  `observe-receipt` (public RPC), and the admin console reads NEAR itself (neardata, RPC) to reconcile every payment
+  the paywall claims. The chain shows payer, amount and time, never the question, data or answer.
+- **Next on NEAR (roadmap):** the tenant's spending mandate enforced by a NEAR contract, and ChainAim's signer in a TEE
+  whose code a NEAR contract approves (NEAR Shade Agents), so the signing code is provable, not only separate.
+
 ### A real run, step by step (run A, 14 Nov 2026)
 
 **1. The agent asks for an outcome.** Tenant t02's AI agent asks a question about its own books: can this month's cash

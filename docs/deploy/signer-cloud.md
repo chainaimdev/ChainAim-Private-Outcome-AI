@@ -32,14 +32,14 @@ and HTTPS protect the calls.
 The start command (both platforms), with your price file's values:
 
 ```
-node services/signer/src/main.ts --host 0.0.0.0 --pricing-catalog config/catalog.bedrock.json --fee-per-model-call-usd <FEE_PER_MODEL_CALL_USD> --fee-analyst-usd <FEE_ANALYST_USD> --near-gas-fee-usd <NEAR_GAS_FEE_USD> --margin-pct <MARGIN_PCT> --min-price-usd <MIN_PRICE_USD> --cost-model config/cost-model.json --terms-url https://github.com/chainaimdev/chainaim-private-ai/blob/main/LICENSE --mandate-keys config/ap2-mandate-keys.json --mandate-audience chainaim
+node services/signer/src/main.ts --host 0.0.0.0 --pricing-catalog config/catalog.bedrock.json --fee-per-model-call-usd <FEE_PER_MODEL_CALL_USD> --fee-analyst-usd <FEE_ANALYST_USD> --near-gas-fee-usd <NEAR_GAS_FEE_USD> --margin-pct <MARGIN_PCT> --min-price-usd <MIN_PRICE_USD> --cost-model config/cost-model.json --terms-url https://github.com/chainaimdev/ChainAim-Private-Outcome-AI/blob/main/LICENSE --mandate-keys config/ap2-mandate-keys.json --mandate-audience chainaim
 ```
 
 `--port` is left out on purpose: the signer then listens on the platform's `PORT` variable.
 
 ## Railway (about 45 minutes)
 
-1. Railway dashboard, New Project, Deploy from GitHub repo, `chainaimdev/chainaim-private-ai`. Expected: a service is
+1. Railway dashboard, New Project, Deploy from GitHub repo, `chainaimdev/ChainAim-Private-Outcome-AI`. Expected: a service is
    created and a first build starts (it may fail until step 3; that is fine).
 2. Service Settings, Build: Builder `Dockerfile`, Dockerfile path `services/signer/Dockerfile`; root directory empty
    (the repository root is the build context). Expected: the settings save.

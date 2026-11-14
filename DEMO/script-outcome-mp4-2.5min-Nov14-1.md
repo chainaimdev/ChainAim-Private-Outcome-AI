@@ -270,7 +270,7 @@ replaces the diagram with a real action and a visible result.
 ### 2:18 – 2:30 · Closing pitch and next step
 - **Left and right:** a closing card:
   - *Outcome AI from ChainAim · Pay for verified outcomes, not tokens*
-  - github.com/chainaimdev/chainaim-private-ai · github.com/chainaimdev/chainaim-adminUI-NEAR
+  - github.com/chainaimdev/ChainAim-Private-Outcome-AI · github.com/chainaimdev/chainaim-adminUI-NEAR
   - *Built at NEAR HACKATHON · testnet · Verify it yourself, no keys needed*
   - The question: *"Which practice system should we support next?"*
 
@@ -315,7 +315,7 @@ node scripts/observe-receipt.ts --file docs/judge/sample-receipt-2026-11-13T1716
 > HACKATHON** ✔: an AI agent buys an exact answer for 0.02 USDC on NEAR. The data is masked on its own PC, the model
 > runs in an attested NEAR AI enclave, the result is released only with proof, and the money is refunded on NEAR if
 > privacy isn't proven. A live console reconciles every payment with the chain.
-> Repos: github.com/chainaimdev/chainaim-private-ai · github.com/chainaimdev/chainaim-adminUI-NEAR (judge path, no keys)
+> Repos: github.com/chainaimdev/ChainAim-Private-Outcome-AI · github.com/chainaimdev/chainaim-adminUI-NEAR (judge path, no keys)
 > Which practice system should we support next?
 > **@NEARProtocol** ✔ **#NEARHackathon** ✔ (optional: @NearLegion @NearBuilders)
 > [attach the 2:30 video] ✔
