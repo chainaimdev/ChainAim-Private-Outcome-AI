@@ -6,6 +6,11 @@ A business can ask AI about its own books without handing over its data, trustin
 open-ended bill. Every step leaves proof that anyone can check: an attested model call, a signed price, a signed
 receipt and a settlement on NEAR.
 
+Built at **NEAR HACKATHON** (1 to 14 Nov 2026). What existed before the window and what was built in it, release by
+release: [NEAR-HACKATHON-DISCLOSURE.md](NEAR-HACKATHON-DISCLOSURE.md). Architecture, step by step:
+[docs/judge/outcome-ai-architecture.html](docs/judge/outcome-ai-architecture.html). Companion repo (live operations):
+[chainaim-adminUI-NEAR](https://github.com/chainaimdev/chainaim-adminUI-NEAR).
+
 ## What makes it different
 
 - **Unmasked only on your own machine.** The gateway, Presidio, the analyst and the console run in Docker on your PC,
@@ -21,13 +26,22 @@ receipt and a settlement on NEAR.
   0.01 to 0.02 USDC.
 - **Proof, not promises.** The masked text that leaves your PC goes to NEAR AI, where each call runs in a hardware-sealed
   enclave (Intel TDX, NVIDIA GPU) and its attestation is verified for the job. Every paid job ends with an Ed25519-signed receipt that binds the files, query,
-  result, model calls, price and NEAR settlement, as hashes only: the receipt never holds the data.
+  result, model calls, price and NEAR settlement, as hashes only: the receipt never holds the data. It also lists what left
+  your PC for each model call (where it went, what was masked, the hash of the exact bytes sent), and that hash is the one
+  NEAR AI's enclave signed. A job whose NEAR AI attestation is not proven is refunded, not delivered.
 - **AI agents that buy safely, on a two-sided deal.** A company's AI agent checks ChainAim's signed quote against its own
   spending mandate (per job, per day, auto-approve limit, attested route only), then signs its permission as an AP2
   Checkout Mandate with the tenant's own key, bound to that exact quote and that one payment, and pays in USDC on NEAR.
   ChainAim's signer verifies the mandate before the job runs; nothing settles without both signatures, and the receipt
   records both. Its own model sees the question only masked. Offered a route that is not attested, it refuses before
   anything is signed or paid.
+- **Paid before the work, refunded if it fails.** The agent pays upfront in USDC on NEAR; a job that is then refused
+  (attestation not proven, folder changed, outside the signed limits) is refunded on NEAR automatically, with a refund
+  record signed by ChainAim. Right before paying, the agent re-checks the folder's size against the estimate.
+- **A counter-offer, not a lost sale.** When a quote is above the tenant's auto-approve limit, the agent asks ChainAim for
+  a smaller job at that limit. ChainAim's signer prices each smaller step (fewer answer rows, fewer tokens, fewer SQL
+  tries) with the same fees and margin: **the price is never discounted, only the job shrinks**. Live: quoted 0.02,
+  countered, paid 0.01, and the receipt says which offer it countered. If no smaller job fits, nothing is signed or paid.
 - **Our signer never sees your data; your machine never holds our keys.** ChainAim's signing keys live in a separate
   service, `ca-control-signer` (the control plane), in its own runtime with its own keys folder. It receives sizes, ids,
   hashes and amounts only, and refuses any other field by name. Today it runs beside your stack on the same PC
@@ -35,12 +49,17 @@ receipt and a settlement on NEAR.
 - **Privacy you can check, edge included.** No question, file, query, result or answer ever goes on chain. The payment
   is an ordinary NEAR USDC transfer, so, as with any on-chain payment, its payer, amount and time are public; tab 03's
   "What the chain shows" displays exactly that for each job, read from public NEAR RPC.
-- **Pay per use, on NEAR or the XRP Ledger.** USDC on **NEAR** (Intear wallet or an AI agent; a relayer pays the gas) or
-  RLUSD on the **XRP Ledger**, over x402.
+- **Pay per use in USDC on NEAR.** x402 over USDC on **NEAR** (Intear wallet or an AI agent; a relayer pays the gas).
+  An XRPL/RLUSD rail from the version before the hackathon is still in the code
+  ([NEAR-HACKATHON-DISCLOSURE.md](NEAR-HACKATHON-DISCLOSURE.md)); paid jobs are NEAR only.
 - **Any model, by name or by zone.** NEAR AI (attested), local models, OpenRouter, or Amazon Bedrock. Health data and
   `chainaim/auto` can be pinned to local zones only.
 - **Live operations.** Every payment and paid job is reported to the NEAR admin UI
   ([chainaim-adminUI-NEAR](https://github.com/chainaimdev/chainaim-adminUI-NEAR)), which reconciles it with the chain.
+
+**What runs where today, honestly:** the paywall and the relayer key still run on the buyer's PC with the data plane;
+ChainAim's signer is a separate project (own network, own keys folder) on the same PC. The full desk needs Docker and
+keys from the owner; the judge path below needs neither.
 
 ## Roadmap
 
@@ -54,39 +73,86 @@ receipt and a settlement on NEAR.
 - **Spending mandate on NEAR.** The tenant's limits (per job, per day, attested route only) enforced by a NEAR contract,
   not only by the agent's code.
 - **Unlinkable credits.** Prepaid credits spent as unlinkable tokens, so the chain no longer shows each job's payment.
+- **Model proxy.** ChainAim holds the NEAR AI key and forwards, byte for byte, only the calls a paid, signed job allows,
+  so the attested request hash still matches (built together with the hosted gateway, so the control plane still never
+  sees text).
+- **ChainAim Apprentice (next, design stage).** A local model learns from NEAR AI's attested model on synthetic data only,
+  keeps only answers that pass deterministic checks, and is used only once it scores well: fewer calls leave your PC,
+  and the receipt says which model answered.
+- **ZK-PRET.** Verifiable outcomes extended to trade-finance processes and risk models (BPMN, ACTUS).
 
 ## Judges: verify it yourself, no keys
 
-Needs only Node.js 22.22 or later and this repository (no `npm install`, no account, no key). Run from the repository root.
+Needs only Node.js 22.22 or later and this repository: no `npm install`, no Docker, no account, no key. Run from the
+repository root. Each step says what you will see.
+
+**The sample** is a real paid job from 14 Nov 2026, 07:29Z on NEAR testnet: tenant t02's AI agent was quoted 0.02 USDC
+for "Cash flow vs installment" (dataset smb-fin-1), its spending policy (auto-approve 0.01) asked for a smaller job,
+ChainAim's signer offered one at 0.01 (answer rows 20, 1024 tokens), the agent signed its checkout mandate and paid
+0.01 **before** the work, and the result was released only after ca-attest verified the NEAR AI call.
 
 ```powershell
-# 1. A real paid job, v2.1.0 (testnet, 2026-11-13 17:16Z: tenant t01's AI agent paid 0.02 USDC BEFORE the work for
-#    "Biggest payments out"; the result was released only after ca-attest verified the NEAR AI call): its signed receipt,
-#    checked offline against the pinned public key (config/receipt-public-key.pem), with ChainAim's AP2 signed quote and
-#    its signed limits (config/ap2-public-key.jwk.json), the agent's checkout mandate (config/ap2-mandate-keys.json: the
-#    tenants' public keys), the money trail and the attestation bundle the receipt's hash commits to.
-node scripts/verify-receipt.ts --file docs/judge/sample-receipt-2026-11-13T1716Z.json --result none
-#    expected last three lines:
-#    OK      receipt valid: signed by the pinned key d27d1e9f..., settlement signed too, signed quote matches, checkout mandate matches, signed limits match
-#    OK      money trail: paid 0.020000 USDC (tx HehY...) · NEAR AI cost 0.000445 · gas 0.002000 · cost 0.002445 · margin 0.017555 · overrun absorbed 0.000000 (costs at ChainAim's catalog prices)
+# 1. The signed receipt, checked offline against the pinned public keys in config/ (receipt key, ChainAim's AP2 key,
+#    the tenants' mandate keys): signature, settlement, signed quote and limits, mandate, money trail, attestation, egress.
+node scripts/verify-receipt.ts --file docs/judge/sample-receipt-2026-11-14T0729Z.json --result none
+#    you will see, among the details:
+#            job        0ed4fe96d007925a695c7ad6226189af · quote 0ed4fe96… · counter of 043fe341c45a64c07a9c860752a30de5
+#    and the last four lines:
+#    OK      receipt valid: signed by the pinned key d27d1e9f17a0104e34c46cf3e5233f23, settlement signed too, signed quote matches, checkout mandate matches, signed limits match
+#    OK      money trail: paid 0.010000 USDC (upfront, tx 8E6m…) · NEAR AI cost 0.000322 · gas 0.002000 · cost 0.002322 · margin 0.007678 · overrun absorbed 0.000000 (costs at ChainAim's catalog prices)
 #    OK      attestation bundle matches evidenceBundleSha256 (1/1 NEAR AI calls verified)
+#    OK      egress: 1 call left the PC → cloud-api.near.ai (private-cloud), masked nothing to mask, sent-bytes hash = the attested request hash on 1/1 NEAR AI call
 
-# 2. The same job's payment, read from NEAR the way anyone can: who paid, how much and when, and that the content is not there.
-node scripts/observe-receipt.ts --file docs/judge/sample-receipt-2026-11-13T1716Z.json
-#    expected last line: OK      the chain shows this receipt's payment (0.02, as the receipt's price for job b277f065...)
+# 2. The same payment, read from public NEAR testnet RPC (needs internet): who paid, how much and when, and what is NOT on chain.
+node scripts/observe-receipt.ts --file docs/judge/sample-receipt-2026-11-14T0729Z.json
+#    last line: OK      the chain shows this receipt's payment (0.01, as the receipt's price for job 0ed4fe96d007925a695c7ad6226189af)
 
-# 3. The masking, pricing, receipt, AP2, signer, mandate and observer tests (no service needed; 534 pass on 2026-11-13, v2.1.0).
-node --test "packages/receipt/test/*.test.ts" "packages/ap2/test/*.test.ts" "packages/offer/test/*.test.ts" "packages/observer/test/*.test.ts" "packages/signer/test/*.test.ts" "services/signer/test/*.test.ts" "test-console/test/*.test.ts" "services/gateway/test/*.test.ts"
+# 3. The receipt, AP2 quote and mandate, offer pricing, observer, signer, spending-policy, console and masking-gateway tests.
+node --test "packages/receipt/test/*.test.ts" "packages/ap2/test/*.test.ts" "packages/offer/test/*.test.ts" "packages/observer/test/*.test.ts" "packages/signer/test/*.test.ts" "packages/agent-policy/test/*.test.ts" "services/signer/test/*.test.ts" "test-console/test/*.test.ts" "services/gateway/test/*.test.ts"
+#    you will see: # pass 565 and # fail 0 (v2.3.0; a few minutes)
 ```
 
-The demo scenes (a paid outcome, paid before the work; privacy not proven, so refused and refunded on NEAR; the agent
-refusing a route that is not attested) and the 1-minute video script:
-[docs/judge/demo-script-2026-11-13T1730Z.md](docs/judge/demo-script-2026-11-13T1730Z.md). Earlier samples and scripts:
-docs/judge/older/ (the 0547Z receipt still verifies, without a money trail).
+`--result none`: the released answer is not published; with the result file, step 1 also checks the result hash. The
+sample data is synthetic (no real company). Earlier samples: `docs/judge/older/` (the 1716Z receipt still verifies).
 
-`--result none`: the released result (the answer) is not published; with it, step 1 also checks the receipt's result
-hash. The sample receipt names the dataset `smb-erp-fin` and the template "Biggest payments out": the demo ERPNext books in
-`sample-data/smb-2-erp-fin/erpnext/orion` (demo customers, no real company).
+### Judges' map: claim, proof, how to check
+
+| Claim | Proof | Check |
+|---|---|---|
+| Your raw data and question stay on your PC | Masking before any model; the receipt's egress lists what left (host, masked counts, bytes hash) | Step 1 `OK egress`; gateway tests in step 3 |
+| Every NEAR AI call is attested | ca-attest's verdict per call (Intel TDX + NVIDIA GPU), its bundle hashed into the receipt; egress hash = the request hash the enclave signed | Step 1 `OK attestation`, `OK egress`; chat id at cloud.near.ai/verify |
+| A firm price before any work | ChainAim's AP2 signed quote with **signed limits** (models, calls, tokens, files) | Step 1 `signed quote matches`, `signed limits match` |
+| The buyer's agent spends only within its mandate | Tenant policy (per job, per day, auto-approve, attested only) and an AP2 checkout mandate signed with the tenant's key for this quote and one payment | Step 1 `checkout mandate matches`; `packages/agent-policy` tests |
+| Negotiation without discounting | One counter round: a smaller job at the tenant's limit, priced by ChainAim's signer | Step 1 `counter of 043fe341…`, `max 1024 tokens`; `test-console/test/counter.test.ts` |
+| Paid before the work, refunded if it fails | Upfront USDC on NEAR; refused job = signed refund record (live refund EyD53Bnv… in BUILD_LOG.md) | Step 1 `flow upfront`; step 2 |
+| Real money, fair to both sides | Money trail: price, NEAR AI cost, gas, fees, margin | Step 1 `OK money trail` |
+| Nothing about the content goes on chain | Only the USDC transfer is on NEAR | Step 2 `PRIVATE not on the chain: …` |
+| Reconciled live | The admin UI matches every claim with the chain transfer | [chainaim-adminUI-NEAR](https://github.com/chainaimdev/chainaim-adminUI-NEAR) "Do X → see Y" |
+
+Demo video (2:30): [DEMO/outcome-ai-near-demo-2m30.mp4](DEMO/outcome-ai-near-demo-2m30.mp4) · its script:
+[DEMO/script-outcome-mp4-2.5min-Nov14-1.md](DEMO/script-outcome-mp4-2.5min-Nov14-1.md) · narrated walk-through:
+[docs/judge/demo-script-player-v11.html](docs/judge/demo-script-player-v11.html).
+
+## Built with: AI assistance and libraries
+
+**AI assistance.** Claude (Anthropic) was used throughout to design, write, test and document the code, under the team's
+direction and review; every change was run and tested before it was released (BUILD_LOG.md). At runtime the product
+calls models by name: NEAR AI Cloud (attested), Amazon Bedrock, OpenRouter or local models.
+
+**Libraries and components** (versions in each `package.json` / Dockerfile):
+
+| Where | What |
+|---|---|
+| NEAR payments | `@x402/core`, `@x402/hono`, `@x402/near`, `@x402/extensions`; `@near-js/*` (crypto, providers, signers, transactions, utils); `borsh`; `@hot-labs/near-connect` (web wallet) |
+| Paywall and web | `hono`, `@hono/node-server`; `esbuild` (wallet bundles) |
+| Buyer agent | `@strands-agents/sdk`, `@aws-sdk/client-bedrock-runtime`, `zod` |
+| Documents | `exceljs`, `mammoth`, `unpdf` |
+| Analyst | `@duckdb/node-api` (DuckDB) |
+| Privacy | Microsoft Presidio analyzer (Docker image `presidio-analyzer:2.2.362`) |
+| Attestation | NEAR AI's official verifier, `nearai-cloud-verifier` (built in the ca-attest image) |
+| Routing | `packages/route-engine`: a fork of `router-core` (see its `NOTICE` and `docs/adr/0001`) |
+| XRPL rail (pre-hackathon) | `xrpl`, `x402-xrpl`, `@x402/xrpl`, `ripple-address-codec`, `@crossmarkio/sdk` |
+| Runtime | Node.js 24 (`node:24-slim`), Docker Compose |
 
 ## How to run it
 
@@ -212,9 +278,9 @@ npm --prefix services\chain-query test
 npm --prefix services\analyst test
 ```
 
-Expected on 2026-11-06 (with tab 03 agent mode): 442, 292, 30, 133, 11, and analyst 177 pass with 1 known failure (a Windows-only crash when
-the reconcile-explain test process exits; the check itself passes). `npm test` first runs a dependency check that has 5
-known, older findings, so the first line above runs the same suites without it.
+Last full run (v2.3.0, 14 Nov 2026, Windows `desk.ps1 -Test`): all terminal suites pass, including the paywall's 384
+and the analyst's 249. `npm test` first runs a dependency check that has known, older findings, so the first line above
+runs the same suites without it.
 
 ## More
 
@@ -225,6 +291,5 @@ known, older findings, so the first line above runs the same suites without it.
 | [MANUAL_SETUP.md](MANUAL_SETUP.md) | Owner steps, dated |
 | [architecture.md](architecture.md) | Paid jobs (tab 03) requirements |
 | [STATE.md](STATE.md), [BUILD_LOG.md](BUILD_LOG.md) | Status and the record of what ran |
-| [docs/creditseal-README.md](docs/creditseal-README.md) | The CreditSeal lending README that used to be here |
 
 Never paste `docker inspect` or `docker compose config` output anywhere: both print secret values.

@@ -68,6 +68,8 @@ this PC (server.ts --mode ui, which forwards every call to the console API in Do
                                                 job's folder right before paying (agent --re-estimate on, console GET
                                                 /offers/<id>/recheck); a folder grown past the estimate is refused before
                                                 anything is signed or paid. Default off (as before); needs the AI agent.
+  -ChainPanel on|off                            The tab 03 "Blockchain queries" panel (lending vaults and loan terms through
+                                                chain-query): console --chain-panel. Default on (as before); desk.ps1 passes off.
   -Counter on|off                               privateAI-design-43 ARCH-726: one-round counter-offers. The console answers
                                                 POST /offers/<id>/counter (--counter on, ladder config/counter-ladder.json)
                                                 and the AI agent asks for one when the tenant's policy says "counter"
@@ -182,6 +184,7 @@ param(
   [ValidateSet("on", "off")][string]$ExposeEgress = "off",
   [ValidateSet("on", "off")][string]$ReEstimate = "off",
   [ValidateSet("on", "off")][string]$Counter = "off",
+  [ValidateSet("on", "off")][string]$ChainPanel = "on",
   [int]$PayOnlyAttestedDeadlineMs = 30000
 )
 $ErrorActionPreference = "Stop"
@@ -521,6 +524,8 @@ try {
     if ($agentCmd) { $agentCmd += "--counter=on"; Say "OK" "counter on: when a tenant's policy says counter, the AI agent asks ChainAim for a smaller job at its ceiling (one round, ladder config\counter-ladder.json)" }
     else { Say "OK" "counter on: the console answers POST /offers/<id>/counter (the AI agent is not started)" }
   }
+  # A6b: the Blockchain queries panel (default on, as before); off hides it and the console's /chain/* answers 404.
+  if ($ChainPanel -eq "off") { $consoleCmd += "--chain-panel=off"; Say "OK" "Blockchain queries panel off (console --chain-panel off; chain-query keeps running, read-only)" }
   # ARCH-664: ca-control-signer, its own compose project, network and port; started (and checked) before the data plane.
   $signerCmd = $null
   if ($Signer -eq "separate") {

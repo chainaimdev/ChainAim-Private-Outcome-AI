@@ -59,3 +59,31 @@ test("DOCKERIZE 4.3: bad values stop start-up", () => {
     assert.match(r.stderr, re);
   }
 });
+
+const getJson = (port: number, path: string) => new Promise<{ status: number; body: Record<string, unknown> }>((resolve, reject) => {
+  const req = request({ host: "127.0.0.1", port, path, agent: false, headers: { host: `127.0.0.1:${port}` } }, (res) => {
+    let t = ""; res.setEncoding("utf8"); res.on("data", (d) => (t += d)); res.on("end", () => resolve({ status: res.statusCode ?? 0, body: JSON.parse(t) }));
+  });
+  req.on("error", reject);
+  req.end();
+});
+
+test("privateAI-design-43 A6: --chains near lists only NEAR in GET /chains and refuses a query for another chain (404) without contacting it; default all lists both", async () => {
+  const port = await freePort();
+  const c = await start(["--port", String(port), "--chains", "near"]);
+  try {
+    const chains = await getJson(port, "/chains");
+    assert.equal(chains.status, 200);
+    assert.deepEqual((chains.body.chains as { id: string }[]).map((x) => x.id), ["near"]);
+    const xrpl = await getJson(port, "/vaults?chain=xrpl&env=devnet");
+    assert.equal(xrpl.status, 404);
+    assert.match(String(xrpl.body.error), /chain xrpl is not offered here \(--chains near\)/);
+  } finally { await stop(c); }
+  const p2 = await freePort();
+  const all = await start(["--port", String(p2)]);
+  try { assert.deepEqual(((await getJson(p2, "/chains")).body.chains as { id: string }[]).map((x) => x.id).sort(), ["near", "xrpl"]); }
+  finally { await stop(all); }
+  const bad = spawnSync(process.execPath, [MAIN, "--port", "1", "--chains", "solana"], { encoding: "utf8", timeout: 20_000 });
+  assert.notEqual(bad.status, 0);
+  assert.match(bad.stderr, /--chains: solana is not in the registry/);
+});

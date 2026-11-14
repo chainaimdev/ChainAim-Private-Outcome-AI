@@ -715,6 +715,26 @@ describe("privateAI-design-34 ARCH-636 ARCH-637 ARCH-638 estimate-first offers o
     } finally { await stop(c); }
   });
 
+  test("A6b: --chain-panel off hides the Blockchain queries panel (GET /chain/panel {on:false}) and every other /chain/* route answers 404 without asking chain-query; the default stays on; a bad value stops start-up", async () => {
+    const on = await call(consolePort, "GET", "/chain/panel");
+    assert.deepEqual([on.status, JSON.parse(on.text)], [200, { on: true }], "default on, as before");
+    const port = await freePort(), iport = await freePort();
+    const c = await start(consoleArgs(port, iport, { "chain-panel": "off" }), consoleReady(port), { PAID_JOBS_KEY: JOBS_KEY }, "the console");
+    try {
+      const off = await call(port, "GET", "/chain/panel");
+      assert.deepEqual([off.status, JSON.parse(off.text)], [200, { on: false }]);
+      for (const r of ["/chain/chains", "/chain/vaults?chain=near&env=testnet", "/chain/export?kind=vaults&chain=near&env=testnet"]) {
+        const x = await call(port, "GET", r);
+        assert.equal(x.status, 404, r);
+        assert.equal(JSON.parse(x.text).code, "chain_panel_off", r);
+      }
+    } finally { await stop(c); }
+    const p2 = await freePort(), i2 = await freePort();
+    await assert.rejects(start(consoleArgs(p2, i2, { "chain-panel": "maybe" }), consoleReady(p2), { PAID_JOBS_KEY: JOBS_KEY }, "the console"), /--chain-panel must be on or off, got maybe/);
+    // The page asks /chain/panel and hides the panel when off.
+    assert.match(readFileSync(PAGE, "utf8"), /fetch\("\/chain\/panel"\)\.then\(\(r\) => \(r\.ok \? r\.json\(\) : null\)\)\.then\(\(j\) => \{ if \(j && j\.on === false\) \$\("chainBox"\)\.hidden = true; \}\)/);
+  });
+
   test("ARCH-636: estimate-first without a cost model stops start-up naming desk.ps1 -Calibrate; --offer-modes run-hold starts without one and has no /offers", async () => {
     const port = await freePort(), iport = await freePort();
     await assert.rejects(start(consoleArgs(port, iport, { "cost-model": join(dir, "no-cost-model.json") }), consoleReady(port), { PAID_JOBS_KEY: JOBS_KEY }, "the console"), /run \.\\test-console\\desk\.ps1 -Calibrate/);

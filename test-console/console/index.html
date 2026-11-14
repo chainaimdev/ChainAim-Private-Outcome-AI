@@ -1806,6 +1806,8 @@ async function chainRun(kind) {
     out.push(chainEl("p", `${Math.round((Date.now() - t0) / 100) / 10} s`, "muted")); $("chainOut").replaceChildren(...out);
   }
 }
+// A6b: the console's --chain-panel off hides this panel (GET /chain/panel); an older console without the route keeps it.
+fetch("/chain/panel").then((r) => (r.ok ? r.json() : null)).then((j) => { if (j && j.on === false) $("chainBox").hidden = true; }).catch(() => {});
 $("chainBox").addEventListener("toggle", () => { if ($("chainBox").open && !chainData) chainLoad().catch((e) => { $("chainInfo").textContent = String(e); }); });
 $("chainSel").addEventListener("change", () => chainFillEnvs());
 $("chainEnv").addEventListener("change", chainFillSources);

@@ -255,6 +255,8 @@ const { values: flags } = parseArgs({
     "offer-limits-check": { type: "string" },
     // privateAI-design-43 ARCH-721: one-round counter-offers (POST /offers/<id>/counter); default off.
     counter: { type: "string" },
+    // A6b: the Blockchain queries panel (CreditSeal lending vaults/loan terms through chain-query); on = as before.
+    "chain-panel": { type: "string" },
     "counter-ladder": { type: "string" },
     "counter-max-rounds": { type: "string" },
     "job-feed-url": { type: "string" },
@@ -315,7 +317,7 @@ const MODE = flags.mode as "all" | "ui" | "api";
 if (!["all", "ui", "api"].includes(MODE)) throw new Error(`--mode must be all, ui or api, got ${flags.mode}`);
 if (MODE === "ui") {
   // The ui process runs nothing of the backend; a backend flag here would be silently unused, so it is refused.
-  for (const name of ["paid-jobs", "job-feed-url", "pricing-catalog", "dataset-root", "attest-url", "pay-only-attested", "pay-only-attested-deadline-ms", "receipts", "ap2", "price-round", "signer", "signer-url", "ap2-mandate", "mandate-keys", "counter", "counter-ladder", "counter-max-rounds"] as const) {
+  for (const name of ["paid-jobs", "job-feed-url", "pricing-catalog", "dataset-root", "attest-url", "pay-only-attested", "pay-only-attested-deadline-ms", "receipts", "ap2", "price-round", "signer", "signer-url", "ap2-mandate", "mandate-keys", "counter", "counter-ladder", "counter-max-rounds", "chain-panel"] as const) {
     if (flags[name] !== undefined) throw new Error(`--${name} belongs to the api process, not --mode ui (use --paid-jobs-page on for the tab 03 pay box)`);
   }
   if (!flags.api) throw new Error("--mode ui needs --api URL: the console API, e.g. http://127.0.0.1:8735");
@@ -673,6 +675,16 @@ const PAGE = new URL("./index.html", import.meta.url);
 
 const ANALYST = flags.analyst!.replace(/\/+$/, "");
 const CHAIN_QUERY = flags["chain-query"]!.replace(/\/+$/, "");
+/**
+ * --chain-panel on|off (default on, as before): the Blockchain queries panel (vaults and loan terms of lending contracts,
+ * through chain-query). off: the page hides it (GET /chain/panel says so) and every other /chain/* route answers 404, so
+ * chain-query is never asked. desk.ps1 passes off for the Outcome AI desk (no lending contract is configured on NEAR).
+ */
+const CHAIN_PANEL = (() => {
+  const v = flags["chain-panel"] ?? "on";
+  if (v !== "on" && v !== "off") throw new Error(`--chain-panel must be on or off, got ${v}`);
+  return v === "on";
+})();
 const CHAIN_ROUTES = new Set(["healthz", "chains", "vaults", "loan-terms", "export"]);
 const ANALYST_ROUTES = new Set(["profile", "recipe", "analyze", "status", "evidence", "verify", "relations", "sql", "pack-queries", "pack-run"]);
 const ROUTES: Record<string, string> = { scan: "/v1/privacy/scan", mask: "/v1/privacy/mask", chat: "/v1/chat/completions" };
@@ -984,6 +996,8 @@ createServer(async (req, res) => {
     if (api === "chain") {
       if (!hostOk(req)) return dataJson(res, 403, { error: `open the console as http://127.0.0.1:${PORT}` });
       const route = name ?? "";
+      if (route === "panel" && req.method === "GET") return dataJson(res, 200, { on: CHAIN_PANEL });
+      if (!CHAIN_PANEL) return dataJson(res, 404, { error: "the Blockchain queries panel is off on this console (--chain-panel off)", code: "chain_panel_off" });
       if (req.method !== "GET" || !CHAIN_ROUTES.has(route)) return dataJson(res, 404, { error: "unknown chain route" });
       let r: Response;
       try { r = await fetch(`${CHAIN_QUERY}/${route}${url.search}`, { signal: AbortSignal.timeout(60_000) }); }

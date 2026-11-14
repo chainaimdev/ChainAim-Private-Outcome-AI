@@ -12,4 +12,4 @@ COPY services/chain-query/src services/chain-query/src
 USER node
 EXPOSE 8750
 ENTRYPOINT ["node", "services/chain-query/src/main.ts"]
-CMD ["--host", "0.0.0.0", "--allow-non-loopback", "--port", "8750", "--allowed-hosts", "chain-query:8750,127.0.0.1:8750,localhost:8750"]
+CMD ["--host", "0.0.0.0", "--allow-non-loopback", "--port", "8750", "--allowed-hosts", "chain-query:8750,127.0.0.1:8750,localhost:8750", "--chains", "near"]

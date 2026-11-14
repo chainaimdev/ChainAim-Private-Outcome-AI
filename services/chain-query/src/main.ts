@@ -12,6 +12,8 @@
  *                default unset: no Host check, as before
  *
  *   GET /healthz
+ *   --chains LIST  the chains this service offers, comma-separated registry ids (e.g. near), or all (default): GET /chains
+ *                  lists only these and a query for another chain answers 404 (privateAI-design-43 A6: NEAR only on the desk)
  *   GET /chains                                         chains, environments, capabilities, sources (ready / missing fields)
  *   GET /vaults?chain=&env=[&source=all|<id>]           { results: [{ source, rows, error? }] }
  *   GET /loan-terms?chain=&env=[&source=]               same shape, loan-term rows
@@ -40,6 +42,7 @@ const { values: f } = parseArgs({
     validate: { type: "boolean", default: false },
     "allow-non-loopback": { type: "boolean", default: false },
     "allowed-hosts": { type: "string" },
+    chains: { type: "string", default: "all" },
   },
 });
 const PORT = Number(f.port), TIMEOUT = Number(f["timeout-ms"]);
@@ -51,12 +54,23 @@ const ALLOWED_HOSTS = f["allowed-hosts"] === undefined ? null : f["allowed-hosts
 if (ALLOWED_HOSTS) for (const h of ALLOWED_HOSTS) if (!/^[a-z0-9.-]+:\d{1,5}$/.test(h)) throw new Error(`--allowed-hosts entries must be host:port, got ${h}`);
 if (ALLOWED_HOSTS && !ALLOWED_HOSTS.length) throw new Error("--allowed-hosts must list at least one host:port");
 
+/** --chains: null = every chain in the registry (as before); otherwise only these ids. */
+const CHAINS: string[] | null = f.chains!.trim() === "all" ? null : f.chains!.split(",").map((c) => c.trim()).filter(Boolean);
+if (CHAINS && !CHAINS.length) throw new Error("--chains must be all or a comma-separated list of chain ids");
+if (CHAINS) {
+  const known = Object.keys(loadRegistry(f.registry!).chains);
+  for (const c of CHAINS) if (!known.includes(c)) throw new Error(`--chains: ${c} is not in the registry ${f.registry} (known: ${known.join(", ")})`);
+}
+/** The registry as this service offers it: only the --chains chains. */
+function offered(reg: ReturnType<typeof loadRegistry>): ReturnType<typeof loadRegistry> {
+  return CHAINS ? { ...reg, chains: Object.fromEntries(Object.entries(reg.chains).filter(([id]) => CHAINS.includes(id))) } : reg;
+}
 const adapters: Adapters = { xrpl: xrplAdapter(httpJson, TIMEOUT), near: nearAdapter(httpJson, TIMEOUT) };
 function selected(): { chain?: string; env?: string } | null {
   try { const t = readFileSync(f.profile!, "utf8"); return (JSON.parse(t.charCodeAt(0) === 0xfeff ? t.slice(1) : t).selected ?? null); } catch { return null; }
 }
 
-if (f.validate) process.exit(await validate(loadRegistry(f.registry!), adapters, (l) => process.stdout.write(l + "\n")));
+if (f.validate) process.exit(await validate(offered(loadRegistry(f.registry!)), adapters, (l) => process.stdout.write(l + "\n")));
 
 const json = (res: import("node:http").ServerResponse, status: number, body: unknown) => {
   res.writeHead(status, { "content-type": "application/json", "cache-control": "no-store", "x-content-type-options": "nosniff" });
@@ -68,9 +82,10 @@ createServer(async (req, res) => {
     if (req.method !== "GET") return json(res, 405, { error: "GET only" });
     const u = new URL(req.url ?? "/", "http://local");
     if (u.pathname === "/healthz") return json(res, 200, { ok: true, service: "chain-query" });
-    const reg = loadRegistry(f.registry!);
+    const reg = offered(loadRegistry(f.registry!));
     if (u.pathname === "/chains") return json(res, 200, chainsSummary(reg, selected()));
     const chain = u.searchParams.get("chain") ?? "", env = u.searchParams.get("env") ?? "", source = u.searchParams.get("source") ?? undefined;
+    if (chain && !reg.chains[chain]) return json(res, 404, { error: `chain ${chain} is not offered here (--chains ${f.chains})` });
     if (u.pathname === "/vaults" || u.pathname === "/loan-terms") {
       if (!chain || !env) return json(res, 400, { error: "chain and env are required" });
       return json(res, 200, await query(reg, adapters, u.pathname.slice(1) as Kind, chain, env, source));
@@ -88,4 +103,4 @@ createServer(async (req, res) => {
   } catch (e) {
     return json(res, e instanceof RegistryError ? 400 : 500, { error: (e as Error).message });
   }
-}).listen(PORT, f.host, () => process.stdout.write(`chain-query on http://${f.host}:${PORT} (registry ${f.registry}); read-only, no keys\n`));
+}).listen(PORT, f.host, () => process.stdout.write(`chain-query on http://${f.host}:${PORT} (registry ${f.registry}${CHAINS ? `, chains ${CHAINS.join(",")}` : ""}); read-only, no keys\n`));

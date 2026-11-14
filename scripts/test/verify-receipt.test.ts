@@ -19,7 +19,9 @@ const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const VERIFY = join(ROOT, "scripts/verify-receipt.ts");
 // The judge sample before v2.1.0, kept in docs/judge/older (the v2.1.0 one is JUDGE below).
 const SAMPLE = join(ROOT, "docs/judge/older/sample-receipt-2026-11-13T0547Z.json");
-const JUDGE = join(ROOT, "docs/judge/sample-receipt-2026-11-13T1716Z.json");
+const JUDGE = join(ROOT, "docs/judge/older/sample-receipt-2026-11-13T1716Z.json");
+// The judge sample since v2.3.1 (README "Judges"): the counter-offer job 0ed4fe96… (t02, 0.02 countered to 0.01).
+const JUDGE_COUNTER = join(ROOT, "docs/judge/sample-receipt-2026-11-14T0729Z.json");
 const TX = "4vv6QJSaL1V9dDeqWeVGhX5vaeQ3EhXheJSnYSmGWAAc";
 
 function run(args: string[]) {
@@ -99,6 +101,16 @@ test("ARCH-692 ARCH-693 the v2.1.0 judge sample verifies with the PINNED key as 
   assert.match(v.out, /OK +receipt valid: signed by the pinned key d27d1e9f17a0104e34c46cf3e5233f23, settlement signed too, signed quote matches, checkout mandate matches, signed limits match/);
   assert.match(v.out, /OK +money trail: paid 0\.020000 USDC .* margin 0\.017555 · overrun absorbed 0\.000000/);
   assert.match(v.out, /OK +attestation bundle matches evidenceBundleSha256 \(1\/1 NEAR AI calls verified\)/);
+});
+
+test("privateAI-design-43: the v2.3.0 judge sample (a counter-offer job) verifies with the PINNED keys exactly as README says: counter of, 4 OK lines", () => {
+  const v = run(["--file", JUDGE_COUNTER, "--result", "none"]);
+  assert.equal(v.status, 0, v.out);
+  assert.match(v.out, /job +0ed4fe96d007925a695c7ad6226189af · quote 0ed4fe96d007925a695c7ad6226189af · counter of 043fe341c45a64c07a9c860752a30de5/);
+  assert.match(v.out, /OK +receipt valid: signed by the pinned key d27d1e9f17a0104e34c46cf3e5233f23, settlement signed too, signed quote matches, checkout mandate matches, signed limits match/);
+  assert.match(v.out, /OK +money trail: paid 0\.010000 USDC \(upfront, tx 8E6m…\) · NEAR AI cost 0\.000322 · gas 0\.002000 · cost 0\.002322 · margin 0\.007678 · overrun absorbed 0\.000000/);
+  assert.match(v.out, /OK +attestation bundle matches evidenceBundleSha256 \(1\/1 NEAR AI calls verified\)/);
+  assert.match(v.out, /OK +egress: 1 call left the PC → cloud-api\.near\.ai \(private-cloud\), masked nothing to mask, sent-bytes hash = the attested request hash on 1\/1 NEAR AI call/);
 });
 
 test("ARCH-694 --refund verifies a signed refund record and prints paid -> refunded; a tampered one fails", () =>

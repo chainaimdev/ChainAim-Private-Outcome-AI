@@ -645,3 +645,14 @@ test("privateAI-design-43 ARCH-726: -Counter (default desk.json paidJobs.counter
   assert.match(up, /-Counter on needs estimate-first offers/);
   assert.ok(readFileSync(new URL("../../config/counter-ladder.json", import.meta.url), "utf8").includes('"version": 1'), "the ladder is committed");
 });
+
+test("A6b: -ChainPanel (default desk.json console.chainPanel, else off) goes to up.ps1; up.ps1 adds the console's --chain-panel=off only when off (its own default stays on)", () => {
+  const up = readFileSync(new URL("../../test-console/up.ps1", import.meta.url), "utf8");
+  assert.match(ps, /\[string\]\$ChainPanel = "",/);
+  assert.match(ps, /\$chainPanel = if \(\$ChainPanel\) \{ \$ChainPanel \} elseif \(\$P\.console -and \$P\.console\.chainPanel\) \{ \[string\]\$P\.console\.chainPanel \} else \{ "off" \}/);
+  assert.match(ps, /\$privArgs\.ChainPanel = \$chainPanel/);
+  assert.equal(ex.console.chainPanel, "off", "desk.example.json shows the setting");
+  assert.match(up, /\[ValidateSet\("on", "off"\)\]\[string\]\$ChainPanel = "on",/, "up.ps1 alone stays on");
+  assert.match(up, /if \(\$ChainPanel -eq "off"\) \{ \$consoleCmd \+= "--chain-panel=off";/);
+  assert.equal((up.match(/--chain-panel=off/g) ?? []).length, 1);
+});

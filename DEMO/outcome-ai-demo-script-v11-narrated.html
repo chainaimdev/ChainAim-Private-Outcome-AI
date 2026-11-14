@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Outcome AI from ChainAim: demo script v10, narrated</title>
+<title>Outcome AI from ChainAim: demo script v11, narrated</title>
 <style>
 :root{--bg:#fff;--fg:#1d2433;--muted:#5b6475;--line:#d3d8e2;--panel:#f5f7fb;--accent:#0b8a6f;--accent-soft:rgba(11,138,111,.12);--left:#2d5bd7;--right:#a8670b}
 @media (prefers-color-scheme: dark){:root{--bg:#11151c;--fg:#e6e9ef;--muted:#9aa3b2;--line:#3a4252;--panel:#181d26;--accent:#3fd0ad;--accent-soft:rgba(63,208,173,.14);--left:#7ea2ff;--right:#e5a54a}}
@@ -27,7 +27,7 @@ ol.list .t{color:var(--muted);font-variant-numeric:tabular-nums} ol.list .h{font
 @media (max-width:700px){.cues{grid-template-columns:1fr} ol.list li{grid-template-columns:90px 1fr}}
 </style></head><body><main>
 <h1>Outcome AI from ChainAim</h1>
-<p class="tag">Demo script v10 (about 2:43), narrated. Pay for verified outcomes, not tokens. Private by design, proven on NEAR.</p>
+<p class="tag">Demo script v11 (about 2:43), narrated. Pay for verified outcomes, not tokens. Private by design, proven on NEAR.</p>
 <div class="bar">
   <button id="narr" class="sel">🔊 Narration on</button>
   <button id="vIN" class="sel">Indian English</button><button id="vUS">US English</button><button id="vUK">UK English</button>
@@ -81,11 +81,13 @@ document.getElementById("vIN").onclick=()=>setAccent("en-IN","vIN");
 document.getElementById("vUS").onclick=()=>setAccent("en-US","vUS");
 document.getElementById("vUK").onclick=()=>setAccent("en-GB","vUK");
 document.getElementById("narr").onclick=(ev)=>{ if(!synth) return; narrOn=!narrOn; ev.currentTarget.textContent = narrOn?"🔊 Narration on":"🔇 Narration off"; ev.currentTarget.classList.toggle("sel",narrOn); if(!narrOn) synth.cancel(); };
+const SAY = [[/\bPII\b/g,"P. I. I."],[/\bPHI\b/g,"P. H. I."],[/\bPCI\b/g,"P. C. I."],[/\bNEP-(\d+)/g,"N. E. P. $1"],[/\bAP2\b/g,"A. P. 2"],[/\bES256\b/g,"E. S. 256"],[/\bTDX\b/g,"T. D. X."],[/\bUSDC\b/g,"U. S. D. C."],[/\bERP\b/g,"E. R. P."],[/\bGPU\b/g,"G. P. U."],[/\bZK-PRET\b/g,"Z. K. pret"],[/\bx402\b/g,"x 4 0 2"],[/\bUI\b/g,"U. I."]];
+const spoken = (t)=>SAY.reduce((s,[re,to])=>s.replace(re,to), t);
 function speak(text, done){
   clearTimeout(wait);
   if(!narrOn || !synth){ if(done) wait=setTimeout(done, 4200); return; }
   synth.cancel();
-  const u = new SpeechSynthesisUtterance(text);
+  const u = new SpeechSynthesisUtterance(spoken(text));
   if(chosen){ u.voice = chosen; u.lang = chosen.lang; } else u.lang = accent;
   u.rate = RATE; u.pitch = 1;
   let fired=false; const fin=()=>{ if(fired) return; fired=true; clearInterval(keep); if(done) wait=setTimeout(done, 700); };

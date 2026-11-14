@@ -1,0 +1,244 @@
+{
+  "receipt": {
+    "body": {
+      "receiptId": "177b9c31bcc53830d6807a02b40ecf81",
+      "jobId": "0ed4fe96d007925a695c7ad6226189af",
+      "quoteId": "0ed4fe96d007925a695c7ad6226189af",
+      "counterOf": "043fe341c45a64c07a9c860752a30de5",
+      "reduced": [
+        "answerMaxRows",
+        "maxTokens"
+      ],
+      "route": "nearai/deepseek-v4.1-flash",
+      "datasetId": "smb-fin-1",
+      "files": [
+        {
+          "name": "AP-OPEN-BILLS.csv",
+          "bytes": 753,
+          "sha256": "d9e2613322311e5edf9d7600d02889153b0711727c94dd60ea6f21019d9faa3d"
+        },
+        {
+          "name": "AR-OPEN-INVOICES.csv",
+          "bytes": 832,
+          "sha256": "bfdda840973d79577f106a1302723bd307d7945c6aad99e1d690acd8466a4c98"
+        },
+        {
+          "name": "sample_bofa_full_statement.csv",
+          "bytes": 1015,
+          "sha256": "517bd3f91958fb6104d0d0735349904557273e6b0dfd46a9bd264bca4f3152f5"
+        },
+        {
+          "name": "sample_bofa_full_statement.pdf",
+          "bytes": 2795,
+          "sha256": "36684b6d380cd7db86a4786875837f3360d8426880e3e77fcbfc70474092c9c2"
+        }
+      ],
+      "filesRoot": "42012f0068a9b0c8875cb3aced6326c7b27bdd1b48b6fc494147b17089d16bf3",
+      "templateLabel": "Cash flow vs installment",
+      "sqlSha256": "9b4528e8b6d08c52aaa1372a542027f3b6e9676cec00afc7ffdf8e9791a84523",
+      "resultSha256": "d917243bede2bed4b2347e10bab3925b52c705beb24b3a07fd16c6edb9ae2ec2",
+      "calls": [
+        {
+          "servedModel": "deepseek-ai/DeepSeek-V4.1-Flash-1017",
+          "zone": "private-cloud",
+          "chatId": "chatcmpl-3f18ac96-aeee-40ad-b91a-c0bebd3096c0",
+          "reqSha256": "2b168db13d91f42ceb9248e810ada79e3dcbcccc3b3eb7d2343c5c1175197c00",
+          "respSha256": "209bc492ab92fe43a91f5506aed971253a0d8c2b5e1f70398e227f3c4359f933",
+          "attestStatus": "verified"
+        }
+      ],
+      "egress": [
+        {
+          "call": 0,
+          "destination": "cloud-api.near.ai",
+          "zone": "private-cloud",
+          "sentSha256": "2b168db13d91f42ceb9248e810ada79e3dcbcccc3b3eb7d2343c5c1175197c00",
+          "sentBytes": 896,
+          "masked": {},
+          "residual": "pass",
+          "dataClass": "none"
+        }
+      ],
+      "evidenceBundleSha256": "0143abc73e062a6f45a71119cc74d00a1af2d284e35682f75fb4acac53a70790",
+      "merchantAuthSha256": "4c543d3f372acc067bcfa9ef5bfbfed1da0cefff6584520d6299d77476da25e4",
+      "mandate": {
+        "sha256": "dc4c2d4d88e03744645b34b7ff3d724787c6eee5c043df9a0dc2d14f7a300a08",
+        "kid": "c1bc880b8251c0061f118eff29231ee1",
+        "tenant": "t02",
+        "accountId": "chainaim-t02-seller.testnet",
+        "nonce": "121FA24103DB46AE94D73DC48DA10732"
+      },
+      "price": {
+        "amountUnits": "10000",
+        "usdcDecimals": 6,
+        "priceUsd": "0.010000",
+        "quoteBasis": {
+          "pricing": "estimate-first",
+          "phrase": "llm",
+          "userSql": true,
+          "sqlRetries": 1,
+          "answerMaxRows": 20,
+          "maxPromptChars": 16000,
+          "maxTokens": 1024,
+          "files": 4,
+          "totalBytes": 5395,
+          "answerMaxPromptChars": 4000,
+          "sizeTolerancePct": 10,
+          "calls": 1
+        },
+        "actualUsd": "0.010000",
+        "economics": {
+          "costBasis": "catalog",
+          "nearAiCostUsd": "0.000322",
+          "callFeesUsd": "0.001000",
+          "analystUsd": "0.002000",
+          "nearGasUsd": "0.002000",
+          "costUsd": "0.002322",
+          "marginUsd": "0.007678",
+          "overrunAbsorbedUsd": "0.000000"
+        }
+      },
+      "createdAt": "2026-11-14T07:29:29.503Z",
+      "v": 1
+    },
+    "sig": {
+      "alg": "ed25519",
+      "keyId": "d27d1e9f17a0104e34c46cf3e5233f23",
+      "value": "DVyHJFRnpJYFOvRhiOMKwG4YqZkZXb56gU5yPSk+pqIud0i/n8VjLsurc3kj/4115ciO98VNASoGlRAptvD4Cg=="
+    },
+    "settlement": {
+      "network": "near:testnet",
+      "transaction": "8E6mhkZPdPht2NS1yRDuDeU76RbF5ZKk1z1wK4RscGui",
+      "invoiceId": "121FA24103DB46AE94D73DC48DA10732",
+      "payer": "chainaim-t02-seller.testnet",
+      "settledAt": "2026-11-14T07:29:29.514Z",
+      "flow": "upfront"
+    },
+    "settlementSig": {
+      "alg": "ed25519",
+      "keyId": "d27d1e9f17a0104e34c46cf3e5233f23",
+      "value": "zP1SkFpwnwAkBdHzQETLHN2ELzHL5Z7iU4QiX09I47/OkeXTC8OcpVJEmR0jufeB/K71eRHQ0Rt2hVaMwWo9AA=="
+    }
+  },
+  "publicKeyPem": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAu52WygjV0Ee9cVxv8bjpN8PxfQMkI7yiJKxZ7iQSKYA=\n-----END PUBLIC KEY-----\n",
+  "ap2": {
+    "checkout": {
+      "ucp": {
+        "version": "2026-08-25",
+        "capabilities": {
+          "dev.ucp.shopping.checkout": [
+            {
+              "version": "2026-08-25"
+            }
+          ],
+          "dev.ucp.common.payment.ap2_mandate": [
+            {
+              "version": "2026-08-25"
+            }
+          ]
+        },
+        "payment_handlers": {
+          "x402.near.exact": [
+            {
+              "id": "x402_near_exact",
+              "version": "2026-08-25"
+            }
+          ]
+        }
+      },
+      "id": "0ed4fe96d007925a695c7ad6226189af",
+      "status": "ready_for_complete",
+      "currency": "USD",
+      "line_items": [
+        {
+          "id": "job",
+          "quantity": 1,
+          "item": {
+            "id": "chainaim.crossask.nearai/deepseek-v4.1-flash",
+            "title": "ChainAim private analysis job",
+            "price": 1
+          },
+          "totals": [
+            {
+              "type": "subtotal",
+              "amount": 1
+            },
+            {
+              "type": "total",
+              "amount": 1
+            }
+          ]
+        }
+      ],
+      "totals": [
+        {
+          "type": "subtotal",
+          "amount": 1
+        },
+        {
+          "type": "total",
+          "amount": 1
+        }
+      ],
+      "links": [
+        {
+          "type": "terms_of_service",
+          "url": "https://github.com/chainaimdev/chainaim-private-ai/blob/main/LICENSE"
+        }
+      ],
+      "expires_at": "2026-11-14T07:44:21.879Z",
+      "dev.chainaim.job": {
+        "network": "near:testnet",
+        "asset": "3e2210e1184b45b64c8a434c0a7e7b23cc04ea7eb7a6c3c32520d03d4afcb8af",
+        "payTo": "chainaim-payto-seller.testnet",
+        "amountUnits": "10000",
+        "usdcDecimals": 6,
+        "datasetId": "smb-fin-1",
+        "mode": "estimate-first",
+        "limits": {
+          "model": "local/qwen2.5-3b",
+          "answerModel": "nearai/deepseek-v4.1-flash",
+          "phrase": "llm",
+          "userSql": true,
+          "files": 4,
+          "totalBytes": 5395,
+          "sizeTolerancePct": 10,
+          "maxPromptChars": 16000,
+          "answerMaxPromptChars": 4000,
+          "maxTokens": 1024,
+          "sqlRetries": 1,
+          "answerMaxRows": 20,
+          "modelCalls": 1,
+          "attestation": "verified"
+        }
+      }
+    },
+    "merchant_authorization": "eyJhbGciOiJFUzI1NiIsImtpZCI6IjgzODE2ZTZmZDMyYjg3OWZkOTZkMDMxOGE0MGNkNDBkIn0..LRL0UUalicNjYQWhb4Xgd2vX4cnVnDUOCvCENH3-h5YXeDB7-nyjRNu7GwkbDIJUsxWi6WOEw8xiwFWUu5TnXw"
+  },
+  "mandate": "eyJhbGciOiJFUzI1NiIsInR5cCI6ImtiK3NkLWp3dCIsImtpZCI6ImMxYmM4ODBiODI1MWMwMDYxZjExOGVmZjI5MjMxZWUxIn0.eyJkZWxlZ2F0ZV9wYXlsb2FkIjpbeyIuLi4iOiJPcGpwQzFHM0d6Z0NYdVo2S05CcWxRMFhjRWMxa0JLT1J3VmQxWnhVUnNVIn1dLCJpYXQiOjE3OTQ2NDEzNjIsImF1ZCI6ImNoYWluYWltIiwibm9uY2UiOiIxMjFGQTI0MTAzREI0NkFFOTRENzNEQzQ4REExMDczMiIsInNkX2hhc2giOiI4WUdyYkxWUmxGenJYSDlhbHRuUGhXNGdTbEFzQzlNZDlLWDlHTUdTQkNnIiwiX3NkX2FsZyI6InNoYS0yNTYifQ.xgSAH_YPHWNqwppIoN7AC07eDyr3eu22qQf9scGvAN783Oc2PM_fhbHfml8NsqFzWYrV90K4uFSkrO-dPpMcjQ~WyJBR1NyRGtWN245UThRVUZaeW9IdlVRIix7Il9zZCI6WyI4WUdyYkxWUmxGenJYSDlhbHRuUGhXNGdTbEFzQzlNZDlLWDlHTUdTQkNnIl0sInZjdCI6Im1hbmRhdGUuY2hlY2tvdXQuMSIsImNoZWNrb3V0X2hhc2giOiI3ZjhWVGpuWm5hYmdybExnUWlWaks1SmQ0ZE1PR29ORGJ0UlJMRHVLZzZBIiwiaWF0IjoxNzk0NjQxMzYyLCJleHAiOjE3OTQ2NDE2NjJ9XQ~WyJrWnBuejVReUtHLVU0TTB0MTF2YTl3IiwiY2hlY2tvdXRfand0IiwiZXlKaGJHY2lPaUpGVXpJMU5pSXNJbXRwWkNJNklqZ3pPREUyWlRabVpETXlZamczT1daa09UWmtNRE14T0dFME1HTmtOREJrSW4wLmV5SmpkWEp5Wlc1amVTSTZJbFZUUkNJc0ltUmxkaTVqYUdGcGJtRnBiUzVxYjJJaU9uc2lZVzF2ZFc1MFZXNXBkSE1pT2lJeE1EQXdNQ0lzSW1GemMyVjBJam9pTTJVeU1qRXdaVEV4T0RSaU5EVmlOalJqT0dFME16UmpNR0UzWlRkaU1qTmpZekEwWldFM1pXSTNZVFpqTTJNek1qVXlNR1F3TTJRMFlXWmpZamhoWmlJc0ltUmhkR0Z6WlhSSlpDSTZJbk50WWkxbWFXNHRNU0lzSW14cGJXbDBjeUk2ZXlKaGJuTjNaWEpOWVhoUWNtOXRjSFJEYUdGeWN5STZOREF3TUN3aVlXNXpkMlZ5VFdGNFVtOTNjeUk2TWpBc0ltRnVjM2RsY2sxdlpHVnNJam9pYm1WaGNtRnBMMlJsWlhCelpXVnJMWFkwTGpFdFpteGhjMmdpTENKaGRIUmxjM1JoZEdsdmJpSTZJblpsY21sbWFXVmtJaXdpWm1sc1pYTWlPalFzSW0xaGVGQnliMjF3ZEVOb1lYSnpJam94TmpBd01Dd2liV0Y0Vkc5clpXNXpJam94TURJMExDSnRiMlJsYkNJNklteHZZMkZzTDNGM1pXNHlMalV0TTJJaUxDSnRiMlJsYkVOaGJHeHpJam94TENKd2FISmhjMlVpT2lKc2JHMGlMQ0p6YVhwbFZHOXNaWEpoYm1ObFVHTjBJam94TUN3aWMzRnNVbVYwY21sbGN5STZNU3dpZEc5MFlXeENlWFJsY3lJNk5UTTVOU3dpZFhObGNsTnhiQ0k2ZEhKMVpYMHNJbTF2WkdVaU9pSmxjM1JwYldGMFpTMW1hWEp6ZENJc0ltNWxkSGR2Y21zaU9pSnVaV0Z5T25SbGMzUnVaWFFpTENKd1lYbFVieUk2SW1Ob1lXbHVZV2x0TFhCaGVYUnZMWE5sYkd4bGNpNTBaWE4wYm1WMElpd2lkWE5rWTBSbFkybHRZV3h6SWpvMmZTd2laWGh3YVhKbGMxOWhkQ0k2SWpJd01qWXRNVEV0TVRSVU1EYzZORFE2TWpFdU9EYzVXaUlzSW1sa0lqb2lNR1ZrTkdabE9UWmtNREEzT1RJMVlUWTVOV00zWVdRMk1qSTJNVGc1WVdZaUxDSnNhVzVsWDJsMFpXMXpJanBiZXlKcFpDSTZJbXB2WWlJc0ltbDBaVzBpT25zaWFXUWlPaUpqYUdGcGJtRnBiUzVqY205emMyRnpheTV1WldGeVlXa3ZaR1ZsY0hObFpXc3RkalF1TVMxbWJHRnphQ0lzSW5CeWFXTmxJam94TENKMGFYUnNaU0k2SWtOb1lXbHVRV2x0SUhCeWFYWmhkR1VnWVc1aGJIbHphWE1nYW05aUluMHNJbkYxWVc1MGFYUjVJam94TENKMGIzUmhiSE1pT2x0N0ltRnRiM1Z1ZENJNk1Td2lkSGx3WlNJNkluTjFZblJ2ZEdGc0luMHNleUpoYlc5MWJuUWlPakVzSW5SNWNHVWlPaUowYjNSaGJDSjlYWDFkTENKc2FXNXJjeUk2VzNzaWRIbHdaU0k2SW5SbGNtMXpYMjltWDNObGNuWnBZMlVpTENKMWNtd2lPaUpvZEhSd2N6b3ZMMmRwZEdoMVlpNWpiMjB2WTJoaGFXNWhhVzFrWlhZdlkyaGhhVzVoYVcwdGNISnBkbUYwWlMxaGFTOWliRzlpTDIxaGFXNHZURWxEUlU1VFJTSjlYU3dpYzNSaGRIVnpJam9pY21WaFpIbGZabTl5WDJOdmJYQnNaWFJsSWl3aWRHOTBZV3h6SWpwYmV5SmhiVzkxYm5RaU9qRXNJblI1Y0dVaU9pSnpkV0owYjNSaGJDSjlMSHNpWVcxdmRXNTBJam94TENKMGVYQmxJam9pZEc5MFlXd2lmVjBzSW5WamNDSTZleUpqWVhCaFltbHNhWFJwWlhNaU9uc2laR1YyTG5WamNDNWpiMjF0YjI0dWNHRjViV1Z1ZEM1aGNESmZiV0Z1WkdGMFpTSTZXM3NpZG1WeWMybHZiaUk2SWpJd01qWXRNRGd0TWpVaWZWMHNJbVJsZGk1MVkzQXVjMmh2Y0hCcGJtY3VZMmhsWTJ0dmRYUWlPbHQ3SW5abGNuTnBiMjRpT2lJeU1ESTJMVEE0TFRJMUluMWRmU3dpY0dGNWJXVnVkRjlvWVc1a2JHVnljeUk2ZXlKNE5EQXlMbTVsWVhJdVpYaGhZM1FpT2x0N0ltbGtJam9pZURRd01sOXVaV0Z5WDJWNFlXTjBJaXdpZG1WeWMybHZiaUk2SWpJd01qWXRNRGd0TWpVaWZWMTlMQ0oyWlhKemFXOXVJam9pTWpBeU5pMHdPQzB5TlNKOWZRLkxSTDBVVWFsaWNOallRV2hiNFhnZDJ2WDRjblZuRFVPQ3ZDRU5IMy1oNVlYZURCNy1ueWpSTnU3R3drYkRJSlVzeFdpNldPRXc4eGl3RldVdTVUblh3Il0~",
+  "attestation": {
+    "jobId": "0ed4fe96d007925a695c7ad6226189af",
+    "summary": "verified",
+    "at": "2026-11-14T07:29:29.485Z",
+    "calls": [
+      {
+        "index": 0,
+        "model": "nearai/deepseek-v4.1-flash",
+        "status": "verified",
+        "reason": null,
+        "servedModel": "deepseek-ai/DeepSeek-V4.1-Flash-1017",
+        "chatId": "chatcmpl-3f18ac96-aeee-40ad-b91a-c0bebd3096c0",
+        "signatureKind": "provider_tee",
+        "signingAlgo": "ecdsa",
+        "signingAddress": "0xfe0071895500a9755c18044948ab4f4e1a7f337e",
+        "reportFetchedAt": "2026-11-14T07:17:29.187Z",
+        "tdx": true,
+        "gpu": true,
+        "signature": true,
+        "hashes": true,
+        "signedText": "deepseek-ai/DeepSeek-V4.1-Flash-1017:2b168db13d91f42ceb9248e810ada79e3dcbcccc3b3eb7d2343c5c1175197c00:209bc492ab92fe43a91f5506aed971253a0d8c2b5e1f70398e227f3c4359f933",
+        "signatureHex": "0x5589057939ad545261fc17888f36a4175489d863fa675f2b4b3e4e1dc8e9f71f6b4a25baa5dd7f719b90d0bd638dbcd23be40e4d26d21d712ff1eab8cfc624121c"
+      }
+    ]
+  }
+}

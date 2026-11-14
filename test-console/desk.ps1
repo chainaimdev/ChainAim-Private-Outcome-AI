@@ -62,6 +62,9 @@ one READY table across both. Neither launcher is changed or renamed; each team k
                 privateAI-design-42: the AI agent re-sizes each estimate-first job's folder right before paying (default
                 desk.json paidJobs.reEstimate, else off = as before). on: a folder that grew past the estimate (or gained
                 files) since the quote is refused before the mandate and the payment are signed: nothing paid, no refund.
+  -All ... -ChainPanel on|off
+                The tab 03 "Blockchain queries" panel (lending vaults and loan terms; default desk.json console.chainPanel,
+                else off: no lending contract is configured on NEAR). on shows it as before.
   -All ... -Counter on|off
                 privateAI-design-43: one-round counter-offers (default desk.json paidJobs.counter, else off = as before).
                 on: when a tenant's policy finds a quote above its auto-approve limit, the AI agent asks ChainAim for a
@@ -219,6 +222,7 @@ param(
   [int]$PayOnlyAttestedDeadlineMs = 0,
   [string]$ReEstimate = "",
   [string]$Counter = "",
+  [string]$ChainPanel = "",
   [string]$StopService = "",
   [string]$StartService = "",
   [switch]$NoBrowser,
@@ -1111,6 +1115,10 @@ $privArgs.ReEstimate = $reEstimate
 $counterMode = if ($Counter) { $Counter } elseif ($P.paidJobs -and $P.paidJobs.counter) { [string]$P.paidJobs.counter } else { "off" }
 if (@("on", "off") -notcontains $counterMode) { Stop-Here "-Counter (or $Settings paidJobs.counter) must be on or off" }
 $privArgs.Counter = $counterMode
+# A6b: -ChainPanel, else desk.json console.chainPanel, else off (the Outcome AI desk has no lending contract on NEAR).
+$chainPanel = if ($ChainPanel) { $ChainPanel } elseif ($P.console -and $P.console.chainPanel) { [string]$P.console.chainPanel } else { "off" }
+if (@("on", "off") -notcontains $chainPanel) { Stop-Here "-ChainPanel (or $Settings console.chainPanel) must be on or off" }
+$privArgs.ChainPanel = $chainPanel
 if ($payOnly -ne "evidence") { Say "INFO" "pay only for attested private inference: $payOnly$(if ($payOnly -eq 'verified') { ", ca-attest's verdict awaited up to $payOnlyMs ms before delivery" })" }
 Say "RUN" "test-console\up.ps1 -ReplaceRunning -PaidFlow $paidFlow -PaidJobs $($privArgs.PaidJobs)$(if ($Build) { ' -Build' })$(if ($WithStub) { ' -Test' })$(if ($agentMode -ne 'auto') { ' -Agent ' + $agentMode })$(if ($attestMode -ne 'auto') { ' -Attest ' + $attestMode }) -AttestGpuCheck $attestGpu$(if ($receiptsMode -ne 'auto') { ' -Receipts ' + $receiptsMode }) -DefaultPayer $defPayer$(if ($defAnswer) { ' -DefaultAnswerModel ' + $defAnswer }) -CrossaskMaxPromptChars $maxPrompt -Signer $signerMode -SignerUrl $signerUrl"
 & $privUp @privArgs
