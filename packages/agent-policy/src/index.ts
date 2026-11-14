@@ -24,8 +24,11 @@ export function microToUsd(micro: bigint): string {
   return frac ? `${whole}.${frac}` : `${whole}`;
 }
 
-/** The limits a quote may be reduced along (counter ladder step names, ARCH-623). */
-export const REDUCIBLE = ["answerMaxRows", "phrase", "sqlRetries", "route"] as const;
+/**
+ * The limits a quote may be reduced along (counter ladder step names, ARCH-623). maxTokens: privateAI-design-43 ARCH-723
+ * (the answer's completion tokens; the console's ladder, test-console/console/counter.ts LADDER_FIELDS, uses these names).
+ */
+export const REDUCIBLE = ["answerMaxRows", "phrase", "sqlRetries", "route", "maxTokens"] as const;
 export type Reducible = (typeof REDUCIBLE)[number];
 
 export type CounterPolicy = { enabled: boolean; maxRounds: number; acceptReduced: Reducible[] };

@@ -443,6 +443,8 @@ export async function receiptOnRelease(deps: ReleaseReceiptDeps, jobId: string, 
     {
       jobId,
       quoteId: hold.quoteId,
+      // privateAI-design-43 ARCH-722: a counter-offer names the offer it countered and what it reduced.
+      ...(hold.counterOf !== undefined ? { counterOf: hold.counterOf, reduced: hold.reduced ?? [] } : {}),
       route: hold.route,
       datasetId: hold.datasetId,
       files: hold.files,

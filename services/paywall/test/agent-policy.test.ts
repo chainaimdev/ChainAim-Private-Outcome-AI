@@ -232,11 +232,12 @@ describe("ARCH-620 the tenant's policy between quoted and signed", () => {
     assert.equal(ledgerLines("t01").length, 2, "the earlier entry and one new one");
   });
 
-  it("ARCH-620: above auto-approve with counters on, the decision is a counter-offer; ARCH-623 is not built, so the run stops and says so", async () => {
+  it("ARCH-620: above auto-approve with counters on in the policy, the decision is a counter-offer; with the agent's --counter off (the default) the run stops and says so (privateAI-design-43: on is agent-counter.test.ts)", async () => {
     consoleState.next = { totalUsd: "0.100000", amount: "100000", attested: true };
     const events = await run(request0("t02"), deps());
     assert.equal(policyStep(events)!.decision, "counter");
-    assert.match((events.at(-1) as { reason: string }).reason, /t02's spending policy would ask for a smaller job at 0\.05 USD .*counter-offers are not built yet \(ARCH-623\), so nothing was signed or paid/);
+    // t02's auto-approve is 0.01 since the owner's 2026-11-14 decision (privateAI-design-43 §6).
+    assert.match((events.at(-1) as { reason: string }).reason, /t02's spending policy would ask for a smaller job at 0\.01 USD .*counter-offers are off on this agent \(--counter off\), so nothing was signed or paid/);
     assert.deepEqual(double.state.transfers, []);
   });
 

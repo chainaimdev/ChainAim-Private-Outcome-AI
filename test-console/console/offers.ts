@@ -82,6 +82,11 @@ export type HeldOffer = {
   amount: string; expiresAt: number; network: string; ap2?: Ap2Hold;
   /** ARCH-636: the estimate said every model call goes to an attested route (enforced at the run, ARCH-638). */
   attested: boolean;
+  /**
+   * privateAI-design-43 ARCH-721: this offer is a counter-offer: the first offer's id, the ladder steps that made the job
+   * smaller (in order) and its round (1). Into the receipt at the run (ARCH-722).
+   */
+  counterOf?: string; reduced?: string[]; round?: number;
 };
 
 /** The models an offer's run calls, in order: the query model 1 + sqlRetries times (none with the buyer's own SQL), then the answer model. */

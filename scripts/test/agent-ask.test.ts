@@ -330,3 +330,13 @@ test("privateAI-design-42 ARCH-712: the terminal shows the agent's pre-payment s
     "[Agent t01] Size re-checked before paying OK · 1 file(s), 100 bytes (estimated 1 file(s), 100 bytes +10 %)",
   );
 });
+
+test("privateAI-design-43 ARCH-725: the terminal shows the policy's counter and ChainAim's smaller job, in words", () => {
+  assert.match(stepLine("t02", "policy", { decision: "counter", checks: [] })!, /^\[Agent t02\] Spending policy: counter \(asks for a smaller job, nothing paid yet\)/);
+  assert.equal(
+    stepLine("t02", "countered", { counterOf: "a".repeat(32), jobId: "b".repeat(32), ceilingUsd: "0.01", priceUsd: "0.01", reduced: ["answerMaxRows", "maxTokens"], basis: { answerMaxRows: 20, maxTokens: 1024, sqlRetries: 1 } }),
+    `[ChainAim] Counter-offer: asked for at most 0.01; ChainAim offered a smaller job at 0.01 (answer rows 20, tokens 1024) OK · new id bbbbbbbb…, counter of aaaaaaaa…`,
+  );
+  assert.match(stepLine("t02", "countered", { counterOf: "a".repeat(32), jobId: "b".repeat(32), ceilingUsd: "0.02", priceUsd: "0.02", reduced: ["sqlRetries"], basis: { sqlRetries: 0 } })!, /\(SQL tries 1\)/);
+  assert.match(stepLine("t02", "refused", { code: "counter_no_fit", reason: "none fits" })!, /^Not paid \[counter_no_fit\]: none fits$/);
+});

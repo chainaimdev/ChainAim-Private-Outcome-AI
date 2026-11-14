@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { checksFor, decide, parsePolicy, policyView, SpendLedger, usdToMicro, type Quote } from "../src/index.ts";
@@ -136,4 +136,21 @@ test("ARCH-620 the spend ledger refuses at start-up when its folder cannot be wr
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("privateAI-design-43 ARCH-723: maxTokens is reducible; t02's approved policy counters 0.02 at 0.01 and pays the 0.01 counter in round 1", () => {
+  assert.throws(() => parsePolicy({ ...RAW, counter: { ...RAW.counter, acceptReduced: ["tokens"] } }, "t02"), /acceptReduced must list only answerMaxRows, phrase, sqlRetries, route, maxTokens/);
+  const t02 = parsePolicy({ ...RAW, autoApproveMaxUsd: "0.01", maxPerJobUsd: "0.50", dailyCapUsd: "2.00", counter: { enabled: true, maxRounds: 2, acceptReduced: ["answerMaxRows", "phrase", "maxTokens"] } }, "t02");
+  const first = decide(t02, [q("0.02")], { spentTodayMicro: 0n, now: NOW });
+  assert.equal(first.action, "counter");
+  assert.equal(first.action === "counter" && first.ceilingUsd, "0.01");
+  const counter = q("0.01", { quoteId: "b".repeat(32), counterOf: "a".repeat(32), reduced: ["answerMaxRows", "maxTokens"] });
+  assert.equal(decide(t02, [counter], { spentTodayMicro: 0n, now: NOW, counterRound: 1 }).action, "pay");
+  // A step the tenant does not accept is refused, whatever the price.
+  assert.equal(decide(t02, [{ ...counter, reduced: ["sqlRetries"] }], { spentTodayMicro: 0n, now: NOW, counterRound: 1 }).action, "refuse");
+  // The committed t02 file carries the approved values.
+  const file = JSON.parse(readFileSync(new URL("../../../rig/tenants/t02/tenant.json", import.meta.url), "utf8")) as { policy: unknown };
+  const real = parsePolicy(file.policy, "t02");
+  assert.equal(real.autoApproveMicro, 10_000n);
+  assert.deepEqual(real.counter.acceptReduced, ["answerMaxRows", "phrase", "maxTokens"]);
 });

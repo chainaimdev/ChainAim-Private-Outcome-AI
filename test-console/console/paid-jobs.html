@@ -426,7 +426,13 @@
         else if (type === "quote_signed") step(by(AGENT), `Quote signed by ChainAim ✓ · key id ${String(d.kid).slice(0, 8)}… · price, payee and network match`);
         else if (type === "policy") {
           const checks = Array.isArray(d.checks) ? d.checks.filter((c) => CHECK[c.check]).map((c) => `${CHECK[c.check](c)} ${c.ok ? "✓" : "✗"}`) : [];
-          step(by(AGENT), `Spending policy: ${d.decision === "pay" ? "pay ✓" : d.decision === "refuse" ? "refused ✗" : `${d.decision} ✗`} · ${checks.join(" · ")}`);
+          step(by(AGENT), `Spending policy: ${d.decision === "pay" ? "pay ✓" : d.decision === "refuse" ? "refused ✗" : d.decision === "counter" ? "counter → asks ChainAim for a smaller job (nothing paid yet)" : `${d.decision} ✗`} · ${checks.join(" · ")}`);
+        }
+        // privateAI-design-43 ARCH-725: one counter round: a smaller job (a new offer) at or below the policy's ceiling.
+        else if (type === "countered" && (ranJob = /^[0-9a-f]{32}$/.test(String(d.jobId)) ? String(d.jobId) : ranJob, true)) {
+          const b = d.basis ?? {};
+          const what = (Array.isArray(d.reduced) ? d.reduced : []).map((r) => r === "answerMaxRows" ? `answer rows ${b.answerMaxRows ?? "fewer"}` : r === "maxTokens" ? `tokens ${b.maxTokens ?? "fewer"}` : r === "sqlRetries" ? `SQL tries ${typeof b.sqlRetries === "number" ? b.sqlRetries + 1 : "fewer"}` : String(r)).join(", ") || "smaller";
+          step(by("ChainAim"), `Counter-offer: asked for at most ${d.ceilingUsd}; ChainAim offered a smaller job at ${d.priceUsd} (${what}) ✓ · new id ${String(d.jobId).slice(0, 8)}…`);
         }
         // privateAI-design-42 ARCH-712: the agent re-sized the folder right before paying (--re-estimate on).
         else if (type === "rechecked") step(by(AGENT), `Size re-checked before paying ✓ · ${Number(d.files)} file(s), ${Number(d.totalBytes)} bytes (estimated ${Number(d.estimatedFiles)} file(s), ${Number(d.estimatedBytes)} bytes +${Number(d.tolerancePct)} %)`);

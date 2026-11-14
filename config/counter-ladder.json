@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "steps": [
+    { "name": "answerMaxRows", "set": { "answerMaxRows": 20, "answerMaxPromptChars": 4000 } },
+    { "name": "maxTokens", "set": { "maxTokens": 1024 } },
+    { "name": "maxTokens", "set": { "maxTokens": 512 } },
+    { "name": "sqlRetries", "set": { "sqlRetries": 0 } }
+  ]
+}

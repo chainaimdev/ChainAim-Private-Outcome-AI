@@ -178,6 +178,11 @@ export type AgentEvent =
   | QuoteSignedEvent
   /** ARCH-620: the tenant's policy applied to the quote; every check with its limit and value, the decision and why. */
   | { type: "policy"; tenant: string; decision: "pay" | "approve" | "counter" | "refuse"; reason: string; checks: PolicyCheck[]; spentTodayUsd: string }
+  /**
+   * privateAI-design-43 ARCH-724: the policy asked for a smaller job at its auto-approve ceiling and ChainAim offered one
+   * (a NEW offer: jobId), made smaller by the ladder steps in `reduced`; its signed quote and policy are checked next.
+   */
+  | { type: "countered"; counterOf: string; jobId: string; ceilingUsd: string; priceUsd: string; reduced: string[]; basis?: { answerMaxRows?: number; maxTokens?: number; sqlRetries?: number } }
   /** privateAI-design-42 ARCH-712: the folder re-sized right before the payment, still within the estimate (--re-estimate on). */
   | { type: "rechecked"; jobId: string; files: number; totalBytes: number; estimatedFiles: number; estimatedBytes: number; tolerancePct: number }
   /** ARCH-666: the tenant's checkout mandate for this quote and this payment, signed right before the payment. */
@@ -196,7 +201,7 @@ export type AgentEvent =
   | MandateVerifiedEvent
   | { type: "done" }
   /** code: the UCP AP2 error code when the signed-quote check refused (ARCH-630). */
-  | { type: "refused"; reason: string; code?: Ap2ErrorCode | "limits_mismatch" | "estimate_stale" }
+  | { type: "refused"; reason: string; code?: Ap2ErrorCode | "limits_mismatch" | "estimate_stale" | "counter_no_fit" | "counter_failed" }
   | { type: "error"; reason: string; transaction?: string };
 
 /** What the agent's model receives from the tool: never the result's rows, table or worded answer (ARCH-305). */
@@ -278,6 +283,11 @@ export type RunDeps = {
   mandates?: MandateSigner;
   /** privateAI-design-42 ARCH-712: re-size an estimate-first job's folder right before paying (--re-estimate on); unset = no re-check. */
   reEstimate?: boolean;
+  /**
+   * privateAI-design-43 ARCH-724: a policy "counter" asks the console for a smaller job (POST /offers/<id>/counter, one
+   * round, estimate-first only) instead of stopping (--counter on); unset/false = "counter" stops the run as before.
+   */
+  counter?: boolean;
   queue: AccountQueue;
   /** The mode for a run that names none (agent-jobs.ts --offer-mode, default estimate-first); unset = run-hold. */
   defaultOfferMode?: OfferMode;
@@ -383,7 +393,7 @@ async function runAndPay(
   // quotes, holds and registers. Either way the console answers the cost and the job id only.
   const mode: OfferMode = req.offerMode ?? deps.defaultOfferMode ?? "run-hold";
   const estimateFirst = mode === "estimate-first";
-  let job: { jobId: string; totalUsd: string; amount: string; network: string; asset: string; payTo: string; expiresAt: number; route?: string; attested: boolean; ap2?: unknown; basis?: unknown; limits?: CheckoutLimits };
+  let job: OfferedJob;
   try {
     const r = await fetch(`${deps.console}${estimateFirst ? "/offers" : "/jobs/crossask"}`, {
       method: "POST",
@@ -394,13 +404,9 @@ async function runAndPay(
     const j = (await r.json().catch(() => null)) as Record<string, unknown> | null;
     if (estimateFirst && r.status === 404) return refuse("this console does not offer estimate-first pricing (no config/cost-model.json: run desk.ps1 -Calibrate), so nothing was run or paid; ask again with offerMode run-hold");
     if (!r.ok) return refuse(`${estimateFirst ? "the job could not be estimated" : "the job did not run"}, so nothing was paid: ${typeof j?.error === "string" ? j.error : `HTTP ${r.status} from the console`}`);
-    if (
-      typeof j?.jobId !== "string" || !/^[0-9a-f]{32}$/.test(j.jobId) || typeof j.totalUsd !== "string" || typeof j.amount !== "string" ||
-      typeof j.network !== "string" || typeof j.asset !== "string" || typeof j.payTo !== "string" || typeof j.expiresAt !== "number"
-    ) return refuse("the console's quote could not be read, so nothing was paid");
-    // route / attested (ARCH-620): what the console says the job ran on; a console that does not say counts as not attested.
-    job = { jobId: j.jobId, totalUsd: j.totalUsd, amount: j.amount, network: j.network, asset: j.asset, payTo: j.payTo, expiresAt: j.expiresAt,
-      ...(typeof j.route === "string" ? { route: j.route } : {}), attested: j.attested === true, ...(j.ap2 !== undefined ? { ap2: j.ap2 } : {}), ...(j.basis !== undefined ? { basis: j.basis } : {}) };
+    const read = readOffered(j);
+    if (!read) return refuse("the console's quote could not be read, so nothing was paid");
+    job = read;
   } catch (e) {
     return refuse(signal.aborted ? "the request was cancelled before anything was paid" : `the console could not be reached at ${deps.console}, so nothing was run or paid (${(e as Error).name})`);
   }
@@ -409,20 +415,9 @@ async function runAndPay(
   if (job.network !== tenant.buyer.network) return refuse(`the job is quoted on ${job.network}, but this agent pays on ${tenant.buyer.network}; nothing was paid`);
   emit({ type: "quoted", jobId: job.jobId, amount: job.amount, totalUsd: job.totalUsd, network: job.network, asset: job.asset, payTo: job.payTo });
   // ARCH-630: the signed quote, before the policy and before anything is signed.
-  if (deps.ap2Check) {
-    const v = checkSignedQuote(deps.ap2Check, job.ap2, job);
-    if (!v.ok) {
-      const reason = `ChainAim's signed quote was refused (${v.code}): ${v.reason}; nothing was signed or paid`;
-      return { reply: { status: "refused" as const, reason }, terminal: { type: "refused" as const, reason, code: v.code } };
-    }
-    // privateAI-design-38 ARCH-683: the signed limits against the estimate the console answered and its route.
-    const lv = estimateFirst ? checkSignedLimits(job.ap2, job.basis, job.route) : { ok: true as const };
-    if (!lv.ok) {
-      const reason = `ChainAim's signed limits do not match the estimate (${lv.code}): ${lv.reason}; nothing was signed or paid`;
-      return { reply: { status: "refused" as const, reason }, terminal: { type: "refused" as const, reason, code: lv.code } };
-    }
-    if (lv.limits) job.limits = lv.limits;
-    emit({ ...v.event, ...(lv.view ? { limits: lv.view } : {}) });
+  {
+    const sq = checkQuoteSigned(deps, job, estimateFirst, emit);
+    if (sq) return sq;
   }
 
   // The payer, with the hang-up checked right before signing and the `signed` step reported right after.
@@ -453,7 +448,22 @@ async function runAndPay(
     // ARCH-620: the policy decides before anything is signed; in this queue slot, so today's spend cannot change under it.
     let maxAmount = deps.maxAmount;
     if (deps.policy) {
-      const verdict = applyPolicy(deps.policy, tenant.id, job, emit);
+      let verdict = applyPolicy(deps.policy, tenant.id, job, emit, { counterOn: deps.counter === true && estimateFirst, round: 0 });
+      // privateAI-design-43 ARCH-724: one counter round, still before anything is signed; the NEW offer then goes through
+      // the same checks as any quote (signed quote and limits, the policy with round 1), then re-check, mandate, payment.
+      if ("counter" in verdict) {
+        const c = await askCounter(deps, deps.policy, tenant.id, job, verdict.counter, signal);
+        if ("refused" in c) return { reply: { status: "refused" as const, reason: c.refused }, terminal: { type: "refused" as const, reason: c.refused, code: c.code } };
+        const first = job.jobId;
+        job = c.job;
+        setJobId(job.jobId);
+        emit({ type: "countered", counterOf: first, jobId: job.jobId, ceilingUsd: verdict.counter.ceilingUsd, priceUsd: plainUsd(job.totalUsd), reduced: job.reduced ?? [], ...(c.basis ? { basis: c.basis } : {}) });
+        emit({ type: "quoted", jobId: job.jobId, amount: job.amount, totalUsd: job.totalUsd, network: job.network, asset: job.asset, payTo: job.payTo });
+        const sq = checkQuoteSigned(deps, job, estimateFirst, emit);
+        if (sq) return sq;
+        verdict = applyPolicy(deps.policy, tenant.id, job, emit, { counterOn: false, round: 1 });
+      }
+      if ("counter" in verdict) return refuse(`${tenant.id}'s spending policy asks for another counter round; one round only, so nothing was signed or paid`);
       if ("refused" in verdict) return refuse(verdict.refused);
       maxAmount = verdict.maxAmount(maxAmount);
     }
@@ -572,6 +582,94 @@ async function runAndPay(
   return { reply: out.reply, ...(out.terminal ? { terminal: out.terminal } : {}) };
 }
 
+/** An offer or held job as the console answers it (POST /offers, /jobs/crossask, /offers/<id>/counter). */
+type OfferedJob = {
+  jobId: string; totalUsd: string; amount: string; network: string; asset: string; payTo: string; expiresAt: number; route?: string; attested: boolean;
+  ap2?: unknown; basis?: unknown; limits?: CheckoutLimits;
+  /** privateAI-design-43: a counter-offer's first offer id and the ladder steps that made it smaller. */
+  counterOf?: string; reduced?: string[];
+};
+
+/** The console's answer as an OfferedJob, or null when a required field is missing. route / attested (ARCH-620): a console that does not say counts as not attested. */
+function readOffered(j: Record<string, unknown> | null): OfferedJob | null {
+  if (
+    typeof j?.jobId !== "string" || !/^[0-9a-f]{32}$/.test(j.jobId) || typeof j.totalUsd !== "string" || typeof j.amount !== "string" ||
+    typeof j.network !== "string" || typeof j.asset !== "string" || typeof j.payTo !== "string" || typeof j.expiresAt !== "number"
+  ) return null;
+  const reduced = Array.isArray(j.reduced) && j.reduced.every((r) => typeof r === "string" && /^[A-Za-z]{1,40}$/.test(r)) ? (j.reduced as string[]) : undefined;
+  return { jobId: j.jobId, totalUsd: j.totalUsd, amount: j.amount, network: j.network, asset: j.asset, payTo: j.payTo, expiresAt: j.expiresAt,
+    ...(typeof j.route === "string" ? { route: j.route } : {}), attested: j.attested === true, ...(j.ap2 !== undefined ? { ap2: j.ap2 } : {}), ...(j.basis !== undefined ? { basis: j.basis } : {}),
+    ...(typeof j.counterOf === "string" && /^[0-9a-f]{32}$/.test(j.counterOf) ? { counterOf: j.counterOf } : {}), ...(reduced ? { reduced } : {}) };
+}
+
+/**
+ * ARCH-630 + design-38 ARCH-683 on one offer: ChainAim's signed quote with the pinned key, then its signed limits against the
+ * basis the console answered and its route; emits quote_signed (with the limits) and keeps the limits on the job. The
+ * tool's refusal when either fails; undefined when it passes or the check is off.
+ */
+function checkQuoteSigned(deps: RunDeps, job: OfferedJob, estimateFirst: boolean, emit: (e: AgentEvent) => void): { reply: JobsToolReply; terminal: AgentEvent & { type: "refused" } } | undefined {
+  if (!deps.ap2Check) return undefined;
+  const v = checkSignedQuote(deps.ap2Check, job.ap2, job);
+  if (!v.ok) {
+    const reason = `ChainAim's signed quote was refused (${v.code}): ${v.reason}; nothing was signed or paid`;
+    return { reply: { status: "refused" as const, reason }, terminal: { type: "refused" as const, reason, code: v.code } };
+  }
+  const lv = estimateFirst ? checkSignedLimits(job.ap2, job.basis, job.route) : { ok: true as const };
+  if (!lv.ok) {
+    const reason = `ChainAim's signed limits do not match the estimate (${lv.code}): ${lv.reason}; nothing was signed or paid`;
+    return { reply: { status: "refused" as const, reason }, terminal: { type: "refused" as const, reason, code: lv.code } };
+  }
+  if (lv.limits) job.limits = lv.limits;
+  emit({ ...v.event, ...(lv.view ? { limits: lv.view } : {}) });
+  return undefined;
+}
+
+/**
+ * privateAI-design-43 ARCH-724: POST <console>/offers/<id>/counter {maxPriceUsd: the policy's ceiling, accept: its
+ * acceptReduced}. The agent does not take the console's word: the new offer must name the first one, be at or below the
+ * ceiling, on the same network and payee, and reduce only steps the policy accepts. 422 no_fit = no smaller job fits
+ * (counter_no_fit); anything else that is not a readable offer = counter_failed. Nothing is signed or paid either way.
+ */
+async function askCounter(deps: RunDeps, policy: AgentPolicy, tenantId: string, job: OfferedJob, c: { ceilingUsd: string; accept: string[] }, signal: AbortSignal):
+  Promise<{ job: OfferedJob; basis?: { answerMaxRows?: number; maxTokens?: number; sqlRetries?: number } } | { refused: string; code: "counter_no_fit" | "counter_failed" }> {
+  const by = `${tenantId}'s spending policy`;
+  const failed = (why: string) => ({ refused: `${by} asked ChainAim for a smaller job at ${c.ceilingUsd} USD, and ${why}; nothing was signed or paid`, code: "counter_failed" as const });
+  let r: Response;
+  try {
+    r = await fetch(`${deps.console}/offers/${job.jobId}/counter`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ maxPriceUsd: c.ceilingUsd, accept: c.accept }), signal });
+  } catch (e) {
+    return failed(signal.aborted ? "the request was cancelled" : `the console at ${deps.console} could not be reached (${(e as Error).name})`);
+  }
+  const j = (await r.json().catch(() => null)) as Record<string, unknown> | null;
+  if (r.status === 422 && j?.code === "no_fit") {
+    const cheapest = typeof j.cheapestUsd === "string" ? j.cheapestUsd : null;
+    return { refused: `${by} asked ChainAim for a smaller job at ${c.ceilingUsd} USD; none it accepts fits (${cheapest ? `the smallest costs ${cheapest} USD` : "no smaller job can be made"}), so nothing was signed or paid`, code: "counter_no_fit" };
+  }
+  if (!r.ok) return failed(`the console answered ${typeof j?.error === "string" ? j.error : `HTTP ${r.status}`}`);
+  const next = readOffered(j);
+  if (!next) return failed("its counter-offer could not be read");
+  if (next.counterOf !== (job.counterOf ?? job.jobId) || next.jobId === job.jobId) return failed("its counter-offer does not name the first offer");
+  if (next.network !== job.network || next.payTo !== job.payTo || next.asset !== job.asset) return failed("its counter-offer is on another network, payee or asset");
+  let price: bigint, ceiling: bigint;
+  try { price = usdToMicroCeil(next.totalUsd); ceiling = usdToMicroCeil(c.ceilingUsd); } catch { return failed("its counter-offer's price could not be read"); }
+  if (price > ceiling) return failed(`its counter-offer costs ${plainUsd(next.totalUsd)} USD, above the ceiling`);
+  const accepted = new Set(policy.policies.get(tenantId)?.counter.acceptReduced ?? []);
+  if (!next.reduced || next.reduced.length === 0 || next.reduced.some((x) => !accepted.has(x as never))) return failed("its counter-offer reduces a limit the policy does not accept");
+  const b = next.basis as Record<string, unknown> | undefined;
+  const n = (v: unknown): number | undefined => (typeof v === "number" && Number.isInteger(v) && v >= 0 ? v : undefined);
+  const basis = b ? { ...(n(b.answerMaxRows) !== undefined ? { answerMaxRows: n(b.answerMaxRows) } : {}), ...(n(b.maxTokens) !== undefined ? { maxTokens: n(b.maxTokens) } : {}), ...(n(b.sqlRetries) !== undefined ? { sqlRetries: n(b.sqlRetries) } : {}) } : undefined;
+  return { job: next, ...(basis ? { basis } : {}) };
+}
+
+/** A non-negative decimal USD string as micro-USD, rounded up past 6 decimals (a price is never read as lower than it is). */
+function usdToMicroCeil(v: string): bigint {
+  const m = /^(0|[1-9]\d*)(?:\.(\d+))?$/.exec(v);
+  if (!m) throw new Error(`not a decimal USD amount: ${v}`);
+  const f = m[2] ?? "";
+  const head = BigInt(m[1]) * 1_000_000n + BigInt(f.slice(0, 6).padEnd(6, "0"));
+  return /[1-9]/.test(f.slice(6)) ? head + 1n : head;
+}
+
 /**
  * privateAI-design-42 ARCH-712: GET <console>/offers/<id>/recheck (ARCH-711), before anything is signed. 200 = the folder
  * is still within the estimate (its sizes as the `rechecked` step); 409 estimate_stale = it grew or gained files; anything
@@ -599,14 +697,16 @@ export async function recheckOffer(consoleUrl: string, jobId: string, signal: Ab
  * The tenant's policy on one quote (ARCH-620). Emits the `policy` step. "pay" returns how to cap the signer: the
  * smaller of --agent-max-amount and the quoted price, so the payer cannot sign more than the policy approved even if
  * the paywall asked for more. Anything else returns the refusal: nothing is signed or paid. ARCH-621 (a person approves
- * in tab 03) and ARCH-623 (counter-offers) are not built yet, so "approve" and "counter" stop the run and say so.
+ * in tab 03) is not built yet, so "approve" stops the run and says so. "counter" (privateAI-design-43 ARCH-724) returns
+ * the ceiling and the accepted steps when counters are on (one round, estimate-first); otherwise it stops the run.
  */
 function applyPolicy(
   policy: AgentPolicy,
   tenantId: string,
-  job: { jobId: string; totalUsd: string; expiresAt: number; route?: string; attested: boolean; limits?: CheckoutLimits },
+  job: OfferedJob,
   emit: (e: AgentEvent) => void,
-): { refused: string } | { maxAmount: (cap: string | undefined) => string } {
+  counter: { counterOn: boolean; round: number } = { counterOn: false, round: 0 },
+): { refused: string } | { maxAmount: (cap: string | undefined) => string } | { counter: { ceilingUsd: string; accept: string[] } } {
   const p = policy.policies.get(tenantId);
   if (!p) return { refused: `tenant ${tenantId} has no spending policy, so nothing was signed or paid` };
   let spent: bigint;
@@ -617,14 +717,16 @@ function applyPolicy(
   }
   // The quote in plain decimals ("0.010000" -> "0.01"), so the checks and the reasons read as the page shows prices.
   // design-38 ARCH-683: the policy's model and token rules read the SIGNED limits, never the console's answer.
+  // privateAI-design-43: a counter-offer carries what it countered and reduced (decide() checks reduced against acceptReduced).
   const quote: Quote = { quoteId: job.jobId, route: job.route ?? "unknown", priceUsd: plainUsd(job.totalUsd), attested: job.attested, expiresAt: job.expiresAt,
+    ...(job.counterOf ? { counterOf: job.counterOf, reduced: job.reduced ?? [] } : {}),
     ...(job.limits ? { limits: { models: [...new Set([job.limits.model, job.limits.answerModel])], maxTokens: job.limits.maxTokens, ...(job.limits.attestation ? { attestation: job.limits.attestation } : {}) } } : {}) };
   const now = (policy.now ?? Date.now)();
   let checks: PolicyCheck[];
   let d: ReturnType<typeof decide>;
   try {
     checks = checksFor(p, quote, { spentTodayMicro: spent, now });
-    d = decide(p, [quote], { spentTodayMicro: spent, now });
+    d = decide(p, [quote], { spentTodayMicro: spent, now, counterRound: counter.round });
   } catch (e) {
     return { refused: `the quote could not be checked against the policy (${(e as Error).message}), so nothing was signed or paid` };
   }
@@ -634,7 +736,10 @@ function applyPolicy(
   }
   const by = `${tenantId}'s spending policy`;
   if (d.action === "approve") return { refused: `${by} needs a person to approve this ${plainUsd(job.totalUsd)} USDC job (${d.reason}); approval in tab 03 is not built yet (ARCH-621), so nothing was signed or paid` };
-  if (d.action === "counter") return { refused: `${by} would ask for a smaller job at ${d.ceilingUsd} USD (${d.reason}); counter-offers are not built yet (ARCH-623), so nothing was signed or paid` };
+  if (d.action === "counter") {
+    if (counter.counterOn) return { counter: { ceilingUsd: d.ceilingUsd, accept: [...p.counter.acceptReduced] } };
+    return { refused: `${by} would ask for a smaller job at ${d.ceilingUsd} USD (${d.reason}); counter-offers are off on this agent (--counter off), so nothing was signed or paid` };
+  }
   return { refused: `refused by ${by}: ${d.reason}; nothing was signed or paid` };
 }
 

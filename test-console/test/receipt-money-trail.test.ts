@@ -98,3 +98,20 @@ test("ARCH-691 the release notice's flow is read and signed with the settlement;
     assert.equal(r?.settlement?.flow, "upfront");
     assert.deepEqual(verifyReceipt(r!, cfg.signer.publicKeyPem), { ok: true, settled: true });
   }));
+
+test("privateAI-design-43 ARCH-722 a counter-offer's receipt names the offer it countered and what was reduced; ChainAim's signer's allowlist takes them; a first offer's has neither", () =>
+  withDir(async (dir) => {
+    const { parseReceiptBody } = await import("../../packages/signer/src/index.ts");
+    const { cfg, store, held } = await setup(dir);
+    const first = "11112222333344445555666677778888";
+    const jobId = "99990000aaaabbbbccccddddeeeeffff";
+    const h = held(jobId);
+    h.receipt = { ...h.receipt!, counterOf: first, reduced: ["answerMaxRows", "maxTokens"] };
+    const r = await receiptOnRelease({ store, cfg }, jobId, h, NOTICE);
+    assert.ok(r);
+    assert.deepEqual([r.body.quoteId, r.body.counterOf, r.body.reduced], [jobId, first, ["answerMaxRows", "maxTokens"]]);
+    assert.deepEqual(verifyReceipt(r, cfg.signer.publicKeyPem), { ok: true, settled: true });
+    assert.doesNotThrow(() => parseReceiptBody(JSON.parse(JSON.stringify(r.body))), "ca-control-signer signs the same body");
+    const plain = await receiptOnRelease({ store, cfg }, first, held(first), NOTICE);
+    assert.equal("counterOf" in plain!.body || "reduced" in plain!.body, false);
+  }));

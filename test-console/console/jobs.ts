@@ -117,6 +117,8 @@ export type ReceiptHold = {
   priceUsd: string; quoteBasis: Record<string, string | number | boolean>; actualUsd?: string;
   /** privateAI-design-40 ARCH-690: the money trail (packages/receipt economicsOf), amounts only. */
   economics?: ReceiptEconomics;
+  /** privateAI-design-43 ARCH-722: a counter-offer's first offer id and the steps that made the job smaller (both or neither). */
+  counterOf?: string; reduced?: string[];
 };
 /** ap2 (privateAI-design-33 ARCH-628): the signed UCP checkout of the quote, only with --ap2 on. */
 /**

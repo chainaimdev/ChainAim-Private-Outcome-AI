@@ -629,3 +629,19 @@ test("privateAI-design-42 ARCH-710: up.ps1 sends the tenant mandate on job_recei
   assert.match(up, /if \(\$mandatesOn -and \(\$consoleCmd -contains "--job-feed-receipts=on"\)\) \{ \$consoleCmd \+= "--job-feed-mandate=on";/);
   assert.ok(up.indexOf('$consoleCmd += "--job-feed-mandate=on"') > up.indexOf('$consoleCmd += "--job-feed-receipts=on"'), "after the receipts flag is set");
 });
+
+test("privateAI-design-43 ARCH-726: -Counter (default desk.json paidJobs.counter, else off) goes to up.ps1; up.ps1 adds the console's --counter=on with the ladder and the agent's --counter=on, only when on", () => {
+  const up = readFileSync(new URL("../../test-console/up.ps1", import.meta.url), "utf8");
+  assert.match(ps, /\[string\]\$Counter = "",/);
+  assert.match(ps, /\$counterMode = if \(\$Counter\) \{ \$Counter \} elseif \(\$P\.paidJobs -and \$P\.paidJobs\.counter\) \{ \[string\]\$P\.paidJobs\.counter \} else \{ "off" \}/);
+  assert.match(ps, /if \(@\("on", "off"\) -notcontains \$counterMode\) \{ Stop-Here/);
+  assert.match(ps, /\$privArgs\.Counter = \$counterMode/);
+  assert.equal(ex.paidJobs.counter, "off", "desk.example.json shows the setting, off");
+  assert.match(up, /\[ValidateSet\("on", "off"\)\]\[string\]\$Counter = "off",/, "up.ps1 alone stays off");
+  assert.match(up, /if \(\$Counter -eq "on"\) \{/);
+  assert.match(up, /\$consoleCmd \+= @\("--counter=on", "--counter-ladder=\/app\/config\/counter-ladder\.json"\)/);
+  assert.match(up, /if \(\$agentCmd\) \{ \$agentCmd \+= "--counter=on";/);
+  assert.equal((up.match(/--counter=on/g) ?? []).length, 2, "the console and the agent, one place each");
+  assert.match(up, /-Counter on needs estimate-first offers/);
+  assert.ok(readFileSync(new URL("../../config/counter-ladder.json", import.meta.url), "utf8").includes('"version": 1'), "the ladder is committed");
+});

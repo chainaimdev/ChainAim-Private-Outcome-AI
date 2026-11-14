@@ -181,7 +181,7 @@ import { NETWORKS } from "../../services/web/src/balance.ts";
 import { NEAR_WALLETS, isNearWalletId } from "../../services/web/src/near-wallets.ts";
 import { analystClient, crossAsk, gatewayChat } from "../../packages/crossask/src/index.ts";
 import { RUN_LOG_MODES, RunLog, type RunLogMode } from "./run-log.ts";
-import { microsToUsd, quoteJob, USDC_DECIMALS } from "../../packages/crossask/src/cost.ts";
+import { microsToUsd, quoteJob, USDC_DECIMALS, type JobQuote } from "../../packages/crossask/src/cost.ts";
 import { JobStore, internalHandler, meterOf, paidJobsConfig, registerJob, type RunNotice } from "./jobs.ts";
 import { JobFeed, jobFeedConfig } from "./job-feed.ts";
 import { AttestClient, attestConfig, payOnlyAttestedConfig, privacyProven } from "./attest.ts";
@@ -196,6 +196,8 @@ import { limitsEqualBasis, parseLimits, pricedCalls, servedWithinLimits, withinL
 import { economicsOf, filesRoot } from "../../packages/receipt/src/index.ts";
 import { observe, observerConfig, ObserverError } from "../../packages/observer/src/index.ts";
 import { attestedRoute, crossaskBasis, folderSize, offerModels, OfferStore, offerConfig, withinBasis, type HeldOffer, type OfferRequest } from "./offers.ts";
+import { ceilingMicro, counterConfig, fitCounter, usdMicroCeil } from "./counter.ts";
+import type { CrossaskBasis } from "../../packages/offer/src/index.ts";
 
 const { values: flags } = parseArgs({
   args: process.argv.slice(2),
@@ -251,6 +253,10 @@ const { values: flags } = parseArgs({
     "offer-max-tokens": { type: "string" },
     "offer-size-tolerance-pct": { type: "string" },
     "offer-limits-check": { type: "string" },
+    // privateAI-design-43 ARCH-721: one-round counter-offers (POST /offers/<id>/counter); default off.
+    counter: { type: "string" },
+    "counter-ladder": { type: "string" },
+    "counter-max-rounds": { type: "string" },
     "job-feed-url": { type: "string" },
     "job-feed-key-env": { type: "string" },
     "job-feed-timeout-ms": { type: "string" },
@@ -309,7 +315,7 @@ const MODE = flags.mode as "all" | "ui" | "api";
 if (!["all", "ui", "api"].includes(MODE)) throw new Error(`--mode must be all, ui or api, got ${flags.mode}`);
 if (MODE === "ui") {
   // The ui process runs nothing of the backend; a backend flag here would be silently unused, so it is refused.
-  for (const name of ["paid-jobs", "job-feed-url", "pricing-catalog", "dataset-root", "attest-url", "pay-only-attested", "pay-only-attested-deadline-ms", "receipts", "ap2", "price-round", "signer", "signer-url", "ap2-mandate", "mandate-keys"] as const) {
+  for (const name of ["paid-jobs", "job-feed-url", "pricing-catalog", "dataset-root", "attest-url", "pay-only-attested", "pay-only-attested-deadline-ms", "receipts", "ap2", "price-round", "signer", "signer-url", "ap2-mandate", "mandate-keys", "counter", "counter-ladder", "counter-max-rounds"] as const) {
     if (flags[name] !== undefined) throw new Error(`--${name} belongs to the api process, not --mode ui (use --paid-jobs-page on for the tab 03 pay box)`);
   }
   if (!flags.api) throw new Error("--mode ui needs --api URL: the console API, e.g. http://127.0.0.1:8735");
@@ -414,6 +420,41 @@ function heldLimits(o: HeldOffer): { limits?: CheckoutLimits } | { refused: { st
   return { limits };
 }
 /**
+ * ARCH-636 (moved here unchanged by privateAI-design-43 ARCH-721, so a counter-offer is made by the very same code): a
+ * priced basis becomes an offer: the attested-only check, a new job id registered with the paywall at the price, ChainAim's
+ * signed quote (its limits = this basis), held with the question. `counter`: the first offer's id, the steps that made it
+ * smaller and the round; the answer then carries counterOf and reduced. Ids, amounts and sizes are logged, never the question.
+ */
+async function makeOffer(request: OfferRequest, basis: CrossaskBasis, quote: JobQuote, counter?: { counterOf: string; reduced: string[]; round: number }): Promise<{ status: number; body: unknown }> {
+  const P = PAID_JOBS!, J = JOBS!, C = OFFER_CONFIG!;
+  // privateAI-design-39 ARCH-687: this console sells only attested private inference; refused before the paywall is asked.
+  if (PAY_ONLY_ATTESTED?.mode === "verified" && !attestedRoute(basis, P.attestable)) return { status: 422, body: { error: "this job's models are not all NEAR AI attested models, and this console sells only attested private inference (--pay-only-attested verified), so nothing can be paid", code: "route_not_attested" } };
+  const offerId = J.newJobId();
+  const expiresAt = J.expiryFromNow();
+  let offer;
+  try { offer = await registerJob(PAYWALL, P.key, { jobId: offerId, amount: quote.amount, expiresAt, run: true }); }
+  catch (e) { return { status: 502, body: { error: (e as Error).message } }; }
+  // ARCH-644: the route names the models the estimate lets the run call (the ones it priced), not the request's fields.
+  const route = routeOf(offerModels(basis));
+  let ap2Hold: Ap2Hold | undefined;
+  if (AP2_CONFIG) {
+    try { ap2Hold = holdOf(await SIGNER!.signQuote({ jobId: offerId, expiresAt, offer, pricing: { kind: "offer", basis }, route, datasetId: datasetIdOf(request.datasetId, request.folder), mode: "estimate-first", sizeTolerancePct: C.tolerancePct, ...(PAY_ONLY_ATTESTED ? { attestation: PAY_ONLY_ATTESTED.mode } : {}) })); }
+    catch (e) { return { status: signFailStatus(e), body: { error: `the estimate could not be signed, so nothing can be paid: ${(e as Error).message}` } }; }
+  }
+  const attested = attestedRoute(basis, P.attestable);
+  OFFERS!.hold({ offerId, request, basis, quote, amount: quote.amount, expiresAt, network: offer.network, attested, ...(ap2Hold ? { ap2: ap2Hold } : {}), ...(counter ?? {}) });
+  // Ids, amounts and sizes only: never the question, folder or model reply.
+  console.log(JSON.stringify({ ts: new Date().toISOString(), route: "offer", event: counter ? "offer_countered" : "offer_estimated", offerId, amount: quote.amount, files: basis.files, bytes: basis.totalBytes, calls: quote.breakdown.calls.length, ...(counter ? { counterOf: counter.counterOf, reduced: counter.reduced } : {}) }));
+  return { status: 200, body: {
+    jobId: offerId, offerId, mode: "estimate-first", totalUsd: quote.totalUsd, amount: quote.amount, network: offer.network, asset: offer.asset, payTo: offer.payTo, expiresAt,
+    route, attested,
+    // The basis this offer is priced and signed on (for a first offer: this console's limits, as before).
+    basis: { files: basis.files, totalBytes: basis.totalBytes, modelCalls: quote.breakdown.calls.length, maxPromptChars: basis.maxPromptChars, answerMaxPromptChars: basis.answerMaxPromptChars, maxTokens: basis.maxTokens, sqlRetries: basis.sqlRetries, answerMaxRows: basis.answerMaxRows },
+    ...(ap2Hold ? { ap2: ap2Answer(ap2Hold) } : {}),
+    ...(counter ? { counterOf: counter.counterOf, reduced: counter.reduced } : {}),
+  } };
+}
+/**
  * ARCH-638: the held offer's folder re-sized now, against the signed limits when there are some, else the held basis and
  * --offer-size-tolerance-pct: `grown` names how it grew past the tolerance or gained files (the estimate no longer
  * covers it: the caller answers 409), null when within; `refused` (422) when the data config or the folder cannot be read.
@@ -514,6 +555,8 @@ async function runOffer(jobId: string, notice?: RunNotice): Promise<{ status: nu
     catch (e) { return { status: 422, body: { error: `no receipt can be made: ${(e as Error).message}` } }; }
     receiptHold = {
       network: o.network, quoteId: jobId, route: routeOf(calledModels(r, out.sentToModel)), datasetId: datasetIdOf(r.datasetId, r.folder),
+      // privateAI-design-43 ARCH-722: a counter-offer's receipt names the offer it countered and what was reduced.
+      ...(o.counterOf !== undefined ? { counterOf: o.counterOf, reduced: o.reduced ?? [] } : {}),
       ...(templateLabelOf(r.templateLabel) ? { templateLabel: templateLabelOf(r.templateLabel) } : {}), files, sql: out.sql,
       priceUsd: o.quote.totalUsd, actualUsd: metered.totalUsd,
       // privateAI-design-40 ARCH-690: paid price vs the metered cost parts (an overrun is ChainAim's, shown as absorbed).
@@ -699,6 +742,13 @@ const OFFERS = OFFER_CONFIG?.costModel && PAID_JOBS ? new OfferStore(PAID_JOBS.m
   JOB_FEED?.expired(o.offerId);
   console.log(JSON.stringify({ ts: new Date().toISOString(), route: "offer", event: "offer_expired", offerId: o.offerId }));
 }) : undefined;
+/**
+ * privateAI-design-43 ARCH-721: one-round counter-offers; undefined with --counter off (the default). Start-up stops when
+ * --counter on has no estimate-first offers or the ladder (config/counter-ladder.json) is missing or invalid.
+ */
+const COUNTER = MODE === "ui" ? undefined : counterConfig(flags, OFFERS !== undefined, (f) => readFileSync(isAbsolute(f) ? f : join(REPO, f), "utf8"));
+/** Offers already countered (one counter per offer), until they expire. */
+const COUNTERED = new Map<string, number>();
 type DataConfig = { allowedRoots: string[]; defaultFolder: string; extensions: string[]; maxBytes: Record<string, number>; exclude: RegExp[]; excludeText: string[]; maxFiles: number; defaultMode: "whole" | "pick"; hideFolders: RegExp[] };
 const fold = (p: string): string => (process.platform === "win32" ? p.toLowerCase() : p);
 function within(child: string, root: string): boolean {
@@ -1124,6 +1174,41 @@ createServer(async (req, res) => {
       const bound = held.limits ?? { files: o.basis.files, totalBytes: o.basis.totalBytes, sizeTolerancePct: OFFER_CONFIG.tolerancePct };
       return dataJson(res, 200, { jobId: name, ok: true, files: sized.size.files, totalBytes: sized.size.totalBytes, estimated: { files: bound.files, totalBytes: bound.totalBytes, sizeTolerancePct: bound.sizeTolerancePct }, signedLimits: held.limits !== undefined });
     }
+    // privateAI-design-43 ARCH-721: one counter round, before any payment. The buyer names its ceiling and the ladder steps
+    // it accepts; the ladder (config/counter-ladder.json) is walked from the held offer's basis, each smaller basis priced by
+    // ChainAim's signer, and the first price at or below the ceiling becomes a NEW offer (new job id, paywall registration,
+    // signed quote whose limits are the smaller basis), made by the same code as POST /offers. No fit: 422 no_fit, nothing
+    // registered or signed. The first offer stays payable until it expires. Ids, amounts and step names only in the log.
+    if (PAID_JOBS && JOBS && OFFERS && OFFER_CONFIG?.costModel && api === "offers" && name && url.pathname.split("/")[3] === "counter" && url.pathname.split("/").length === 4 && req.method === "POST") {
+      if (!hostOk(req)) return dataJson(res, 403, { error: `open the console as http://127.0.0.1:${PORT}` });
+      if (!COUNTER) return dataJson(res, 404, { error: "this console makes no counter-offers (--counter off)", code: "counter_off" });
+      if (!/^[0-9a-f]{32}$/.test(name)) return dataJson(res, 400, { error: "the offer id must be 32 lowercase hex characters" });
+      let b: Record<string, unknown>;
+      try { b = JSON.parse(await readBody(req)); } catch { return dataJson(res, 400, { error: "body must be JSON" }); }
+      let ceiling: bigint;
+      try { ceiling = ceilingMicro(b.maxPriceUsd); } catch (e) { return dataJson(res, 400, { error: (e as Error).message }); }
+      if (!Array.isArray(b.accept) || b.accept.length > 10 || b.accept.some((x) => typeof x !== "string" || !/^[A-Za-z]{1,40}$/.test(x))) return dataJson(res, 400, { error: "accept must list the step names the buyer accepts (at most 10), e.g. [\"answerMaxRows\",\"maxTokens\"]" });
+      const o = OFFERS.get(name);
+      if (!o) return dataJson(res, 404, { error: "no such offer (it expired, already ran, or was never made)" });
+      const now = Date.now();
+      for (const [id, exp] of COUNTERED) if (exp <= now) COUNTERED.delete(id);
+      if ((o.round ?? 0) >= COUNTER.maxRounds) return dataJson(res, 409, { error: `this offer is already a counter-offer; one round only (--counter-max-rounds ${COUNTER.maxRounds})`, code: "round_used" });
+      if (COUNTERED.has(o.offerId)) return dataJson(res, 409, { error: "this offer was already countered (one counter per offer)", code: "round_used" });
+      if (ceiling >= usdMicroCeil(o.quote.totalUsd, "the offer's price")) return dataJson(res, 400, { error: `maxPriceUsd ${b.maxPriceUsd} is not below the offer's price ${o.quote.totalUsd}: pay the offer as it is` });
+      if (JOBS.full() || OFFERS.full()) return dataJson(res, 503, { error: `${PAID_JOBS.max} paid jobs are open (--job-max); pay or let one expire first` });
+      const sellable = (bs: CrossaskBasis): boolean => (!o.attested || attestedRoute(bs, PAID_JOBS.attestable)) && (PAY_ONLY_ATTESTED?.mode !== "verified" || attestedRoute(bs, PAID_JOBS.attestable));
+      let fit;
+      try { fit = await fitCounter(o.basis, COUNTER.ladder, { maxPriceMicro: ceiling, accept: new Set(b.accept as string[]), price: (bs) => SIGNER!.price({ kind: "offer", basis: bs }), allowed: sellable }); }
+      catch (e) { return dataJson(res, e instanceof SignerUnavailable ? 502 : 422, { error: `no price for a smaller job, so nothing can be paid: ${(e as Error).message}` }); }
+      COUNTERED.set(o.offerId, o.expiresAt);
+      if ("noFit" in fit) {
+        console.log(JSON.stringify({ ts: new Date().toISOString(), route: "offer", event: "offer_counter_no_fit", offerId: o.offerId, maxPriceUsd: b.maxPriceUsd, cheapestUsd: fit.noFit.cheapestUsd, tried: fit.noFit.tried }));
+        return dataJson(res, 422, { error: fit.noFit.cheapestUsd === null ? "no smaller job the buyer accepts can be made from this offer" : `the smallest job the buyer accepts still costs ${fit.noFit.cheapestUsd} USD, above ${b.maxPriceUsd}`, code: "no_fit", cheapestUsd: fit.noFit.cheapestUsd, counterOf: o.offerId });
+      }
+      const made = await makeOffer(o.request, fit.fit.basis, fit.fit.quote, { counterOf: o.counterOf ?? o.offerId, reduced: [...(o.reduced ?? []), ...fit.fit.reduced], round: (o.round ?? 0) + 1 });
+      if (made.status !== 200) COUNTERED.delete(o.offerId);
+      return dataJson(res, made.status, made.body);
+    }
     if (PAID_JOBS && JOBS && OFFERS && OFFER_CONFIG?.costModel && api === "offers" && !name && req.method === "POST") {
       if (!hostOk(req)) return dataJson(res, 403, { error: `open the console as http://127.0.0.1:${PORT}` });
       let b: Record<string, unknown>;
@@ -1151,30 +1236,8 @@ createServer(async (req, res) => {
         // ARCH-662: priced by ChainAim's signer from these sizes and limits, never by this process's own arithmetic.
         quote = await SIGNER!.price({ kind: "offer", basis });
       } catch (e) { return dataJson(res, e instanceof SignerUnavailable ? 502 : 422, { error: `no price for this job, so nothing can be paid: ${(e as Error).message}` }); }
-      // privateAI-design-39 ARCH-687: this console sells only attested private inference; refused before the paywall is asked.
-      if (PAY_ONLY_ATTESTED?.mode === "verified" && !attestedRoute(basis, PAID_JOBS.attestable)) return dataJson(res, 422, { error: "this job's models are not all NEAR AI attested models, and this console sells only attested private inference (--pay-only-attested verified), so nothing can be paid", code: "route_not_attested" });
-      const offerId = JOBS.newJobId();
-      const expiresAt = JOBS.expiryFromNow();
-      let offer;
-      try { offer = await registerJob(PAYWALL, PAID_JOBS.key, { jobId: offerId, amount: quote.amount, expiresAt, run: true }); }
-      catch (e) { return dataJson(res, 502, { error: (e as Error).message }); }
-      // ARCH-644: the route names the models the estimate lets the run call (the ones it priced), not the request's fields.
-      const route = routeOf(offerModels(basis));
-      let ap2Hold: Ap2Hold | undefined;
-      if (AP2_CONFIG) {
-        try { ap2Hold = holdOf(await SIGNER!.signQuote({ jobId: offerId, expiresAt, offer, pricing: { kind: "offer", basis }, route, datasetId: datasetIdOf(b.datasetId, folder), mode: "estimate-first", sizeTolerancePct: OFFER_CONFIG.tolerancePct, ...(PAY_ONLY_ATTESTED ? { attestation: PAY_ONLY_ATTESTED.mode } : {}) })); }
-        catch (e) { return dataJson(res, signFailStatus(e), { error: `the estimate could not be signed, so nothing can be paid: ${(e as Error).message}` }); }
-      }
-      const attested = attestedRoute(basis, PAID_JOBS.attestable);
-      OFFERS.hold({ offerId, request, basis, quote, amount: quote.amount, expiresAt, network: offer.network, attested, ...(ap2Hold ? { ap2: ap2Hold } : {}) });
-      // Ids, amounts and sizes only: never the question, folder or model reply.
-      console.log(JSON.stringify({ ts: new Date().toISOString(), route: "offer", event: "offer_estimated", offerId, amount: quote.amount, files: size.files, bytes: size.totalBytes, calls: quote.breakdown.calls.length }));
-      return dataJson(res, 200, {
-        jobId: offerId, offerId, mode: "estimate-first", totalUsd: quote.totalUsd, amount: quote.amount, network: offer.network, asset: offer.asset, payTo: offer.payTo, expiresAt,
-        route, attested,
-        basis: { files: size.files, totalBytes: size.totalBytes, modelCalls: quote.breakdown.calls.length, maxPromptChars: CROSSASK_MAX_PROMPT, answerMaxPromptChars: CROSSASK_ANSWER_MAX_PROMPT, maxTokens: OFFER_CONFIG.maxTokens, sqlRetries: CROSSASK_RETRIES },
-        ...(ap2Hold ? { ap2: ap2Answer(ap2Hold) } : {}),
-      });
+      const made = await makeOffer(request, basis, quote);
+      return dataJson(res, made.status, made.body);
     }
     if (PAID_JOBS && JOBS && api === "jobs" && name === "crossask" && req.method === "POST") {
       if (!hostOk(req)) return dataJson(res, 403, { error: `open the console as http://127.0.0.1:${PORT}` });
@@ -1437,6 +1500,8 @@ createServer(async (req, res) => {
       console.log(`[test-console] paid jobs on: internal listener http://${PAID_JOBS.internalHost}:${PAID_JOBS.internalPort}  key from ${PAID_JOBS.keyEnv}  ttl ${PAID_JOBS.ttlMs / 60_000} min  max ${PAID_JOBS.max}`);
       if (SIGNER_CLIENT?.mode === "remote") console.log(`[test-console] signer remote: ChainAim's keys and prices at ${SIGNER_CLIENT.url} (ca-control-signer); this console holds no signing key; request key from ${SIGNER_CLIENT.keyEnv}`);
       if (AP2_CONFIG) console.log(`[test-console] ap2 on: signing key id ${AP2_CONFIG.signer.kid} (${AP2_CONFIG.alg}) ${REMOTE_SIGNER ? "held by ca-control-signer" : `from ${AP2_CONFIG.keyEnv}`}  price round ${PAID_JOBS.priceRound}  (GET /.well-known/ucp)  checkout mandates ${MANDATE_MODE}`);
+      // privateAI-design-43 ARCH-721: up.ps1 reads this line to confirm -Counter on.
+      if (COUNTER) console.log(`[test-console] counter-offers on: one round, ladder ${COUNTER.file} (${COUNTER.ladder.steps.map((s) => s.name).join(" > ")})  (POST /offers/<id>/counter)`);
       if (RECEIPT_CONFIG) console.log(`[test-console] receipts on: signing key id ${RECEIPT_CONFIG.signer.keyId}${REMOTE_SIGNER ? " held by ca-control-signer" : ""}  -> ${RECEIPT_CONFIG.dir}  (GET /jobs/<id>/receipt)${JOB_FEED_CONFIG?.receipts ? "  job_receipt sent to near-watch" : ""}`);
       if (OBSERVER) console.log(`[test-console] observer view on: GET /jobs/<id>/observer reads the settlement from public NEAR RPC (testnet ${OBSERVER.urls["near:testnet"].map((u) => new URL(u).host).join(" then ")})`);
       if (JOB_FEED_CONFIG) {

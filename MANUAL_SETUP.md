@@ -691,3 +691,25 @@ Owner checks, one step at a time (the chat gives each step with its expected res
 2. `.\test-console\desk.ps1 -All -AllSkipTests -PaidFlow upfront -PayOnlyAttested verified -ReEstimate on`
 3. `.\test-console\desk.ps1 -AgentAsk -Tenant t01 -Dataset smb-fin-1 -Template 1 -AgentAnswerModel nearai/deepseek-v4.1-flash`
 4. Tab 03, AI agent t01, the same kind of job; then the admin UI (http://127.0.0.1:8800) Jobs tab.
+
+## 2026-11-14 Counter-offer, one round (privateAI-design-43, ARCH-720..726)
+
+No new secret and no new environment variable. One addition, off unless switched on:
+
+| Flag / setting | Where | What |
+|---|---|---|
+| `-Counter on\|off` | `desk.ps1` / `up.ps1` (console `--counter on --counter-ladder /app/config/counter-ladder.json`, agent `--counter on`) | when a tenant's policy finds a quote above its auto-approve limit, the AI agent asks ChainAim for a smaller job at that limit; ChainAim's signer prices each smaller job; no fit = nothing signed or paid |
+| desk.json `paidJobs.counter` | `config/local/desk.json` (optional) | `"on"` or `"off"` (default off) |
+| `config/counter-ladder.json` | committed | the steps, in order: answer rows 20 (4,000 chars), 1,024 tokens, 512 tokens, one SQL try |
+| `rig/tenants/t02/tenant.json` | committed (owner's values, 2026-11-14) | t02 auto-approve 0.01 (was 0.05); accepts answerMaxRows, phrase, maxTokens. t01 unchanged (pays 0.02 directly) |
+
+The price is never discounted: only the job shrinks. Nothing changes in the signer, the receipt format, the paywall or the
+admin repository. The receipt of a counter job names the first offer (`counter of <id>` in `-VerifyReceipt`).
+
+Owner checks, one step at a time (the chat gives each step with its expected result):
+1. `.\test-console\desk.ps1 -Test`
+2. `.\test-console\desk.ps1 -All -AllSkipTests -PaidFlow upfront -PayOnlyAttested verified -ReEstimate on -Counter on`
+3. `.\test-console\desk.ps1 -AgentAsk -Tenant t02 -Dataset smb-fin-1 -Template 1 -AgentAnswerModel nearai/deepseek-v4.1-flash`
+4. `.\test-console\desk.ps1 -VerifyReceipt <the receipt file step 3 saved>`
+5. Tab 03, AI agent t02, the same template and model; then the admin UI (http://127.0.0.1:8800) Jobs tab.
+Space paid testnet jobs 1-2 minutes apart (public RPC rate limit).

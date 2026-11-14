@@ -90,9 +90,11 @@ export function stepLine(tenant: string, type: string, d: Record<string, unknown
     case "quote_signed": return `${A} Quote signed by ChainAim OK · key id ${String(d.kid).slice(0, 8)}… · price, payee and network match`;
     case "policy": {
       const checks = Array.isArray(d.checks) ? (d.checks as { check: string; limit: string; value: string; ok: boolean }[]).filter((c) => CHECK[c.check]).map((c) => `${CHECK[c.check](c)} ${c.ok ? "OK" : "NO"}`) : [];
-      const dec = d.decision === "pay" ? "pay OK" : d.decision === "refuse" ? "refused" : `${String(d.decision)} (not paid)`;
+      const dec = d.decision === "pay" ? "pay OK" : d.decision === "refuse" ? "refused" : d.decision === "counter" ? "counter (asks for a smaller job, nothing paid yet)" : `${String(d.decision)} (not paid)`;
       return `${A} Spending policy: ${dec} · ${checks.join(" · ")}`;
     }
+    // privateAI-design-43 ARCH-725: ChainAim's one-round counter-offer: a smaller job (a new offer) at or below the ceiling.
+    case "countered": return `[ChainAim] Counter-offer: asked for at most ${String(d.ceilingUsd)}; ChainAim offered a smaller job at ${String(d.priceUsd)} (${counterWhat(d)}) OK · new id ${String(d.jobId).slice(0, 8)}…, counter of ${String(d.counterOf).slice(0, 8)}…`;
     // privateAI-design-42 ARCH-712: the folder re-sized right before the payment (--re-estimate on).
     case "rechecked": return `${A} Size re-checked before paying OK · ${Number(d.files)} file(s), ${Number(d.totalBytes)} bytes (estimated ${Number(d.estimatedFiles)} file(s), ${Number(d.estimatedBytes)} bytes +${Number(d.tolerancePct)} %)`;
     // privateAI-design-36 ARCH-666/668: the agent's checkout mandate, and ChainAim's signer's check of it (from its receipt).
@@ -112,6 +114,14 @@ export function stepLine(tenant: string, type: string, d: Record<string, unknown
     case "error": return `Error: ${String(d.reason)}${d.transaction ? ` (transaction ${String(d.transaction)})` : ""}`;
     default: return `[${type}]`;
   }
+}
+
+/** privateAI-design-43 ARCH-725: what a counter-offer made smaller, in words ("answer rows 20, tokens 1024"). */
+export function counterWhat(d: Record<string, unknown>): string {
+  const b = (d.basis ?? {}) as Record<string, unknown>;
+  const reduced = Array.isArray(d.reduced) ? d.reduced.map(String) : [];
+  const parts = reduced.map((r) => r === "answerMaxRows" ? `answer rows ${b.answerMaxRows ?? "fewer"}` : r === "maxTokens" ? `tokens ${b.maxTokens ?? "fewer"}` : r === "sqlRetries" ? `SQL tries ${typeof b.sqlRetries === "number" ? b.sqlRetries + 1 : "fewer"}` : r);
+  return parts.length ? parts.join(", ") : "smaller";
 }
 
 export function nearblocks(network: string, tx: string): string {

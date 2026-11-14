@@ -79,6 +79,8 @@ mkdirSync(data);
 writeFileSync(join(data, "orders.csv"), `order_id,customer,amount\n1,${MARKER} One,10.50\n2,${MARKER} Two,20.25\n3,Third,5.00\n`);
 writeFileSync(join(dir, "data-sources.json"), JSON.stringify({ allowedRoots: [data], defaultFolder: data, defaultMode: "whole", extensions: [".csv"], maxBytes: { "*": 2_000_000 }, exclude: [], maxFiles: 20, hideFolders: ["_*"] }));
 let modelCalls = 0;
+/** privateAI-design-43: the max_tokens each model call asked for, in order (the run is held to the signed limits). */
+const maxTokensSeen: number[] = [];
 /** An OpenAI-compatible model on loopback: a query for the SQL step, a sentence for the answer step, with usage. */
 const modelServer: Server = createServer((req, res) => {
   let raw = "";
@@ -86,7 +88,8 @@ const modelServer: Server = createServer((req, res) => {
   req.on("end", () => {
     if (req.url === "/health") { res.writeHead(200).end("{}"); return; }
     modelCalls++;
-    const body = JSON.parse(raw) as { messages: { role: string; content: string }[] };
+    const body = JSON.parse(raw) as { messages: { role: string; content: string }[]; max_tokens?: number };
+    if (typeof body.max_tokens === "number") maxTokensSeen.push(body.max_tokens);
     const sqlStep = body.messages.some((m) => m.role === "system" && m.content.startsWith("You write DuckDB SQL"));
     const content = sqlStep ? '```sql\nSELECT count(*) AS n FROM orders\n```' : "There are 3 orders.";
     res.writeHead(200, { "content-type": "application/json" });
@@ -655,6 +658,61 @@ describe("privateAI-design-34 ARCH-636 ARCH-637 ARCH-638 estimate-first offers o
       assert.equal((await recheck("not-an-id")).status, 400);
       assert.equal((await call(consolePort, "POST", `/offers/${j.jobId}/recheck`)).status === 200, false, "GET only");
     } finally { rmSync(grow, { recursive: true, force: true }); }
+  });
+
+  test("privateAI-design-43 ARCH-720/721: POST /offers/<id>/counter makes a smaller NEW offer at or below the ceiling (one round), the run is held to its smaller limits; no_fit, round_used, off and bad input refused", async () => {
+    const port = await freePort(), iport = await freePort();
+    const c = await start(consoleArgs(port, iport, { counter: "on" }), (o) => consoleReady(port)(o) && o.includes("counter-offers on"), { PAID_JOBS_KEY: JOBS_KEY }, "the counter console");
+    try {
+      assert.match(c.out(), /counter-offers on: one round, ladder config\/counter-ladder\.json \(answerMaxRows > maxTokens > maxTokens > sqlRetries\)/);
+      const counter = (id: string, body: unknown, at = port) => call(at, "POST", `/offers/${id}/counter`, { "content-type": "application/json" }, JSON.stringify(body));
+      const exact = { folder: data, question: QUESTION, model: MODEL, answerModel: MODEL, phrase: "llm", sql: "SELECT count(*) AS n FROM orders" };
+      const a = JSON.parse((await offerAt(exact, port)).text);
+      const ceiling = (Number(a.totalUsd) - 0.000001).toFixed(6);
+      modelCalls = 0;
+      // Only the token step accepted: the console walks answerMaxRows? no (not accepted), then 1,024 tokens -> fits.
+      const r = await counter(a.jobId, { maxPriceUsd: ceiling, accept: ["maxTokens"] });
+      assert.equal(r.status, 200, r.text);
+      const b = JSON.parse(r.text);
+      assert.equal(modelCalls, 0, "a counter calls no model: sizes and the signer's price only");
+      assert.notEqual(b.jobId, a.jobId);
+      assert.equal(b.counterOf, a.jobId);
+      assert.deepEqual(b.reduced, ["maxTokens"]);
+      assert.ok(Number(b.totalUsd) <= Number(ceiling), `${b.totalUsd} <= ${ceiling}`);
+      assert.deepEqual([b.basis.maxTokens, b.basis.answerMaxRows, b.basis.modelCalls], [1024, a.basis.answerMaxRows ?? 50, 1]);
+      // The paywall quotes the NEW offer at its own (smaller) amount; the first offer stays payable.
+      const q = await fetch(`${paywallUrl}/v1/jobs/${b.jobId}/release`, { method: "POST" });
+      assert.equal(JSON.parse(Buffer.from(q.headers.get("payment-required")!, "base64").toString("utf8")).accepts[0].amount, b.amount);
+      assert.equal((await fetch(`${paywallUrl}/v1/jobs/${a.jobId}/release`, { method: "POST" })).status, 402);
+      // One round: the same offer again, or a counter of the counter, is 409 round_used.
+      assert.equal(JSON.parse((await counter(a.jobId, { maxPriceUsd: ceiling, accept: ["maxTokens"] })).text).code, "round_used");
+      assert.equal(JSON.parse((await counter(b.jobId, { maxPriceUsd: "0.000001", accept: ["maxTokens"] })).text).code, "round_used");
+      // The run of the counter offer is held to its smaller limits: max_tokens 1,024 on its one call.
+      maxTokensSeen.length = 0; modelCalls = 0;
+      const run = await call(iport, "POST", `/internal/jobs/${b.jobId}/run`, { "x-jobs-key": JOBS_KEY });
+      assert.equal(run.status, 200, run.text);
+      assert.deepEqual([modelCalls, maxTokensSeen], [1, [1024]]);
+      assert.match(c.out(), new RegExp(`"event":"offer_countered","offerId":"${b.jobId}","amount":"${b.amount}".*"counterOf":"${a.jobId}","reduced":\\["maxTokens"\\]`));
+      // No fit: nothing registered or signed, the cheapest smaller price named; that offer cannot be countered again.
+      const d = JSON.parse((await offerAt(exact, port)).text);
+      const nf = await counter(d.jobId, { maxPriceUsd: "0.000001", accept: ["answerMaxRows", "maxTokens", "sqlRetries"] });
+      assert.equal(nf.status, 422, nf.text);
+      const nfb = JSON.parse(nf.text);
+      assert.deepEqual([nfb.code, nfb.counterOf], ["no_fit", d.jobId]);
+      assert.match(nfb.cheapestUsd, /^\d+\.\d+$/);
+      assert.match(c.out(), new RegExp(`"event":"offer_counter_no_fit","offerId":"${d.jobId}"`));
+      // Bad input: not below the price, an unreadable ceiling or accept list, an unknown offer.
+      const e = JSON.parse((await offerAt(exact, port)).text);
+      assert.match(JSON.parse((await counter(e.jobId, { maxPriceUsd: e.totalUsd.replace(/0+$/, ""), accept: ["maxTokens"] })).text).error, /is not below the offer's price/);
+      assert.equal((await counter(e.jobId, { maxPriceUsd: 0.01, accept: ["maxTokens"] })).status, 400);
+      assert.equal((await counter(e.jobId, { maxPriceUsd: "0.000001" })).status, 400);
+      assert.equal((await counter("0".repeat(32), { maxPriceUsd: "0.000001", accept: [] })).status, 404);
+      // --counter off (the main test console): the route says so.
+      const off = await counter(e.jobId, { maxPriceUsd: "0.000001", accept: ["maxTokens"] }, consolePort);
+      assert.deepEqual([off.status, JSON.parse(off.text).code], [404, "counter_off"]);
+      // Ids, amounts and step names only in the log: never the question or the folder.
+      for (const leak of [QUESTION, MARKER, join(data, "x").slice(0, -1), "orders.csv"]) assert.equal(c.out().includes(leak), false, leak);
+    } finally { await stop(c); }
   });
 
   test("ARCH-636: estimate-first without a cost model stops start-up naming desk.ps1 -Calibrate; --offer-modes run-hold starts without one and has no /offers", async () => {

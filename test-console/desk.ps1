@@ -62,6 +62,11 @@ one READY table across both. Neither launcher is changed or renamed; each team k
                 privateAI-design-42: the AI agent re-sizes each estimate-first job's folder right before paying (default
                 desk.json paidJobs.reEstimate, else off = as before). on: a folder that grew past the estimate (or gained
                 files) since the quote is refused before the mandate and the payment are signed: nothing paid, no refund.
+  -All ... -Counter on|off
+                privateAI-design-43: one-round counter-offers (default desk.json paidJobs.counter, else off = as before).
+                on: when a tenant's policy finds a quote above its auto-approve limit, the AI agent asks ChainAim for a
+                smaller job at that limit; ChainAim's signer prices each smaller job (config/counter-ladder.json), the
+                price is never discounted, only the job shrinks. No fit = nothing signed or paid.
   -All ... -PayOnlyAttested off|evidence|verified  [-PayOnlyAttestedDeadlineMs 30000]
                 privateAI-design-39: what a paid job must show about NEAR AI attestation before it is delivered (default
                 desk.json paidJobs.payOnlyAttested, else evidence = as before). verified: the console waits for ca-attest's
@@ -213,6 +218,7 @@ param(
   [string]$PayOnlyAttested = "",
   [int]$PayOnlyAttestedDeadlineMs = 0,
   [string]$ReEstimate = "",
+  [string]$Counter = "",
   [string]$StopService = "",
   [string]$StartService = "",
   [switch]$NoBrowser,
@@ -1101,6 +1107,10 @@ $privArgs.PayOnlyAttestedDeadlineMs = $payOnlyMs
 $reEstimate = if ($ReEstimate) { $ReEstimate } elseif ($P.paidJobs -and $P.paidJobs.reEstimate) { [string]$P.paidJobs.reEstimate } else { "off" }
 if (@("on", "off") -notcontains $reEstimate) { Stop-Here "-ReEstimate (or $Settings paidJobs.reEstimate) must be on or off" }
 $privArgs.ReEstimate = $reEstimate
+# privateAI-design-43 ARCH-726: -Counter, else desk.json paidJobs.counter, else off (as before).
+$counterMode = if ($Counter) { $Counter } elseif ($P.paidJobs -and $P.paidJobs.counter) { [string]$P.paidJobs.counter } else { "off" }
+if (@("on", "off") -notcontains $counterMode) { Stop-Here "-Counter (or $Settings paidJobs.counter) must be on or off" }
+$privArgs.Counter = $counterMode
 if ($payOnly -ne "evidence") { Say "INFO" "pay only for attested private inference: $payOnly$(if ($payOnly -eq 'verified') { ", ca-attest's verdict awaited up to $payOnlyMs ms before delivery" })" }
 Say "RUN" "test-console\up.ps1 -ReplaceRunning -PaidFlow $paidFlow -PaidJobs $($privArgs.PaidJobs)$(if ($Build) { ' -Build' })$(if ($WithStub) { ' -Test' })$(if ($agentMode -ne 'auto') { ' -Agent ' + $agentMode })$(if ($attestMode -ne 'auto') { ' -Attest ' + $attestMode }) -AttestGpuCheck $attestGpu$(if ($receiptsMode -ne 'auto') { ' -Receipts ' + $receiptsMode }) -DefaultPayer $defPayer$(if ($defAnswer) { ' -DefaultAnswerModel ' + $defAnswer }) -CrossaskMaxPromptChars $maxPrompt -Signer $signerMode -SignerUrl $signerUrl"
 & $privUp @privArgs

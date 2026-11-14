@@ -68,6 +68,10 @@ this PC (server.ts --mode ui, which forwards every call to the console API in Do
                                                 job's folder right before paying (agent --re-estimate on, console GET
                                                 /offers/<id>/recheck); a folder grown past the estimate is refused before
                                                 anything is signed or paid. Default off (as before); needs the AI agent.
+  -Counter on|off                               privateAI-design-43 ARCH-726: one-round counter-offers. The console answers
+                                                POST /offers/<id>/counter (--counter on, ladder config/counter-ladder.json)
+                                                and the AI agent asks for one when the tenant's policy says "counter"
+                                                (agent --counter on). Default off (as before); needs estimate-first offers.
   -PayOnlyAttested off|evidence|verified  [-PayOnlyAttestedDeadlineMs 30000]
                                                 privateAI-design-39 ARCH-685 (console --pay-only-attested): evidence
                                                 (default, as before) | off | verified = the console waits for ca-attest's
@@ -177,6 +181,7 @@ param(
   [ValidateSet("off", "evidence", "verified")][string]$PayOnlyAttested = "evidence",
   [ValidateSet("on", "off")][string]$ExposeEgress = "off",
   [ValidateSet("on", "off")][string]$ReEstimate = "off",
+  [ValidateSet("on", "off")][string]$Counter = "off",
   [int]$PayOnlyAttestedDeadlineMs = 30000
 )
 $ErrorActionPreference = "Stop"
@@ -507,6 +512,14 @@ try {
   if ($ReEstimate -eq "on") {
     if ($agentCmd) { $agentCmd += "--re-estimate=on"; Say "OK" "re-estimate on: the AI agent re-sizes each estimate-first job's folder right before paying; grown = refused, nothing signed or paid" }
     else { Say "INFO" "-ReEstimate on: the AI agent is not started, so there is nothing to re-check (tab 03 pays as before)" }
+  }
+  # privateAI-design-43 ARCH-726: one-round counter-offers (default off). The console needs estimate-first offers.
+  if ($Counter -eq "on") {
+    if (-not ($consoleCmd -contains "--offer-mode=estimate-first")) { Stop-Here "-Counter on needs estimate-first offers (config\cost-model.json: run .\test-console\desk.ps1 -Calibrate)" }
+    if (-not (Test-Path -LiteralPath (Join-Path $repo "config\counter-ladder.json"))) { Stop-Here "-Counter on needs config\counter-ladder.json (it is in the repo: git checkout it)" }
+    $consoleCmd += @("--counter=on", "--counter-ladder=/app/config/counter-ladder.json")
+    if ($agentCmd) { $agentCmd += "--counter=on"; Say "OK" "counter on: when a tenant's policy says counter, the AI agent asks ChainAim for a smaller job at its ceiling (one round, ladder config\counter-ladder.json)" }
+    else { Say "OK" "counter on: the console answers POST /offers/<id>/counter (the AI agent is not started)" }
   }
   # ARCH-664: ca-control-signer, its own compose project, network and port; started (and checked) before the data plane.
   $signerCmd = $null
